@@ -1,0 +1,224 @@
+#+title: vulpea-ui
+#+author: Boris Buliga
+
+Sidebar infrastructure and widget framework for [[https://github.com/d12frosted/vulpea][vulpea]] notes.
+
+#+begin_html
+<a href="https://github.com/d12frosted/vulpea-ui/actions/workflows/main.yml"><img alt="CI" src="https://github.com/d12frosted/vulpea-ui/actions/workflows/main.yml/badge.svg"/></a>
+#+end_html
+
+* Features
+
+- Per-frame sidebar with configurable position and size
+- Widget system built on [[https://github.com/d12frosted/vui][vui]] components
+- Default widgets: outline, backlinks, forward links, stats
+- Easy API for creating custom widgets
+- Auto-hide when switching to non-vulpea buffers
+
+* Installation
+
+** Dependencies
+
+- Emacs 29.1+
+- [[https://github.com/d12frosted/vulpea][vulpea]]
+- [[https://github.com/d12frosted/vui][vui]]
+
+** Using straight.el
+
+#+begin_src emacs-lisp
+(straight-use-package
+ '(vulpea-ui :host github :repo "d12frosted/vulpea-ui"))
+#+end_src
+
+** Using elpaca
+
+#+begin_src emacs-lisp
+(elpaca (vulpea-ui :host github :repo "d12frosted/vulpea-ui"))
+#+end_src
+
+* Usage
+
+#+begin_src emacs-lisp
+(require 'vulpea-ui)
+
+;; Open sidebar
+(vulpea-ui-sidebar-open)
+
+;; Or toggle with a keybinding
+(global-set-key (kbd "C-c v s") #'vulpea-ui-sidebar-toggle)
+#+end_src
+
+** Automatic sidebar
+
+To automatically open the sidebar when entering org-mode buffers:
+
+#+begin_src emacs-lisp
+(add-hook 'org-mode-hook #'vulpea-ui-sidebar-open)
+#+end_src
+
+* Configuration
+
+** Sidebar position and size
+
+#+begin_src emacs-lisp
+;; Position: 'right (default), 'left, 'top, 'bottom
+(setq vulpea-ui-sidebar-position 'right)
+
+;; Size as fraction of frame (0.0-1.0)
+(setq vulpea-ui-sidebar-size 0.33)
+#+end_src
+
+** Widget selection
+
+#+begin_src emacs-lisp
+;; Default widgets (shown in this order)
+(setq vulpea-ui-sidebar-widgets
+      '(vulpea-ui-widget-stats
+        vulpea-ui-widget-outline
+        vulpea-ui-widget-backlinks
+        vulpea-ui-widget-links))
+#+end_src
+
+** Outline widget
+
+#+begin_src emacs-lisp
+;; Maximum heading depth (nil = unlimited)
+(setq vulpea-ui-outline-max-depth 3)
+#+end_src
+
+** Backlinks widget
+
+#+begin_src emacs-lisp
+;; Show/hide content previews
+(setq vulpea-ui-backlinks-show-preview t)
+
+;; Lines to show in prose previews
+(setq vulpea-ui-backlinks-preview-lines 2)
+
+;; Characters before/after link in prose previews
+(setq vulpea-ui-backlinks-prose-chars-before 30)
+(setq vulpea-ui-backlinks-prose-chars-after 50)
+
+;; Filter which notes appear in backlinks
+;; (function receiving vulpea-note, return non-nil to include)
+(setq vulpea-ui-backlinks-note-filter
+      (lambda (note)
+        (not (member "archive" (vulpea-note-tags note)))))
+
+;; Filter by context type
+;; t = all types, or a list of: meta, header, table, list, quote, code, footnote, prose
+(setq vulpea-ui-backlinks-context-types t)
+
+;; Sorting: nil (no sorting), 'title-asc, 'title-desc, or custom function
+(setq vulpea-ui-backlinks-sort 'title-asc)
+#+end_src
+
+** Behaviour options
+
+#+begin_src emacs-lisp
+;; Auto-hide sidebar when switching to non-vulpea buffers
+(setq vulpea-ui-sidebar-auto-hide t)
+
+;; Start widgets collapsed
+(setq vulpea-ui-default-widget-collapsed nil)
+#+end_src
+
+** Performance
+
+For large org files or many backlinks, enable fast parsing:
+
+#+begin_src emacs-lisp
+;; Skip org-mode hooks during parsing (faster but may cause issues
+;; if your setup depends on mode hooks for org-element parsing)
+(setq vulpea-ui-fast-parse t)
+#+end_src
+
+* Commands
+
+| Command                     | Description               |
+|-----------------------------+---------------------------|
+| =vulpea-ui-sidebar-open=    | Open the sidebar          |
+| =vulpea-ui-sidebar-close=   | Close the sidebar         |
+| =vulpea-ui-sidebar-toggle=  | Toggle sidebar visibility |
+| =vulpea-ui-sidebar-refresh= | Force refresh content     |
+
+* Sidebar keybindings
+
+| Key   | Action                 |
+|-------+------------------------|
+| =q=   | Close sidebar          |
+| =g=   | Refresh content        |
+| =TAB= | Toggle widget at point |
+| =RET= | Follow link at point   |
+
+* Default widgets
+
+** Stats widget
+
+Shows character count, word count, and link count for the current note.
+
+** Outline widget
+
+Displays the heading structure of the note. Click headings to navigate.
+
+** Backlinks widget
+
+Shows notes that link to the current note, grouped by file with:
+- Heading path context (where in the document the link appears)
+- Content preview with context type indicators:
+  - =⊢= meta (descriptive list items like =- key :: value=)
+  - =§= header
+  - =▤= table
+  - =·= list item
+  - =>= quote
+  - =λ= code
+  - =†= footnote
+  - (no indicator) prose
+
+** Links widget
+
+Shows notes that the current note links to.
+
+* Custom widgets
+
+Create custom widgets using vui's =defcomponent= macro:
+
+#+begin_src emacs-lisp
+(defcomponent my-custom-widget ()
+  "My custom widget."
+  :render
+  (let ((note (vulpea-ui-current-note)))
+    (when note
+      (vui-component 'vulpea-ui-widget
+        :title "My Widget"
+        :count 42
+        :children
+        (lambda ()
+          (vui-text "Custom content here"))))))
+#+end_src
+
+Add to the widgets list:
+
+#+begin_src emacs-lisp
+(add-to-list 'vulpea-ui-sidebar-widgets 'my-custom-widget t)
+#+end_src
+
+* Faces
+
+| Face                                 | Description             |
+|--------------------------------------+-------------------------|
+| =vulpea-ui-widget-header-face=       | Widget header text      |
+| =vulpea-ui-widget-count-face=        | Widget count numbers    |
+| =vulpea-ui-outline-heading-face=     | Outline headings        |
+| =vulpea-ui-stats-face=               | Statistics text         |
+| =vulpea-ui-backlink-preview-face=    | Backlink preview text   |
+| =vulpea-ui-backlink-heading-face=    | Backlink heading path   |
+| =vulpea-ui-backlink-meta-key-face=   | Meta block keys         |
+| =vulpea-ui-backlink-meta-value-face= | Meta block values       |
+| =vulpea-ui-backlink-context-face=    | Context type indicators |
+
+* License
+
+Copyright (C) 2024-2025 Boris Buliga
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
