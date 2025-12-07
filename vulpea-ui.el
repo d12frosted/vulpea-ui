@@ -968,7 +968,7 @@ Returns a plist with :type and type-specific content:
   (let ((heading-path (plist-get mention :heading-path))
         (preview (plist-get mention :preview))
         (pos (plist-get mention :pos)))
-    (vui-vstack
+    (vui-hstack
      ;; Jump button (arrow)
      (vui-button "→"
        :face 'vulpea-ui-backlink-heading-face
@@ -977,7 +977,7 @@ Returns a plist with :type and type-specific content:
      ;; Content: heading path and/or preview
      (vui-vstack
       :spacing 0
-      :indent 1
+      :indent 4
       (when heading-path
         (vui-text (string-join heading-path " > ")
           :face 'vulpea-ui-backlink-heading-face))
@@ -991,7 +991,7 @@ Returns a plist with :type and type-specific content:
       ('meta
        (vui-hstack
         :spacing 0
-        (vui-text (concat (plist-get preview :key) ": ")
+        (vui-text (concat "⊢ " (plist-get preview :key) ": ")
           :face 'vulpea-ui-backlink-meta-key-face)
         (vui-text (or (plist-get preview :value) "")
           :face 'vulpea-ui-backlink-meta-value-face)))
@@ -1004,7 +1004,7 @@ Returns a plist with :type and type-specific content:
       ('table
        (vui-hstack
         :spacing 1
-        (vui-text "|" :face 'vulpea-ui-backlink-context-face)
+        (vui-text "▤" :face 'vulpea-ui-backlink-context-face)
         (vui-text (plist-get preview :text)
           :face 'vulpea-ui-backlink-preview-face)))
       ('list
@@ -1022,13 +1022,13 @@ Returns a plist with :type and type-specific content:
       ('code
        (vui-hstack
         :spacing 1
-        (vui-text "[code]" :face 'vulpea-ui-backlink-context-face)
+        (vui-text "λ" :face 'vulpea-ui-backlink-context-face)
         (vui-text (plist-get preview :text)
           :face 'vulpea-ui-backlink-preview-face)))
       ('footnote
        (vui-hstack
         :spacing 1
-        (vui-text "[fn]" :face 'vulpea-ui-backlink-context-face)
+        (vui-text "†" :face 'vulpea-ui-backlink-context-face)
         (vui-text (plist-get preview :text)
           :face 'vulpea-ui-backlink-preview-face)))
       ('prose
