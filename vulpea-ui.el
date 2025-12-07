@@ -140,15 +140,15 @@ Called with a vulpea-note and should return non-nil to include it."
 Either t for all types, or a list of allowed types:
 meta, header, table, list, quote, code, footnote, prose."
   :type '(choice (const :tag "All types" t)
-                 (repeat :tag "Selected types"
-                         (choice (const meta)
-                                 (const header)
-                                 (const table)
-                                 (const list)
-                                 (const quote)
-                                 (const code)
-                                 (const footnote)
-                                 (const prose))))
+          (repeat :tag "Selected types"
+           (choice (const meta)
+            (const header)
+            (const table)
+            (const list)
+            (const quote)
+            (const code)
+            (const footnote)
+            (const prose))))
   :group 'vulpea-ui)
 
 
@@ -623,12 +623,11 @@ NOTE is the parent note for navigation."
          (indent (* (1- level) 5)))
     (vui-vstack
      :indent indent
-     (vui-hstack
-      (vui-button "->"
-        :face 'shadow
-        :on-click (lambda ()
-                    (vulpea-ui--jump-to-position note pos)))
-      (vui-text title :face 'shadow)))))
+     (vui-button (concat "· " title)
+       :face 'shadow
+       :no-decoration t
+       :on-click (lambda ()
+                   (vulpea-ui--jump-to-position note pos))))))
 
 (defun vulpea-ui--jump-to-position (note pos)
   "Jump to position POS in NOTE's file."
@@ -1073,7 +1072,7 @@ Returns a plist with :type and type-specific content:
       ('list
        (vui-hstack
         :spacing 1
-        (vui-text "•" :face 'vulpea-ui-backlink-context-face)
+        (vui-text "·" :face 'vulpea-ui-backlink-context-face)
         (vui-text (plist-get preview :text)
           :face 'vulpea-ui-backlink-preview-face)))
       ('quote
