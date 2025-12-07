@@ -1,6 +1,6 @@
 ;;; vulpea-ui-test.el --- Tests for vulpea-ui -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024 Boris Buliga
+;; Copyright (C) 2024-2025 Boris Buliga
 
 ;; Author: Boris Buliga <boris@d12frosted.io>
 
@@ -146,13 +146,30 @@ In batch mode, execute BODY in the current frame instead."
     (should (= (plist-get stats :words) 0))
     (should (= (plist-get stats :links) 0))))
 
-(ert-deftest vulpea-ui-test-compute-stats-nonexistent ()
-  "Test stats computation with non-existent file."
-  (let ((note (vulpea-ui-test--make-mock-note)))
-    (let ((stats (vulpea-ui--compute-stats note)))
-      (should (= (plist-get stats :chars) 0))
-      (should (= (plist-get stats :words) 0))
-      (should (= (plist-get stats :links) 0)))))
+(ert-deftest vulpea-ui-test-compute-stats-with-file ()
+  "Test stats computation with actual file."
+  (let* ((temp-file (make-temp-file "vulpea-ui-test" nil ".org"))
+         (note (make-vulpea-note
+                :id "test-stats"
+                :path temp-file
+                :level 0
+                :pos 1
+                :title "Test"
+                :primary-title "Test"
+                :aliases nil
+                :tags nil
+                :links nil
+                :properties nil
+                :meta nil)))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert "Hello world test content"))
+          (let ((stats (vulpea-ui--compute-stats note)))
+            (should (> (plist-get stats :chars) 0))
+            (should (> (plist-get stats :words) 0))
+            (should (= (plist-get stats :links) 0))))
+      (delete-file temp-file))))
 
 
 ;;; Note preview tests
@@ -161,10 +178,29 @@ In batch mode, execute BODY in the current frame instead."
   "Test preview generation with nil note."
   (should (null (vulpea-ui--get-note-preview nil 10 t t))))
 
-(ert-deftest vulpea-ui-test-get-preview-nonexistent ()
-  "Test preview generation with non-existent file."
-  (let ((note (vulpea-ui-test--make-mock-note)))
-    (should (null (vulpea-ui--get-note-preview note 10 t t)))))
+(ert-deftest vulpea-ui-test-get-preview-with-file ()
+  "Test preview generation with actual file."
+  (let* ((temp-file (make-temp-file "vulpea-ui-test" nil ".org"))
+         (note (make-vulpea-note
+                :id "test-preview"
+                :path temp-file
+                :level 0
+                :pos 1
+                :title "Test"
+                :primary-title "Test"
+                :aliases nil
+                :tags nil
+                :links nil
+                :properties nil
+                :meta nil)))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert "First line\nSecond line\nThird line"))
+          (let ((preview (vulpea-ui--get-note-preview note 10 t t)))
+            (should (stringp preview))
+            (should (string-match-p "First line" preview))))
+      (delete-file temp-file))))
 
 
 ;;; Should update predicate tests
@@ -238,6 +274,102 @@ In batch mode, execute BODY in the current frame instead."
     ;; Toggle off
     (vulpea-ui-sidebar-toggle)
     (should-not (vulpea-ui--sidebar-visible-p))))
+
+
+;;; Org link cleaning tests
+
+(ert-deftest vulpea-ui-test-clean-org-links-nil ()
+  "Test cleaning nil text."
+  (should (null (vulpea-ui--clean-org-links nil))))
+
+(ert-deftest vulpea-ui-test-clean-org-links-no-links ()
+  "Test cleaning text without links."
+  (should (equal (vulpea-ui--clean-org-links "plain text") "plain text")))
+
+(ert-deftest vulpea-ui-test-clean-org-links-with-description ()
+  "Test cleaning link with description."
+  (should (equal (vulpea-ui--clean-org-links "before [[id:123][Description]] after")
+                 "before Description after")))
+
+(ert-deftest vulpea-ui-test-clean-org-links-bare-link ()
+  "Test cleaning bare link without description."
+  (should (equal (vulpea-ui--clean-org-links "before [[id:123]] after")
+                 "before after")))
+
+(ert-deftest vulpea-ui-test-clean-org-links-multiple ()
+  "Test cleaning multiple links."
+  (should (equal (vulpea-ui--clean-org-links "[[id:1][One]] and [[id:2][Two]]")
+                 "One and Two")))
+
+
+;;; Context type detection tests
+
+(ert-deftest vulpea-ui-test-detect-context-meta ()
+  "Test detecting meta context."
+  (should (eq (vulpea-ui--detect-context-type 1 "- key :: value")
+              'meta)))
+
+(ert-deftest vulpea-ui-test-detect-context-header ()
+  "Test detecting header context."
+  (should (eq (vulpea-ui--detect-context-type 1 "* Heading")
+              'header))
+  (should (eq (vulpea-ui--detect-context-type 1 "** Subheading")
+              'header)))
+
+(ert-deftest vulpea-ui-test-detect-context-table ()
+  "Test detecting table context."
+  (should (eq (vulpea-ui--detect-context-type 1 "| cell1 | cell2 |")
+              'table)))
+
+(ert-deftest vulpea-ui-test-detect-context-list ()
+  "Test detecting list context."
+  (should (eq (vulpea-ui--detect-context-type 1 "- item")
+              'list))
+  (should (eq (vulpea-ui--detect-context-type 1 "1. numbered")
+              'list)))
+
+(ert-deftest vulpea-ui-test-detect-context-prose ()
+  "Test detecting prose context."
+  (should (eq (vulpea-ui--detect-context-type 1 "Just regular text")
+              'prose)))
+
+
+;;; Backlinks sorting tests
+
+(ert-deftest vulpea-ui-test-sort-backlinks-nil ()
+  "Test sorting with nil configuration."
+  (let ((vulpea-ui-backlinks-sort nil)
+        (groups (list (list :file-note (vulpea-ui-test--make-mock-note "1" "Zebra"))
+                      (list :file-note (vulpea-ui-test--make-mock-note "2" "Apple")))))
+    (let ((sorted (vulpea-ui--sort-backlink-groups groups)))
+      ;; Should remain in original order
+      (should (equal (vulpea-note-title (plist-get (nth 0 sorted) :file-note)) "Zebra"))
+      (should (equal (vulpea-note-title (plist-get (nth 1 sorted) :file-note)) "Apple")))))
+
+(ert-deftest vulpea-ui-test-sort-backlinks-title-asc ()
+  "Test sorting by title ascending."
+  (let ((vulpea-ui-backlinks-sort 'title-asc)
+        (groups (list (list :file-note (vulpea-ui-test--make-mock-note "1" "Zebra"))
+                      (list :file-note (vulpea-ui-test--make-mock-note "2" "Apple")))))
+    (let ((sorted (vulpea-ui--sort-backlink-groups groups)))
+      (should (equal (vulpea-note-title (plist-get (nth 0 sorted) :file-note)) "Apple"))
+      (should (equal (vulpea-note-title (plist-get (nth 1 sorted) :file-note)) "Zebra")))))
+
+(ert-deftest vulpea-ui-test-sort-backlinks-title-desc ()
+  "Test sorting by title descending."
+  (let ((vulpea-ui-backlinks-sort 'title-desc)
+        (groups (list (list :file-note (vulpea-ui-test--make-mock-note "1" "Apple"))
+                      (list :file-note (vulpea-ui-test--make-mock-note "2" "Zebra")))))
+    (let ((sorted (vulpea-ui--sort-backlink-groups groups)))
+      (should (equal (vulpea-note-title (plist-get (nth 0 sorted) :file-note)) "Zebra"))
+      (should (equal (vulpea-note-title (plist-get (nth 1 sorted) :file-note)) "Apple")))))
+
+
+;;; Fast parse configuration tests
+
+(ert-deftest vulpea-ui-test-fast-parse-default ()
+  "Test that fast-parse is disabled by default."
+  (should-not vulpea-ui-fast-parse))
 
 
 (provide 'vulpea-ui-test)
