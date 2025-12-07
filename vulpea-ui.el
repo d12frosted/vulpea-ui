@@ -710,21 +710,26 @@ Applies `vulpea-ui-backlinks-note-filter' and
            ;; Group backlinks by file path
            (by-path (make-hash-table :test 'equal))
            (total-count 0))
-      ;; Collect all mentions grouped by path
-      (dolist (bl backlinks)
-        (let* ((path (vulpea-note-path bl))
-               (links (vulpea-note-links bl))
-               ;; Find links pointing to our target
-               (target-links (seq-filter
-                              (lambda (link)
-                                (and (equal "id" (plist-get link :type))
-                                     (equal target-id (plist-get link :dest))))
-                              links)))
-          (dolist (link target-links)
-            (cl-incf total-count)
-            (let ((pos (plist-get link :pos)))
-              (push (list :pos pos :source-note bl)
-                    (gethash path by-path))))))
+      ;; Collect all mentions grouped by path (deduplicate by position)
+      (let ((seen-positions (make-hash-table :test 'equal)))
+        (dolist (bl backlinks)
+          (let* ((path (vulpea-note-path bl))
+                 (links (vulpea-note-links bl))
+                 ;; Find links pointing to our target
+                 (target-links (seq-filter
+                                (lambda (link)
+                                  (and (equal "id" (plist-get link :type))
+                                       (equal target-id (plist-get link :dest))))
+                                links)))
+            (dolist (link target-links)
+              (let* ((pos (plist-get link :pos))
+                     (key (cons path pos)))
+                ;; Only add if we haven't seen this path+position combo
+                (unless (gethash key seen-positions)
+                  (puthash key t seen-positions)
+                  (cl-incf total-count)
+                  (push (list :pos pos :source-note bl)
+                        (gethash path by-path))))))))
       ;; Batch fetch file-level notes
       (let* ((paths (hash-table-keys by-path))
              (file-notes (when paths
@@ -1063,25 +1068,33 @@ Returns a plist with :type and type-specific content:
 
 (defun vulpea-ui--render-backlink-mention (mention path)
   "Render a single backlink MENTION from file at PATH."
-  (let ((heading-path (plist-get mention :heading-path))
-        (preview (plist-get mention :preview))
-        (pos (plist-get mention :pos)))
-    (vui-hstack
-     ;; Jump button (arrow)
-     (vui-button "→"
-       :face 'vulpea-ui-backlink-heading-face
-       :on-click (lambda ()
-                   (vulpea-ui--jump-to-file-position path pos))
-       :help-echo nil)
-     ;; Content: heading path and/or preview
-     (vui-vstack
-      :spacing 0
-      :indent 4
-      (when heading-path
-        (vui-text (string-join heading-path " > ")
-          :face 'vulpea-ui-backlink-heading-face))
-      (when preview
-        (vulpea-ui--render-preview preview))))))
+  (let* ((heading-path (plist-get mention :heading-path))
+         (preview (plist-get mention :preview))
+         (pos (plist-get mention :pos))
+         ;; Calculate indent based on heading depth (0 for first level, 2 for each additional)
+         (depth (length heading-path))
+         (extra-indent (if (> depth 1) (* (1- depth) 2) 0))
+         ;; Only show the last heading in the path (parent context is shown via indent)
+         (display-heading (when heading-path (car (last heading-path)))))
+    (vui-vstack
+     :spacing 0
+     :indent extra-indent
+     (vui-hstack
+      ;; Jump button (arrow)
+      (vui-button "→"
+        :face 'vulpea-ui-backlink-heading-face
+        :on-click (lambda ()
+                    (vulpea-ui--jump-to-file-position path pos))
+        :help-echo nil)
+      ;; Content: heading and/or preview
+      (vui-vstack
+       :spacing 0
+       :indent 4
+       (when display-heading
+         (vui-text display-heading
+           :face 'vulpea-ui-backlink-heading-face))
+       (when preview
+         (vulpea-ui--render-preview preview)))))))
 
 (defun vulpea-ui--render-preview (preview)
   "Render PREVIEW based on its type."
