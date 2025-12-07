@@ -72,6 +72,10 @@ In batch mode, execute BODY in the current frame instead."
   "Test that widgets are not collapsed by default."
   (should-not vulpea-ui-default-widget-collapsed))
 
+(ert-deftest vulpea-ui-test-default-auto-hide ()
+  "Test that auto-hide is enabled by default."
+  (should vulpea-ui-sidebar-auto-hide))
+
 
 ;;; Buffer naming tests
 

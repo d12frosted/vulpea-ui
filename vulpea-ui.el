@@ -100,6 +100,14 @@ When nil, show all heading levels."
           (integer :tag "Max depth"))
   :group 'vulpea-ui)
 
+(defcustom vulpea-ui-sidebar-auto-hide t
+  "Whether to auto-hide sidebar when switching to non-vulpea buffers.
+When non-nil, sidebar is hidden when the main window displays a
+non-vulpea buffer, and shown again when returning to a vulpea note.
+When nil, sidebar remains visible with stale content."
+  :type 'boolean
+  :group 'vulpea-ui)
+
 
 ;;; Context
 
@@ -154,6 +162,9 @@ When nil, show all heading levels."
 
 (defvar vulpea-ui--sidebar-instances (make-hash-table :test 'eq)
   "Hash table mapping frames to their sidebar vui instances.")
+
+(defvar vulpea-ui--sidebar-auto-hidden (make-hash-table :test 'eq)
+  "Hash table tracking frames where sidebar was auto-hidden.")
 
 (defun vulpea-ui--sidebar-buffer-name (&optional frame)
   "Return the sidebar buffer name for FRAME.
@@ -230,14 +241,40 @@ If FRAME is nil, use the selected frame."
   "Handle buffer change events and update sidebar if needed.
 Called from `window-buffer-change-functions'."
   (let* ((frame (selected-frame))
-         (sidebar-buf (vulpea-ui--get-sidebar-buffer frame)))
-    (when (and sidebar-buf
-               (vulpea-ui--sidebar-visible-p frame))
+         (sidebar-buf (vulpea-ui--get-sidebar-buffer frame))
+         (auto-hidden-p (gethash frame vulpea-ui--sidebar-auto-hidden)))
+    (when sidebar-buf
       (let* ((main-win (vulpea-ui--get-main-window frame))
              (main-buf (when main-win (window-buffer main-win)))
              (note (vulpea-ui--get-note-from-buffer main-buf)))
-        (when (vulpea-ui--should-update-p note)
-          (vulpea-ui--render-sidebar note frame))))))
+        (cond
+         ;; Non-vulpea buffer: auto-hide if enabled
+         ((and (null note)
+               vulpea-ui-sidebar-auto-hide
+               (vulpea-ui--sidebar-visible-p frame))
+          (vulpea-ui--hide-sidebar-window frame)
+          (puthash frame t vulpea-ui--sidebar-auto-hidden))
+         ;; Vulpea buffer and was auto-hidden: show again
+         ((and note auto-hidden-p)
+          (remhash frame vulpea-ui--sidebar-auto-hidden)
+          (vulpea-ui--show-sidebar-window frame)
+          (vulpea-ui--render-sidebar note frame))
+         ;; Vulpea buffer and visible: update if needed
+         ((and note (vulpea-ui--sidebar-visible-p frame)
+               (vulpea-ui--should-update-p note))
+          (vulpea-ui--render-sidebar note frame)))))))
+
+(defun vulpea-ui--hide-sidebar-window (&optional frame)
+  "Hide the sidebar window in FRAME without killing the buffer."
+  (let ((win (vulpea-ui--get-sidebar-window frame)))
+    (when win
+      (delete-window win))))
+
+(defun vulpea-ui--show-sidebar-window (&optional frame)
+  "Show the sidebar window in FRAME."
+  (let ((buf (vulpea-ui--get-sidebar-buffer frame)))
+    (when (and buf (not (vulpea-ui--sidebar-visible-p frame)))
+      (vulpea-ui--create-sidebar-window buf))))
 
 (defun vulpea-ui--setup-hooks ()
   "Set up hooks for sidebar content tracking."
@@ -641,8 +678,9 @@ NOTE is the parent note for navigation."
       (delete-window win))
     (when buf
       (kill-buffer buf))
-    ;; Clean up instance
+    ;; Clean up state
     (remhash frame vulpea-ui--sidebar-instances)
+    (remhash frame vulpea-ui--sidebar-auto-hidden)
     ;; Teardown hooks if no more sidebars
     (when (hash-table-empty-p vulpea-ui--sidebar-instances)
       (vulpea-ui--teardown-hooks))))
