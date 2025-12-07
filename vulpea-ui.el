@@ -730,20 +730,50 @@ Returns a list of heading titles from outermost to innermost."
     path))
 
 (defun vulpea-ui--extract-preview (pos)
-  "Extract preview text around POS in current buffer."
+  "Extract preview text around POS in current buffer.
+If POS is within a meta block (- key :: value), extract just that meta entry.
+Otherwise, extract surrounding lines."
   (save-excursion
     (goto-char pos)
-    ;; Move to beginning of line containing the link
+    (beginning-of-line)
+    (let ((line (buffer-substring-no-properties
+                 (line-beginning-position)
+                 (line-end-position))))
+      (if (vulpea-ui--meta-line-p line)
+          ;; Meta block: extract just this meta entry
+          (vulpea-ui--clean-preview
+           (vulpea-ui--extract-meta-entry pos))
+        ;; Regular content: extract surrounding lines
+        (vulpea-ui--clean-preview
+         (vulpea-ui--extract-context-lines pos))))))
+
+(defun vulpea-ui--meta-line-p (line)
+  "Return non-nil if LINE is a meta block entry (- key :: value)."
+  (string-match-p "^[ \t]*- [^:]+[ \t]+::" line))
+
+(defun vulpea-ui--extract-meta-entry (pos)
+  "Extract the meta entry at POS.
+A meta entry starts with `- key ::` and continues until the next
+meta entry or end of the list item."
+  (save-excursion
+    (goto-char pos)
+    (beginning-of-line)
+    (buffer-substring-no-properties
+     (line-beginning-position)
+     (line-end-position))))
+
+(defun vulpea-ui--extract-context-lines (pos)
+  "Extract context lines around POS."
+  (save-excursion
+    (goto-char pos)
     (beginning-of-line)
     (let ((lines-to-get vulpea-ui-backlinks-preview-lines)
           (lines nil))
-      ;; Collect lines
       (dotimes (_ lines-to-get)
         (unless (eobp)
           (let ((line (buffer-substring-no-properties
                        (line-beginning-position)
                        (line-end-position))))
-            ;; Skip empty lines and metadata
             (unless (or (string-empty-p (string-trim line))
                         (string-match-p "^[ \t]*:PROPERTIES:" line)
                         (string-match-p "^[ \t]*:END:" line)
@@ -752,6 +782,31 @@ Returns a list of heading titles from outermost to innermost."
           (forward-line 1)))
       (when lines
         (string-join (nreverse lines) " ")))))
+
+(defun vulpea-ui--clean-preview (text)
+  "Clean up TEXT for display as preview.
+Removes org link syntax and cleans up whitespace."
+  (when text
+    (let ((result text))
+      ;; Replace [[id:...][description]] with description
+      (setq result (replace-regexp-in-string
+                    "\\[\\[id:[^]]+\\]\\[\\([^]]+\\)\\]\\]"
+                    "\\1"
+                    result))
+      ;; Remove bare [[id:...]] links
+      (setq result (replace-regexp-in-string
+                    "\\[\\[id:[^]]+\\]\\]"
+                    ""
+                    result))
+      ;; Replace [[file:...][description]] with description
+      (setq result (replace-regexp-in-string
+                    "\\[\\[[^]]+\\]\\[\\([^]]+\\)\\]\\]"
+                    "\\1"
+                    result))
+      ;; Clean up multiple spaces
+      (setq result (replace-regexp-in-string "[ \t]+" " " result))
+      ;; Trim
+      (string-trim result))))
 
 (defun vulpea-ui--count-backlink-mentions (grouped)
   "Count total mentions across all GROUPED backlinks."
@@ -783,25 +838,21 @@ Returns a list of heading titles from outermost to innermost."
   (let ((heading-path (plist-get mention :heading-path))
         (preview (plist-get mention :preview))
         (pos (plist-get mention :pos)))
-    (vui-vstack
-     :spacing 0
-     ;; Heading path (if any)
-     (when heading-path
-       (vui-button (concat "* " (string-join heading-path " > "))
-         :face 'vulpea-ui-backlink-heading-face
-         :on-click (lambda ()
-                     (vulpea-ui--jump-to-file-position path pos))))
-     ;; Preview text
-     (when preview
-       (if heading-path
-           (vui-vstack
-            :indent 2
-            (vui-text preview :face 'vulpea-ui-backlink-preview-face))
-         ;; No heading, make preview clickable
-         (vui-button preview
-           :face 'vulpea-ui-backlink-preview-face
-           :on-click (lambda ()
-                       (vulpea-ui--jump-to-file-position path pos))))))))
+    (vui-hstack
+     :spacing 1
+     ;; Jump button (arrow)
+     (vui-button "→"
+       :face 'vulpea-ui-backlink-heading-face
+       :on-click (lambda ()
+                   (vulpea-ui--jump-to-file-position path pos)))
+     ;; Content: heading path and/or preview
+     (vui-vstack
+      :spacing 0
+      (when heading-path
+        (vui-text (string-join heading-path " > ")
+          :face 'vulpea-ui-backlink-heading-face))
+      (when preview
+        (vui-text preview :face 'vulpea-ui-backlink-preview-face))))))
 
 (defun vulpea-ui--jump-to-file-position (path pos)
   "Jump to position POS in file at PATH."
