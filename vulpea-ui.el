@@ -78,10 +78,10 @@ width (for left/right position) or height (for top/bottom position)."
   :group 'vulpea-ui)
 
 (defcustom vulpea-ui-sidebar-widgets
-  '(vulpea-ui-widget-outline
+  '(vulpea-ui-widget-stats
+    vulpea-ui-widget-outline
     vulpea-ui-widget-backlinks
-    vulpea-ui-widget-links
-    vulpea-ui-widget-stats)
+    vulpea-ui-widget-links)
   "Ordered list of widgets to display in the sidebar.
 Each element should be a symbol naming a vui component function."
   :type '(repeat symbol)
