@@ -715,24 +715,14 @@ Applies `vulpea-ui-backlinks-note-filter' and `vulpea-ui-backlinks-context-types
                                            (< (plist-get a :pos) (plist-get b :pos)))
                                          mentions))
                        ;; Enrich mentions with heading context and preview
+                       ;; (context type filtering now happens inside this function)
                        (enriched (vulpea-ui--enrich-backlink-mentions
-                                  path sorted-mentions target-id))
-                       ;; Apply context type filter
-                       (filtered-mentions
-                        (if (eq vulpea-ui-backlinks-context-types t)
-                            enriched
-                          (seq-filter
-                           (lambda (m)
-                             (let ((preview (plist-get m :preview)))
-                               (or (null preview)
-                                   (memq (plist-get preview :type)
-                                         vulpea-ui-backlinks-context-types))))
-                           enriched))))
-                  (when filtered-mentions
-                    (cl-incf filtered-count (length filtered-mentions))
+                                  path sorted-mentions target-id)))
+                  (when enriched
+                    (cl-incf filtered-count (length enriched))
                     (push (list :file-note file-note
                                 :path path
-                                :mentions filtered-mentions)
+                                :mentions enriched)
                           result))))))
           ;; Sort groups by file-note title
           (list :groups (seq-sort (lambda (a b)
@@ -744,23 +734,47 @@ Applies `vulpea-ui-backlinks-note-filter' and `vulpea-ui-backlinks-context-types
 
 (defun vulpea-ui--enrich-backlink-mentions (path mentions target-id)
   "Enrich MENTIONS with heading context and preview from file at PATH.
-TARGET-ID is the ID of the note being linked to (for prose context extraction)."
+TARGET-ID is the ID of the note being linked to (for prose context extraction).
+Filters by `vulpea-ui-backlinks-context-types' BEFORE expensive operations."
   (when (and path (file-exists-p path) mentions)
     (with-temp-buffer
       (insert-file-contents path)
       (org-mode)
-      ;; Parse all headings once
-      (let ((headings (vulpea-ui--parse-all-headings)))
-        (seq-map
-         (lambda (mention)
-           (let* ((pos (plist-get mention :pos))
-                  (heading-path (vulpea-ui--find-heading-path headings pos))
-                  (preview (when vulpea-ui-backlinks-show-preview
-                             (vulpea-ui--extract-preview pos target-id))))
-             (list :pos pos
-                   :heading-path heading-path
-                   :preview preview)))
-         mentions)))))
+      ;; First pass: detect context types (cheap) and filter early
+      (let* ((mentions-with-type
+              (seq-map
+               (lambda (mention)
+                 (let* ((pos (plist-get mention :pos))
+                        (line (save-excursion
+                                (goto-char pos)
+                                (buffer-substring-no-properties
+                                 (line-beginning-position)
+                                 (line-end-position))))
+                        (context-type (vulpea-ui--detect-context-type pos line)))
+                   (list :pos pos :context-type context-type)))
+               mentions))
+             ;; Filter by context type BEFORE expensive operations
+             (filtered
+              (if (eq vulpea-ui-backlinks-context-types t)
+                  mentions-with-type
+                (seq-filter
+                 (lambda (m)
+                   (memq (plist-get m :context-type)
+                         vulpea-ui-backlinks-context-types))
+                 mentions-with-type))))
+        ;; Only parse headings if we have any filtered mentions
+        (when filtered
+          (let ((headings (vulpea-ui--parse-all-headings)))
+            (seq-map
+             (lambda (mention)
+               (let* ((pos (plist-get mention :pos))
+                      (heading-path (vulpea-ui--find-heading-path headings pos))
+                      (preview (when vulpea-ui-backlinks-show-preview
+                                 (vulpea-ui--extract-preview pos target-id))))
+                 (list :pos pos
+                       :heading-path heading-path
+                       :preview preview)))
+             filtered)))))))
 
 (defun vulpea-ui--parse-all-headings ()
   "Parse all headings in current buffer.
