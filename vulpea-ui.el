@@ -151,6 +151,15 @@ meta, header, table, list, quote, code, footnote, prose."
             (const prose))))
   :group 'vulpea-ui)
 
+(defcustom vulpea-ui-fast-parse nil
+  "Use fast org-mode initialization for parsing.
+When non-nil, skip mode hooks when parsing org files for headings
+and backlinks. This can significantly improve performance but may
+cause issues if your org-element parsing depends on mode hooks.
+Disabled by default for safety."
+  :type 'boolean
+  :group 'vulpea-ui)
+
 
 ;;; Context
 
@@ -382,6 +391,13 @@ Called from `window-buffer-change-functions'."
 
 ;;; Utility functions
 
+(defun vulpea-ui--setup-org-mode ()
+  "Set up org-mode for parsing, respecting `vulpea-ui-fast-parse'.
+When fast parsing is enabled, skip mode hooks for better performance."
+  (if vulpea-ui-fast-parse
+      (delay-mode-hooks (org-mode))
+    (org-mode)))
+
 (defun vulpea-ui-current-note ()
   "Get the current note from context.
 For use within widget components."
@@ -475,33 +491,32 @@ STRIP-DRAWERS removes property drawers when non-nil.
 STRIP-METADATA removes org metadata lines when non-nil."
   (when (and note (vulpea-note-path note))
     (let ((path (vulpea-note-path note)))
-      (when (file-exists-p path)
-        (with-temp-buffer
-          (insert-file-contents path)
-          (goto-char (vulpea-note-pos note))
-          ;; Skip the heading line itself if it's a heading note
-          (when (> (vulpea-note-level note) 0)
+      (with-temp-buffer
+        (insert-file-contents path)
+        (goto-char (vulpea-note-pos note))
+        ;; Skip the heading line itself if it's a heading note
+        (when (> (vulpea-note-level note) 0)
+          (forward-line 1))
+        (let ((lines nil)
+              (count 0))
+          (while (and (< count max-lines)
+                      (not (eobp)))
+            (let ((line (buffer-substring-no-properties
+                         (line-beginning-position)
+                         (line-end-position))))
+              ;; Filter lines based on settings
+              (unless (or (and strip-drawers
+                               (or (string-match-p "^[ \t]*:PROPERTIES:$" line)
+                                   (string-match-p "^[ \t]*:END:$" line)
+                                   (string-match-p "^[ \t]*:[A-Z_]+:.*$" line)))
+                          (and strip-metadata
+                               (string-match-p "^#\\+" line))
+                          (string-empty-p (string-trim line)))
+                (push line lines)
+                (cl-incf count)))
             (forward-line 1))
-          (let ((lines nil)
-                (count 0))
-            (while (and (< count max-lines)
-                        (not (eobp)))
-              (let ((line (buffer-substring-no-properties
-                           (line-beginning-position)
-                           (line-end-position))))
-                ;; Filter lines based on settings
-                (unless (or (and strip-drawers
-                                 (or (string-match-p "^[ \t]*:PROPERTIES:$" line)
-                                     (string-match-p "^[ \t]*:END:$" line)
-                                     (string-match-p "^[ \t]*:[A-Z_]+:.*$" line)))
-                            (and strip-metadata
-                                 (string-match-p "^#\\+" line))
-                            (string-empty-p (string-trim line)))
-                  (push line lines)
-                  (cl-incf count)))
-              (forward-line 1))
-            (when lines
-              (string-join (nreverse lines) "\n"))))))))
+          (when lines
+            (string-join (nreverse lines) "\n")))))))
 
 
 ;;; Stats widget
@@ -535,14 +550,12 @@ Returns a plist with :chars, :words, and :links."
             (links (seq-filter (lambda (link)
                                  (equal "id" (plist-get link :type)))
                                (vulpea-note-links note))))
-        (if (file-exists-p path)
-            (with-temp-buffer
-              (insert-file-contents path)
-              (let* ((content (buffer-substring-no-properties (point-min) (point-max)))
-                     (chars (length content))
-                     (words (length (split-string content "\\W+" t))))
-                (list :chars chars :words words :links (length links))))
-          (list :chars 0 :words 0 :links (length links))))
+        (with-temp-buffer
+          (insert-file-contents path)
+          (let* ((content (buffer-substring-no-properties (point-min) (point-max)))
+                 (chars (length content))
+                 (words (length (split-string content "\\W+" t))))
+            (list :chars chars :words words :links (length links)))))
     (list :chars 0 :words 0 :links 0)))
 
 (defun vulpea-ui--format-number (n)
@@ -597,21 +610,20 @@ Returns a list of plists with :title, :level, and :pos."
   (when (and note (vulpea-note-path note))
     (let ((path (vulpea-note-path note))
           (max-depth vulpea-ui-outline-max-depth))
-      (when (file-exists-p path)
-        (with-temp-buffer
-          (insert-file-contents path)
-          (org-mode)
-          (let ((headings nil)
-                (archive-tag org-archive-tag))
-            (org-element-map (org-element-parse-buffer 'headline) 'headline
-              (lambda (hl)
-                (let ((level (org-element-property :level hl))
-                      (title (org-element-property :raw-value hl))
-                      (pos (org-element-property :begin hl)))
-                  (when (and (not (vulpea-ui--heading-archived-p hl archive-tag))
-                             (or (null max-depth) (<= level max-depth)))
-                    (push (list :title title :level level :pos pos) headings)))))
-            (nreverse headings)))))))
+      (with-temp-buffer
+        (insert-file-contents path)
+        (vulpea-ui--setup-org-mode)
+        (let ((headings nil)
+              (archive-tag org-archive-tag))
+          (org-element-map (org-element-parse-buffer 'headline) 'headline
+            (lambda (hl)
+              (let ((level (org-element-property :level hl))
+                    (title (org-element-property :raw-value hl))
+                    (pos (org-element-property :begin hl)))
+                (when (and (not (vulpea-ui--heading-archived-p hl archive-tag))
+                           (or (null max-depth) (<= level max-depth)))
+                  (push (list :title title :level level :pos pos) headings)))))
+          (nreverse headings))))))
 
 (defun vulpea-ui--render-outline-heading (heading note)
   "Render a single HEADING for outline widget.
@@ -740,10 +752,10 @@ Applies `vulpea-ui-backlinks-note-filter' and `vulpea-ui-backlinks-context-types
   "Enrich MENTIONS with heading context and preview from file at PATH.
 TARGET-ID is the ID of the note being linked to (for prose context extraction).
 Filters by `vulpea-ui-backlinks-context-types' BEFORE expensive operations."
-  (when (and path (file-exists-p path) mentions)
+  (when (and path mentions)
     (with-temp-buffer
       (insert-file-contents path)
-      (org-mode)
+      (vulpea-ui--setup-org-mode)
       ;; First pass: detect context types (cheap) and filter early
       (let* ((mentions-with-type
               (seq-map
