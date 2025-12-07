@@ -968,8 +968,7 @@ Returns a plist with :type and type-specific content:
   (let ((heading-path (plist-get mention :heading-path))
         (preview (plist-get mention :preview))
         (pos (plist-get mention :pos)))
-    (vui-hstack
-     :spacing 1
+    (vui-vstack
      ;; Jump button (arrow)
      (vui-button "→"
        :face 'vulpea-ui-backlink-heading-face
@@ -978,6 +977,7 @@ Returns a plist with :type and type-specific content:
      ;; Content: heading path and/or preview
      (vui-vstack
       :spacing 0
+      :indent 1
       (when heading-path
         (vui-text (string-join heading-path " > ")
           :face 'vulpea-ui-backlink-heading-face))
