@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        emacs_version:
+          - 29.4
+          - snapshot
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Emacs
+        uses: purcell/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs_version }}
+
+      - name: Install Eldev
+        run: curl -fsSL https://raw.github.com/doublep/eldev/master/webinstall/eldev | sh
+
+      - name: Compile
+        run: eldev compile
+
+      - name: Lint
+        run: eldev lint
+
+      - name: Test
+        run: eldev test

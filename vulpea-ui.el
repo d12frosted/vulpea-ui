@@ -7,7 +7,7 @@
 ;; URL: https://github.com/d12frosted/vulpea-ui
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.1") (vulpea "0.3") (vui "0.1"))
-;; Keywords: org-mode roam notes
+;; Keywords: outlines hypermedia
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -165,7 +165,7 @@ with :file-note, :path, and :mentions)."
   :group 'vulpea-ui)
 
 (defcustom vulpea-ui-fast-parse nil
-  "Use fast org-mode initialization for parsing.
+  "Use fast `org-mode' initialization for parsing.
 When non-nil, skip mode hooks when parsing org files for headings
 and backlinks. This can significantly improve performance but may
 cause issues if your org-element parsing depends on mode hooks.
@@ -284,7 +284,7 @@ If FRAME is nil, use the selected frame."
 ;;; Window management
 
 (defun vulpea-ui--display-buffer-params ()
-  "Return display-buffer parameters for the sidebar."
+  "Return `display-buffer' parameters for the sidebar."
   (let ((side vulpea-ui-sidebar-position)
         (size vulpea-ui-sidebar-size))
     `((side . ,side)
@@ -405,7 +405,7 @@ Called from `window-buffer-change-functions'."
 ;;; Utility functions
 
 (defun vulpea-ui--setup-org-mode ()
-  "Set up org-mode for parsing, respecting `vulpea-ui-fast-parse'.
+  "Set up `org-mode' for parsing, respecting `vulpea-ui-fast-parse'.
 When fast parsing is enabled, skip mode hooks for better performance."
   (if vulpea-ui-fast-parse
       (delay-mode-hooks (org-mode))
@@ -700,7 +700,8 @@ Groups backlinks by file and shows heading context with optional previews."
 Returns a plist with :groups, :filtered-count, and :total-count.
 Each group has :file-note, :path, and :mentions.
 Each mention has :heading-path, :pos, and :preview.
-Applies `vulpea-ui-backlinks-note-filter' and `vulpea-ui-backlinks-context-types'."
+Applies `vulpea-ui-backlinks-note-filter' and
+`vulpea-ui-backlinks-context-types'."
   (if (null note)
       (list :groups nil :filtered-count 0 :total-count 0)
     (let* ((target-id (vulpea-note-id note))
