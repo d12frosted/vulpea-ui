@@ -25,6 +25,10 @@ First release candidate.
 - Fast-parse option for performance optimization
 - Easy API for creating custom widgets
 
+** Fixes
+
+- Fix widget content not rendering when byte-compiled
+
 ** Dependencies
 
 - Emacs 29.1+

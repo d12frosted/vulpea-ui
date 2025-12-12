@@ -500,11 +500,11 @@ For use within widget components."
 
 ;;; Widget wrapper component
 
-(defcomponent vulpea-ui-widget (title count children)
+(defcomponent vulpea-ui-widget (title count)
   "Standard widget wrapper with collapsible header.
 TITLE is the widget title string.
 COUNT is an optional count to display in the header.
-CHILDREN is a function returning the widget content."
+CHILDREN (implicit) is a function returning the widget content."
   :state ((collapsed vulpea-ui-default-widget-collapsed))
   :render
   (vui-vstack
