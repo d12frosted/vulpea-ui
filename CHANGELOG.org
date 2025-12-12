@@ -1,0 +1,32 @@
+#+title: Changelog
+
+All notable changes to this project will be documented in this file.
+
+* v1.0.0-rc.1 (2025-12-12)
+
+First release candidate.
+
+** Features
+
+- Per-frame sidebar with configurable position and size
+- Widget system built on [[https://github.com/d12frosted/vui][vui]] components
+- Widget registration system with predicates for context-aware display
+- Default widgets:
+  - *Stats* - character count, word count, link count
+  - *Outline* - heading structure with navigation
+  - *Backlinks* - notes linking to current note, grouped by heading with context previews
+  - *Links* - forward links from current note
+- Backlinks features:
+  - Group by heading with clickable previews
+  - Context type indicators (meta, header, table, list, quote, code, footnote, prose)
+  - Configurable filtering by note and context type
+  - Sorting options (title ascending/descending or custom)
+- Auto-hide when switching to non-vulpea buffers
+- Fast-parse option for performance optimization
+- Easy API for creating custom widgets
+
+** Dependencies
+
+- Emacs 29.1+
+- [[https://github.com/d12frosted/vulpea/tree/v2-rewrite][vulpea]] (v2)
+- [[https://github.com/d12frosted/vui][vui]]
