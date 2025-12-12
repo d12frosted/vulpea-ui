@@ -4,8 +4,10 @@
 Sidebar infrastructure and widget framework for [[https://github.com/d12frosted/vulpea][vulpea]] notes.
 
 #+begin_html
-<a href="https://github.com/d12frosted/vulpea-ui/actions/workflows/main.yml"><img alt="CI" src="https://github.com/d12frosted/vulpea-ui/actions/workflows/main.yml/badge.svg"/></a>
-<img alt="version" src="https://img.shields.io/github/v/tag/d12frosted/vulpea-ui?label=version"/>
+<p>
+  <a href="https://github.com/d12frosted/vulpea-ui/actions/workflows/main.yml"><img alt="CI" src="https://github.com/d12frosted/vulpea-ui/actions/workflows/main.yml/badge.svg"/></a>
+  <img alt="version" src="https://img.shields.io/github/v/tag/d12frosted/vulpea-ui?label=version"/>
+</p>
 <p align="center">
   <img src="./images/vulpea-ui.png" alt="Screenshot">
 </p>
