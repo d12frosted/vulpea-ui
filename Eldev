@@ -5,6 +5,9 @@
 (eldev-use-package-archive 'gnu)
 (eldev-use-package-archive 'melpa-unstable)
 
+;; Use HEAD instead of latest stable tag for VC repos
+(setq eldev-prefer-stable-archives nil)
+
 ;; Use local dependencies when available, otherwise fetch from GitHub.
 ;; Local paths can be set via environment variables or detected automatically.
 (defun brb-eldev-use-local-or-vc (name env-var default-path github-repo &optional commit)
@@ -23,9 +26,7 @@ COMMIT is the optional commit hash or tag to use."
           (eldev-use-vc-repository name :github github-repo :commit commit)
         (eldev-use-vc-repository name :github github-repo)))))
 
-;; Use v2 of vulpea
-(brb-eldev-use-local-or-vc 'vulpea "VULPEA_PATH" "Developer/vulpea" "d12frosted/vulpea"
-                           "v2.0.0-rc.2")
+(brb-eldev-use-local-or-vc 'vulpea "VULPEA_PATH" "Developer/vulpea" "d12frosted/vulpea")
 (brb-eldev-use-local-or-vc 'vui "VUI_PATH" "Developer/vui.el" "d12frosted/vui.el")
 
 ;; Tell checkdoc not to demand two spaces after a period.
