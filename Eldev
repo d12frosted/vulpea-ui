@@ -23,8 +23,9 @@ COMMIT is the optional commit hash or tag to use."
           (eldev-use-vc-repository name :github github-repo :commit commit)
         (eldev-use-vc-repository name :github github-repo)))))
 
-;; Use v2-rewrite branch of vulpea (commit hash)
-(brb-eldev-use-local-or-vc 'vulpea "VULPEA_PATH" "Developer/vulpea" "d12frosted/vulpea")
+;; Use v2 of vulpea
+(brb-eldev-use-local-or-vc 'vulpea "VULPEA_PATH" "Developer/vulpea" "d12frosted/vulpea"
+                           "v2.0.0-rc.2")
 (brb-eldev-use-local-or-vc 'vui "VUI_PATH" "Developer/vui.el" "d12frosted/vui.el")
 
 ;; Tell checkdoc not to demand two spaces after a period.
