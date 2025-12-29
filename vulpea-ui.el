@@ -164,6 +164,20 @@ Disabled by default for safety."
   :type 'boolean
   :group 'vulpea-ui)
 
+(defcustom vulpea-ui-auto-refresh t
+  "Automatically refresh sidebar content.
+When non-nil, the sidebar will refresh:
+- After saving a buffer (full refresh for backlinks/links)
+- After idle time (stats and outline only)"
+  :type 'boolean
+  :group 'vulpea-ui)
+
+(defcustom vulpea-ui-auto-refresh-delay 1.5
+  "Delay in seconds before auto-refreshing on idle.
+Only used when `vulpea-ui-auto-refresh' is non-nil."
+  :type 'number
+  :group 'vulpea-ui)
+
 
 ;;; Context
 
@@ -313,6 +327,9 @@ Widgets are filtered by predicate and sorted by order."
   "Non-nil when sidebar is currently rendering.
 Used to prevent re-entry during render.")
 
+(defvar vulpea-ui--idle-timer nil
+  "Timer for auto-refreshing sidebar on idle.")
+
 (defun vulpea-ui--sidebar-buffer-name (&optional frame)
   "Return the sidebar buffer name for FRAME.
 If FRAME is nil, use the selected frame."
@@ -447,12 +464,48 @@ Called from `window-buffer-change-functions'."
 (defun vulpea-ui--setup-hooks ()
   "Set up hooks for sidebar content tracking."
   (add-hook 'window-buffer-change-functions #'vulpea-ui--on-buffer-change)
-  (add-hook 'window-selection-change-functions #'vulpea-ui--on-buffer-change))
+  (add-hook 'window-selection-change-functions #'vulpea-ui--on-buffer-change)
+  ;; Auto-refresh hooks
+  (when vulpea-ui-auto-refresh
+    (add-hook 'after-save-hook #'vulpea-ui--on-save)
+    (vulpea-ui--start-idle-timer)))
 
 (defun vulpea-ui--teardown-hooks ()
   "Remove hooks for sidebar content tracking."
   (remove-hook 'window-buffer-change-functions #'vulpea-ui--on-buffer-change)
-  (remove-hook 'window-selection-change-functions #'vulpea-ui--on-buffer-change))
+  (remove-hook 'window-selection-change-functions #'vulpea-ui--on-buffer-change)
+  ;; Auto-refresh hooks
+  (remove-hook 'after-save-hook #'vulpea-ui--on-save)
+  (vulpea-ui--stop-idle-timer))
+
+(defun vulpea-ui--start-idle-timer ()
+  "Start the idle timer for auto-refresh."
+  (vulpea-ui--stop-idle-timer)
+  (setq vulpea-ui--idle-timer
+        (run-with-idle-timer vulpea-ui-auto-refresh-delay t
+                             #'vulpea-ui--on-idle)))
+
+(defun vulpea-ui--stop-idle-timer ()
+  "Stop the idle timer for auto-refresh."
+  (when vulpea-ui--idle-timer
+    (cancel-timer vulpea-ui--idle-timer)
+    (setq vulpea-ui--idle-timer nil)))
+
+(defun vulpea-ui--on-save ()
+  "Handle buffer save - refresh sidebar if visible."
+  (when (and (vulpea-ui--sidebar-visible-p)
+             (vulpea-ui--get-note-from-buffer (current-buffer)))
+    (vulpea-ui-sidebar-refresh)))
+
+(defun vulpea-ui--on-idle ()
+  "Handle idle timeout - refresh stats and outline."
+  (when (vulpea-ui--sidebar-visible-p)
+    (let* ((frame (selected-frame))
+           (main-win (vulpea-ui--get-main-window frame))
+           (main-buf (when main-win (window-buffer main-win)))
+           (note (vulpea-ui--get-note-from-buffer main-buf)))
+      (when note
+        (vulpea-ui-sidebar-refresh)))))
 
 
 ;;; Utility functions
