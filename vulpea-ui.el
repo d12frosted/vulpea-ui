@@ -708,18 +708,24 @@ STRIP-METADATA removes org metadata lines when non-nil."
 
 (defun vulpea-ui--compute-stats (note)
   "Compute statistics for NOTE.
-Returns a plist with :chars, :words, and :links."
+Returns a plist with :chars, :words, and :links.
+If the note's file is open in a buffer, reads from buffer for live stats.
+Otherwise reads from disk."
   (if (and note (vulpea-note-path note))
       (let ((path (vulpea-note-path note))
             (links (seq-filter (lambda (link)
                                  (equal "id" (plist-get link :type)))
-                               (vulpea-note-links note))))
-        (with-temp-buffer
-          (insert-file-contents path)
-          (let* ((content (buffer-substring-no-properties (point-min) (point-max)))
-                 (chars (length content))
-                 (words (length (split-string content "\\W+" t))))
-            (list :chars chars :words words :links (length links)))))
+                               (vulpea-note-links note)))
+            (existing-buf (find-buffer-visiting (vulpea-note-path note))))
+        (let* ((content (if existing-buf
+                            (with-current-buffer existing-buf
+                              (buffer-substring-no-properties (point-min) (point-max)))
+                          (with-temp-buffer
+                            (insert-file-contents path)
+                            (buffer-substring-no-properties (point-min) (point-max)))))
+               (chars (length content))
+               (words (length (split-string content "\\W+" t))))
+          (list :chars chars :words words :links (length links))))
     (list :chars 0 :words 0 :links 0)))
 
 (defun vulpea-ui--format-number (n)
