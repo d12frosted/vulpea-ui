@@ -48,5 +48,5 @@ First release candidate.
 ** Dependencies
 
 - Emacs 29.1+
-- [[https://github.com/d12frosted/vulpea/tree/v2-rewrite][vulpea]] (v2)
+- [[https://github.com/d12frosted/vulpea][vulpea]] (v2)
 - [[https://github.com/d12frosted/vui][vui]]

@@ -26,7 +26,7 @@ Sidebar infrastructure and widget framework for [[https://github.com/d12frosted/
 ** Dependencies
 
 - Emacs 29.1+
-- [[https://github.com/d12frosted/vulpea/tree/v2-rewrite][vulpea]] (v2, =v2-rewrite= branch)
+- [[https://github.com/d12frosted/vulpea][vulpea]] (v2)
 - [[https://github.com/d12frosted/vui][vui]]
 
 ** Using straight.el
