@@ -332,6 +332,6 @@ Useful for rendering previews in custom widgets.
 
 * License
 
-Copyright (C) 2024-2025 Boris Buliga
+Copyright (C) 2024-2026 Boris Buliga
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.

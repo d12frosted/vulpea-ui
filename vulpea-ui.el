@@ -1,6 +1,6 @@
 ;;; vulpea-ui.el --- Sidebar infrastructure and widget framework for vulpea notes -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024-2025 Boris Buliga
+;; Copyright (C) 2024-2026 Boris Buliga
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Author: Boris Buliga <boris@d12frosted.io>
