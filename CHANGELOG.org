@@ -45,7 +45,7 @@ First release candidate.
 ** Features
 
 - Per-frame sidebar with configurable position and size
-- Widget system built on [[https://github.com/d12frosted/vui][vui]] components
+- Widget system built on [[https://github.com/d12frosted/vui.el][vui]] components
 - Widget registration system with predicates for context-aware display
 - Default widgets:
   - *Stats* - character count, word count, link count
@@ -65,4 +65,4 @@ First release candidate.
 
 - Emacs 29.1+
 - [[https://github.com/d12frosted/vulpea][vulpea]] (v2)
-- [[https://github.com/d12frosted/vui][vui]]
+- [[https://github.com/d12frosted/vui.el][vui]]
