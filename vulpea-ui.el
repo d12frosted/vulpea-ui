@@ -753,7 +753,7 @@ Otherwise reads from disk."
                  (lambda (heading)
                    (vulpea-ui--render-outline-heading heading note))
                  headings)
-              (vui-text "No headings" :face 'shadow))))))))
+              (vui-muted "No headings"))))))))
 
 (defun vulpea-ui--heading-archived-p (hl archive-tag)
   "Return non-nil if HL or any of its ancestors has ARCHIVE-TAG."
@@ -840,7 +840,7 @@ Groups backlinks by file and shows heading context with optional previews."
                 (vui-vstack
                  :spacing 1
                  (seq-map #'vulpea-ui--render-backlink-group groups))
-              (vui-text "No backlinks" :face 'shadow))))))))
+              (vui-muted "No backlinks"))))))))
 
 (defun vulpea-ui--get-grouped-backlinks (note)
   "Get backlinks to NOTE grouped by file.
@@ -1197,7 +1197,7 @@ This is an internal wrapper around `vulpea-ui-clean-org-markup'."
      ;; File-level note link
      (if file-note
          (vui-component 'vulpea-ui-note-link :note file-note)
-       (vui-text (file-name-nondirectory path) :face 'shadow))
+       (vui-muted (file-name-nondirectory path)))
      ;; Mentions grouped by heading
      (when grouped
        (vui-vstack
@@ -1350,7 +1350,7 @@ Renders the preview as a clickable button to jump to the mention."
                        (vui-text (format "(%d)" count)
                          :face 'vulpea-ui-widget-count-face))))
                   forward-links))
-              (vui-text "No links" :face 'shadow))))))))
+              (vui-muted "No links"))))))))
 
 (defun vulpea-ui--get-forward-links (note)
   "Get all notes linked from NOTE's file with counts.
@@ -1398,7 +1398,7 @@ Returns a list of plists with :note and :count, sorted by title."
            (seq-map (lambda (widget-sym)
                       (vui-component widget-sym :key widget-sym))
                     widgets)))
-      (vui-text "No vulpea note selected" :face 'shadow))))
+      (vui-muted "No vulpea note selected"))))
 
 (vui-defcomponent vulpea-ui-sidebar-root (note)
   "Root component for the sidebar with NOTE context."
