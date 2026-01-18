@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 * Unreleased
 
+** Added
+
+- Wrap widgets in =vui-error-boundary= for graceful error handling. A failing widget shows an error message instead of breaking the entire sidebar.
+
 ** Changed
 
 - Reimplement =vulpea-ui-widget= using =vui-collapsible= from vui-components internally. The public API remains unchanged.

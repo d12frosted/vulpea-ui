@@ -1396,7 +1396,11 @@ Returns a list of plists with :note and :count, sorted by title."
           (vui-vstack
            :spacing 1
            (seq-map (lambda (widget-sym)
-                      (vui-component widget-sym :key widget-sym))
+                      (vui-error-boundary
+                        :id (intern (format "widget-%s" widget-sym))
+                        :fallback (lambda (_err)
+                                    (vui-muted (format "Error in %s" widget-sym)))
+                        (vui-component widget-sym :key widget-sym)))
                     widgets)))
       (vui-muted "No vulpea note selected"))))
 
