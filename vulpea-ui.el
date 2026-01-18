@@ -53,6 +53,7 @@
 (require 'org-element)
 (require 'vulpea)
 (require 'vui)
+(require 'vui-components)
 
 
 ;;; Custom variables
@@ -598,27 +599,17 @@ For use within widget components."
 TITLE is the widget title string.
 COUNT is an optional count to display in the header.
 CHILDREN (implicit) is a function returning the widget content."
-  :state ((collapsed vulpea-ui-default-widget-collapsed))
   :render
-  (vui-vstack
-   :spacing 0
-   ;; Header
-   (vui-hstack
-    :spacing 1
-    (vui-button (if collapsed "▶" "▼")
-      :on-click (lambda () (vui-set-state :collapsed (not collapsed)))
-      :face 'vulpea-ui-widget-header-face
-      :help-echo nil)
-    (vui-text title :face 'vulpea-ui-widget-header-face)
-    (when count
-      (vui-text (format "(%s)" count) :face 'vulpea-ui-widget-count-face)))
-   ;; Content (when not collapsed)
-   (unless collapsed
-     (when children
-       (vui-vstack
-        :spacing 0
-        :indent 2
-        (funcall children))))))
+  (let ((display-title (if count
+                           (format "%s (%s)" title count)
+                         title)))
+    (vui-collapsible
+      :title display-title
+      :initially-expanded (not vulpea-ui-default-widget-collapsed)
+      :title-face 'vulpea-ui-widget-header-face
+      :indent 2
+      (when children
+        (funcall children)))))
 
 
 ;;; Shared components
@@ -836,12 +827,13 @@ Groups backlinks by file and shows heading context with optional previews."
                        (vulpea-ui--get-grouped-backlinks note)))
              (groups (plist-get result :groups))
              (filtered-count (plist-get result :filtered-count))
-             (total-count (plist-get result :total-count)))
+             (total-count (plist-get result :total-count))
+             (count-display (if (= filtered-count total-count)
+                                filtered-count
+                              (format "%d/%d" filtered-count total-count))))
         (vui-component 'vulpea-ui-widget
           :title "Backlinks"
-          :count (if (= filtered-count total-count)
-                     filtered-count
-                   (format "%d/%d" filtered-count total-count))
+          :count count-display
           :children
           (lambda ()
             (if groups
