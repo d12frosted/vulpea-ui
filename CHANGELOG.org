@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - Reimplement =vulpea-ui-widget= using =vui-collapsible= from vui-components internally. The public API remains unchanged.
 - Use =vui-muted= semantic component for de-emphasized text.
+- Enable =mode-line-invisible-mode= in sidebar by default for a cleaner UI. Can be toggled off if needed.
 
 * v1.0.0 (2025-12-30)
 

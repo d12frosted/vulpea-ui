@@ -313,7 +313,8 @@ Widgets are filtered by predicate and sorted by order."
   "Major mode for the vulpea-ui sidebar buffer.
 \\{vulpea-ui-sidebar-mode-map}"
   :group 'vulpea-ui
-  (setq-local truncate-lines t))
+  (setq-local truncate-lines t)
+  (mode-line-invisible-mode 1))
 
 
 ;;; Sidebar state (frame-local)
