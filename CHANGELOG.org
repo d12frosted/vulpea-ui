@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 * Unreleased
 
+** Fixed
+
+- Preserve collapsible section state during automatic refresh. Previously, collapsed widgets would reset to default state on idle/save refresh.
+
 ** Changed
 
 - Reimplement =vulpea-ui-widget= using =vui-collapsible= from vui-components internally. The public API remains unchanged.

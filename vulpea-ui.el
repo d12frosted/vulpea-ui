@@ -1417,18 +1417,24 @@ Returns a list of plists with :note and :count, sorted by title."
          (buf-name (vulpea-ui--sidebar-buffer-name frame))
          (buf (get-buffer-create buf-name))
          (sidebar-win (vulpea-ui--get-sidebar-window frame))
-         (original-window (selected-window)))
+         (original-window (selected-window))
+         (existing-instance (gethash frame vulpea-ui--sidebar-instances)))
     ;; Select sidebar window before mount (vui-mount calls switch-to-buffer)
     (when sidebar-win
       (select-window sidebar-win t))
     (with-current-buffer buf
-      ;; Mount fresh - vui-mount calls kill-all-local-variables
-      (let ((new-instance
-             (vui-mount
-              (vui-component 'vulpea-ui-sidebar-root :note note)
-              buf-name)))
-        (puthash frame new-instance vulpea-ui--sidebar-instances))
-      ;; Set current note AFTER mount (vui-mount kills local variables)
+      (if (and existing-instance
+               (vui-instance-buffer existing-instance)
+               (buffer-live-p (vui-instance-buffer existing-instance)))
+          ;; Reuse existing instance - update props, invalidate memos, re-render
+          (vui-update existing-instance (list :note note))
+        ;; Mount fresh - first render or instance was lost
+        (let ((new-instance
+               (vui-mount
+                (vui-component 'vulpea-ui-sidebar-root :note note)
+                buf-name)))
+          (puthash frame new-instance vulpea-ui--sidebar-instances)))
+      ;; Set current note AFTER render (vui-mount kills local variables)
       (setq vulpea-ui--current-note note)
       (goto-char (point-min)))
     ;; Restore original window
