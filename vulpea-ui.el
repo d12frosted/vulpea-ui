@@ -335,7 +335,7 @@ Used to prevent re-entry during render.")
   "Return the sidebar buffer name for FRAME.
 If FRAME is nil, use the selected frame."
   (let ((frame (or frame (selected-frame))))
-    (format "*vulpea-ui-sidebar:%s*" (frame-parameter frame 'window-id))))
+    (format "*vulpea-ui-sidebar:%s*" (or (frame-parameter frame 'window-id) ""))))
 
 (defun vulpea-ui--get-sidebar-buffer (&optional frame)
   "Get the sidebar buffer for FRAME, or nil if it doesn't exist."
