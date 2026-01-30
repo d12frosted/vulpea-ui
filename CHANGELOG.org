@@ -7,6 +7,8 @@ All notable changes to this project will be documented in this file.
 ** Fixed
 
 - Preserve collapsible section state during automatic refresh. Previously, collapsed widgets would reset to default state on idle/save refresh.
+- Eliminate sidebar flicker during idle refresh. Idle timer now uses soft update (=vui-update-props=) preserving memo caches — only widgets whose deps changed (stats/outline via =buffer-modified-tick=) recompute. Save and manual refresh still invalidate all caches.
+- Outline widget now reads from buffer when available (like stats), enabling live heading updates while editing.
 
 ** Changed
 

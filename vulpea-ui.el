@@ -500,14 +500,21 @@ Called from `window-buffer-change-functions'."
     (vulpea-ui-sidebar-refresh)))
 
 (defun vulpea-ui--on-idle ()
-  "Handle idle timeout - refresh stats and outline."
+  "Handle idle timeout - soft refresh preserving memos.
+Only widgets whose deps changed (e.g. `buffer-modified-tick' for
+stats and outline) will recompute."
   (when (vulpea-ui--sidebar-visible-p)
     (let* ((frame (selected-frame))
            (main-win (vulpea-ui--get-main-window frame))
            (main-buf (when main-win (window-buffer main-win)))
-           (note (vulpea-ui--get-note-from-buffer main-buf)))
-      (when note
-        (vulpea-ui-sidebar-refresh)))))
+           (note (vulpea-ui--get-note-from-buffer main-buf))
+           (instance (gethash frame vulpea-ui--sidebar-instances)))
+      (when (and note instance
+                 (vui-instance-buffer instance)
+                 (buffer-live-p (vui-instance-buffer instance)))
+        (with-current-buffer (vui-instance-buffer instance)
+          (setq vulpea-ui--current-note note))
+        (vui-update-props instance (list :note note))))))
 
 
 ;;; Utility functions
@@ -682,7 +689,10 @@ STRIP-METADATA removes org metadata lines when non-nil."
   :render
   (let ((note (use-vulpea-ui-note)))
     (when note
-      (let* ((stats (vui-use-memo (note)
+      (let* ((note-buf (when (vulpea-note-path note)
+                         (find-buffer-visiting (vulpea-note-path note))))
+             (tick (when note-buf (buffer-modified-tick note-buf)))
+             (stats (vui-use-memo (note tick)
                       (vulpea-ui--compute-stats note)))
              (chars (plist-get stats :chars))
              (words (plist-get stats :words))
@@ -742,8 +752,11 @@ Otherwise reads from disk."
   :render
   (let ((note (use-vulpea-ui-note)))
     (when note
-      (let ((headings (vui-use-memo (note)
-                        (vulpea-ui--parse-headings note))))
+      (let* ((note-buf (when (vulpea-note-path note)
+                         (find-buffer-visiting (vulpea-note-path note))))
+             (tick (when note-buf (buffer-modified-tick note-buf)))
+             (headings (vui-use-memo (note tick)
+                         (vulpea-ui--parse-headings note))))
         (vui-component 'vulpea-ui-widget
           :title "Outline"
           :count (length headings)
@@ -771,9 +784,13 @@ Otherwise reads from disk."
 Returns a list of plists with :title, :level, and :pos."
   (when (and note (vulpea-note-path note))
     (let ((path (vulpea-note-path note))
-          (max-depth vulpea-ui-outline-max-depth))
+          (max-depth vulpea-ui-outline-max-depth)
+          (existing-buf (find-buffer-visiting (vulpea-note-path note))))
       (with-temp-buffer
-        (insert-file-contents path)
+        (if existing-buf
+            (insert (with-current-buffer existing-buf
+                      (buffer-substring-no-properties (point-min) (point-max))))
+          (insert-file-contents path))
         (vulpea-ui--setup-org-mode)
         (let ((headings nil)
               (archive-tag org-archive-tag))
@@ -1426,8 +1443,8 @@ Returns a list of plists with :note and :count, sorted by title."
       (if (and existing-instance
                (vui-instance-buffer existing-instance)
                (buffer-live-p (vui-instance-buffer existing-instance)))
-          ;; Reuse existing instance - update props, invalidate memos, re-render
-          (vui-update existing-instance (list :note note))
+          ;; Reuse existing instance - update props, preserve memos
+          (vui-update-props existing-instance (list :note note))
         ;; Mount fresh - first render or instance was lost
         (let ((new-instance
                (vui-mount
@@ -1494,14 +1511,19 @@ Returns a list of plists with :note and :count, sorted by title."
 
 ;;;###autoload
 (defun vulpea-ui-sidebar-refresh ()
-  "Force refresh the sidebar content."
+  "Force refresh the sidebar, invalidating all caches."
   (interactive)
   (let* ((frame (selected-frame))
          (main-win (vulpea-ui--get-main-window frame))
          (main-buf (when main-win (window-buffer main-win)))
-         (note (vulpea-ui--get-note-from-buffer main-buf)))
-    (setq vulpea-ui--current-note nil)  ; Force update
-    (vulpea-ui--render-sidebar note frame)))
+         (note (vulpea-ui--get-note-from-buffer main-buf))
+         (instance (gethash frame vulpea-ui--sidebar-instances)))
+    (when (and note instance
+               (vui-instance-buffer instance)
+               (buffer-live-p (vui-instance-buffer instance)))
+      (with-current-buffer (vui-instance-buffer instance)
+        (setq vulpea-ui--current-note note))
+      (vui-update instance (list :note note)))))
 
 
 ;;; Built-in widget registration
