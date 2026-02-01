@@ -309,7 +309,8 @@ Widgets are filtered by predicate and sorted by order."
 \\{vulpea-ui-sidebar-mode-map}"
   :group 'vulpea-ui
   (setq-local truncate-lines t)
-  (mode-line-invisible-mode 1))
+  (when (fboundp 'mode-line-invisible-mode)
+    (mode-line-invisible-mode 1)))
 
 
 ;;; Sidebar state (frame-local)
