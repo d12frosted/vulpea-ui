@@ -411,5 +411,40 @@ In batch mode, execute BODY in the current frame instead."
   (should-not vulpea-ui-fast-parse))
 
 
+;;; Parse headings tests
+
+(ert-deftest vulpea-ui-test-parse-headings-with-attachment-link ()
+  "Test that parsing headings works with attachment links.
+Regression test for issue #21: inline image previews in temp
+buffers crash because `org-attach-id-dir' is relative and the
+buffer has no filename."
+  (let* ((temp-file (make-temp-file "vulpea-ui-test" nil ".org"))
+         (note (make-vulpea-note
+                :id "test-attach"
+                :path temp-file
+                :level 0
+                :pos 1
+                :title "Test with attachment"
+                :primary-title "Test with attachment"
+                :aliases nil
+                :tags nil
+                :links nil
+                :properties nil
+                :meta nil)))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert "#+startup: inlineimages\n"
+                    "* Heading One\n"
+                    "Some text with [[attachment:image.png]]\n"
+                    "* Heading Two\n"
+                    "More content\n"))
+          (let ((headings (vulpea-ui--parse-headings note)))
+            (should (= (length headings) 2))
+            (should (equal (plist-get (nth 0 headings) :title) "Heading One"))
+            (should (equal (plist-get (nth 1 headings) :title) "Heading Two"))))
+      (delete-file temp-file))))
+
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
