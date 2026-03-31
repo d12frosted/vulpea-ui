@@ -520,7 +520,7 @@ stats and outline) will recompute."
 When fast parsing is enabled, skip mode hooks for better performance.
 All startup actions (inline images, LaTeX previews, visibility
 cycling) are inhibited since these buffers are used only for
-parsing.  Using `org-inhibit-startup' prevents org-mode from
+parsing.  Using `org-inhibit-startup' prevents `org-mode' from
 processing buffer-level #+STARTUP keywords (e.g. inlineimages)
 which would otherwise override let-bound variable suppression."
   (let ((org-inhibit-startup t))
