@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 - Guard =mode-line-invisible-mode= call with =fboundp= since it is only available starting from Emacs 31.
 - Suppress inline image and LaTeX previews in parsing temp buffers, fixing crash when sidebar encounters notes with =attachment:= links and =#+startup: inlineimages= ([[https://github.com/d12frosted/vulpea-ui/issues/21][#21]]).
+- Use =org-inhibit-startup= instead of individual variable suppression in parsing buffers, fixing crash when buffer-level =#+startup: inlineimages= keyword overrides let-bound variables in newer Emacs/Org versions ([[https://github.com/d12frosted/vulpea-ui/issues/23][#23]]).
 
 * v1.1.0 (2026-01-31)
 
