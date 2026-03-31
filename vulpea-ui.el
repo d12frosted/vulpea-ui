@@ -518,10 +518,12 @@ stats and outline) will recompute."
 (defun vulpea-ui--setup-org-mode ()
   "Set up `org-mode' for parsing, respecting `vulpea-ui-fast-parse'.
 When fast parsing is enabled, skip mode hooks for better performance.
-Inline images and LaTeX previews are always suppressed since
-these buffers are used only for parsing."
-  (let ((org-startup-with-inline-images nil)
-        (org-startup-with-latex-preview nil))
+All startup actions (inline images, LaTeX previews, visibility
+cycling) are inhibited since these buffers are used only for
+parsing.  Using `org-inhibit-startup' prevents org-mode from
+processing buffer-level #+STARTUP keywords (e.g. inlineimages)
+which would otherwise override let-bound variable suppression."
+  (let ((org-inhibit-startup t))
     (if vulpea-ui-fast-parse
         (delay-mode-hooks (org-mode))
       (org-mode))))
