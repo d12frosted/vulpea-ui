@@ -34,8 +34,8 @@ In batch mode, execute BODY in the current frame instead."
      ;; In batch mode, just run in current context
      ,@body))
 
-(defun vulpea-ui-test--make-mock-note (&optional id title)
-  "Create a mock vulpea-note struct with ID and TITLE."
+(defun vulpea-ui-test--make-mock-note (&optional id title properties)
+  "Create a mock vulpea-note struct with ID, TITLE, and PROPERTIES."
   (let ((id (or id (format "test-%s" (random 10000))))
         (title (or title "Test Note")))
     (make-vulpea-note
@@ -48,8 +48,25 @@ In batch mode, execute BODY in the current frame instead."
      :aliases nil
      :tags nil
      :links nil
-     :properties nil
+     :properties properties
      :meta nil)))
+
+(defmacro vulpea-ui-test--with-clean-registry (&rest body)
+  "Run BODY with an empty widget registry, restoring state afterwards.
+Each stored plist is deep-copied so destructive updates in BODY do not
+leak into the saved snapshot."
+  (declare (indent 0))
+  `(let ((saved (let ((h (make-hash-table :test 'eq)))
+                  (maphash (lambda (k v) (puthash k (copy-tree v) h))
+                           vulpea-ui--widget-registry)
+                  h)))
+     (unwind-protect
+         (progn
+           (clrhash vulpea-ui--widget-registry)
+           ,@body)
+       (clrhash vulpea-ui--widget-registry)
+       (maphash (lambda (k v) (puthash k v vulpea-ui--widget-registry))
+                saved))))
 
 
 ;;; Configuration tests
@@ -444,6 +461,117 @@ buffer has no filename."
             (should (equal (plist-get (nth 0 headings) :title) "Heading One"))
             (should (equal (plist-get (nth 1 headings) :title) "Heading Two"))))
       (delete-file temp-file))))
+
+
+;;; Widget registry tests
+
+(ert-deftest vulpea-ui-test-register-widget-stores-props ()
+  "Registering a widget stores component, predicate and order."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'w
+                               :component 'w-component
+                               :predicate #'identity
+                               :order 42)
+    (let ((props (gethash 'w vulpea-ui--widget-registry)))
+      (should (eq (plist-get props :component) 'w-component))
+      (should (eq (plist-get props :predicate) #'identity))
+      (should (= (plist-get props :order) 42)))))
+
+(ert-deftest vulpea-ui-test-register-widget-overwrites ()
+  "Registering a widget twice overwrites the previous entry."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'w :component 'first :order 100)
+    (vulpea-ui-register-widget 'w :component 'second :order 200)
+    (let ((props (gethash 'w vulpea-ui--widget-registry)))
+      (should (eq (plist-get props :component) 'second))
+      (should (= (plist-get props :order) 200)))))
+
+(ert-deftest vulpea-ui-test-unregister-widget ()
+  "Unregistering removes the widget from the registry."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'w :component 'w-component)
+    (should (gethash 'w vulpea-ui--widget-registry))
+    (vulpea-ui-unregister-widget 'w)
+    (should-not (gethash 'w vulpea-ui--widget-registry))))
+
+(ert-deftest vulpea-ui-test-widget-set-updates-prop ()
+  "`vulpea-ui-widget-set' installs a property on an existing widget."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'w :component 'w-component :order 100)
+    (vulpea-ui-widget-set 'w :order 500)
+    (should (= (plist-get (gethash 'w vulpea-ui--widget-registry) :order) 500))))
+
+(ert-deftest vulpea-ui-test-widget-set-missing-widget ()
+  "`vulpea-ui-widget-set' is a no-op when the widget is unknown."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-widget-set 'missing :order 1)
+    (should-not (gethash 'missing vulpea-ui--widget-registry))))
+
+(ert-deftest vulpea-ui-test-widgets-for-note-no-predicate ()
+  "A widget without a predicate is always shown."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'w :component 'w-component)
+    (should (memq 'w-component
+                  (vulpea-ui--get-widgets-for-note
+                   (vulpea-ui-test--make-mock-note))))))
+
+(ert-deftest vulpea-ui-test-widgets-for-note-predicate-filters ()
+  "A widget with a predicate is shown only when the predicate passes."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'w
+                               :component 'w-component
+                               :predicate (lambda (_note) nil))
+    (should-not (memq 'w-component
+                      (vulpea-ui--get-widgets-for-note
+                       (vulpea-ui-test--make-mock-note))))
+    (vulpea-ui-widget-set 'w :predicate (lambda (_note) t))
+    (should (memq 'w-component
+                  (vulpea-ui--get-widgets-for-note
+                   (vulpea-ui-test--make-mock-note))))))
+
+(ert-deftest vulpea-ui-test-widgets-for-note-ordering ()
+  "Widgets are returned in ascending order of `:order'."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'a :component 'a-component :order 300)
+    (vulpea-ui-register-widget 'b :component 'b-component :order 100)
+    (vulpea-ui-register-widget 'c :component 'c-component :order 200)
+    (should (equal (vulpea-ui--get-widgets-for-note
+                    (vulpea-ui-test--make-mock-note))
+                   '(b-component c-component a-component)))))
+
+(ert-deftest vulpea-ui-test-widget-predicate-toggle-recipe ()
+  "Per-note toggle recipe: a property on the note overrides a default variable.
+Mirrors the example from the README."
+  (vulpea-ui-test--with-clean-registry
+    (let ((default-on nil))
+      (vulpea-ui-register-widget 'w :component 'w-component)
+      (vulpea-ui-widget-set
+       'w :predicate
+       (lambda (note)
+         (if-let* ((props (vulpea-note-properties note))
+                   (entry (assoc "SHOW_W" props)))
+             (not (equal (cdr entry) "nil"))
+           default-on)))
+      ;; no property, variable nil -> hidden
+      (should-not (memq 'w-component
+                        (vulpea-ui--get-widgets-for-note
+                         (vulpea-ui-test--make-mock-note))))
+      ;; no property, variable t -> shown
+      (setq default-on t)
+      (should (memq 'w-component
+                    (vulpea-ui--get-widgets-for-note
+                     (vulpea-ui-test--make-mock-note))))
+      ;; property "nil" overrides variable t -> hidden
+      (should-not (memq 'w-component
+                        (vulpea-ui--get-widgets-for-note
+                         (vulpea-ui-test--make-mock-note
+                          nil nil '(("SHOW_W" . "nil"))))))
+      ;; property "t" overrides variable nil -> shown
+      (setq default-on nil)
+      (should (memq 'w-component
+                    (vulpea-ui--get-widgets-for-note
+                     (vulpea-ui-test--make-mock-note
+                      nil nil '(("SHOW_W" . "t")))))))))
 
 
 (provide 'vulpea-ui-test)

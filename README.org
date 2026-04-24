@@ -241,13 +241,41 @@ vulpea-ui registers these widgets by default:
 
 ** Modifying widget properties
 
+=vulpea-ui-widget-set= updates a single property on an already-registered widget. This works for any widget, including the built-in ones, so you can customise them without redefining anything.
+
 #+begin_src emacs-lisp
 ;; Change a widget's order
 (vulpea-ui-widget-set 'stats :order 50)
 
+;; Attach a predicate to a built-in widget
+(vulpea-ui-widget-set 'outline :predicate #'my/show-outline-p)
+
 ;; Remove a widget
 (vulpea-ui-unregister-widget 'links)
 #+end_src
+
+** Toggling a widget per note
+
+Built-in widgets have no predicate by default, so they are shown for every note. You can install one with =vulpea-ui-widget-set= to decide per note whether the widget shows up. A common recipe is a global default variable combined with an org property that overrides it on individual notes.
+
+The example below hides the =outline= widget by default and shows it only on notes that set =:OUTLINE: t=. Flip =my/vulpea-ui-always-show-outline= to =t= to invert the default, in which case =:OUTLINE: nil= hides the widget on specific notes.
+
+#+begin_src emacs-lisp
+(defvar my/vulpea-ui-always-show-outline nil
+  "When non-nil, show the outline widget unless a note opts out.")
+
+(defun my/vulpea-ui-show-outline-p (note)
+  "Return non-nil if the outline widget should be shown for NOTE.
+An `OUTLINE' property on the note overrides the default variable."
+  (if-let* ((props (vulpea-note-properties note))
+            (entry (assoc "OUTLINE" props)))
+      (not (equal (cdr entry) "nil"))
+    my/vulpea-ui-always-show-outline))
+
+(vulpea-ui-widget-set 'outline :predicate #'my/vulpea-ui-show-outline-p)
+#+end_src
+
+The same pattern works for any widget (=stats=, =backlinks=, =links=, or your own).
 
 ** How it works
 

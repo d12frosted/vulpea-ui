@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 * Unreleased
 
+** Documentation
+
+- Document =vulpea-ui-widget-set= as the public way to attach a predicate to an already-registered widget, with a worked example showing how to toggle a built-in widget per note via a defvar + an org property ([[https://github.com/d12frosted/vulpea-ui/issues/25][#25]]).
+
 ** Fixed
 
 - Guard =mode-line-invisible-mode= call with =fboundp= since it is only available starting from Emacs 31.
