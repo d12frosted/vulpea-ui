@@ -445,6 +445,36 @@ buffer has no filename."
             (should (equal (plist-get (nth 1 headings) :title) "Heading Two"))))
       (delete-file temp-file))))
 
+(ert-deftest vulpea-ui-test-parse-headings-cleans-org-markup ()
+  "Test that heading titles are stripped of org markup.
+Regression test for issue #20: outline headings were shown with
+raw org markup such as links and emphasis."
+  (let* ((temp-file (make-temp-file "vulpea-ui-test" nil ".org"))
+         (note (make-vulpea-note
+                :id "test-markup"
+                :path temp-file
+                :level 0
+                :pos 1
+                :title "Test with markup"
+                :primary-title "Test with markup"
+                :aliases nil
+                :tags nil
+                :links nil
+                :properties nil
+                :meta nil)))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert "* See [[id:abc123][Other Note]]\n"
+                    "Some content\n"
+                    "* Visit [[https://example.com][Example]] now\n"
+                    "More content\n"))
+          (let ((headings (vulpea-ui--parse-headings note)))
+            (should (= (length headings) 2))
+            (should (equal (plist-get (nth 0 headings) :title) "See Other Note"))
+            (should (equal (plist-get (nth 1 headings) :title) "Visit Example now"))))
+      (delete-file temp-file))))
+
 
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
