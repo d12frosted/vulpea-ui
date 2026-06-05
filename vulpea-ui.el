@@ -797,7 +797,8 @@ Returns a list of plists with :title, :level, and :pos."
           (org-element-map (org-element-parse-buffer 'headline) 'headline
             (lambda (hl)
               (let ((level (org-element-property :level hl))
-                    (title (org-element-property :raw-value hl))
+                    (title (vulpea-ui--clean-org-links
+                            (org-element-property :raw-value hl)))
                     (pos (org-element-property :begin hl)))
                 (when (and (not (vulpea-ui--heading-archived-p hl archive-tag))
                            (or (null max-depth) (<= level max-depth)))
