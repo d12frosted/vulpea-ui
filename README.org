@@ -20,7 +20,7 @@ Sidebar infrastructure and widget framework for [[https://github.com/d12frosted/
 
 - Per-frame sidebar with configurable position and size
 - Widget system built on [[https://github.com/d12frosted/vui.el][vui]] components
-- Default widgets: outline, backlinks, forward links, stats
+- Default widgets: outline, backlinks, unlinked mentions, forward links, stats
 - Easy API for creating custom widgets
 - Auto-hide when switching to non-vulpea buffers
 
@@ -29,8 +29,9 @@ Sidebar infrastructure and widget framework for [[https://github.com/d12frosted/
 ** Dependencies
 
 - Emacs 29.1+
-- [[https://github.com/d12frosted/vulpea][vulpea]] (v2)
-- [[https://github.com/d12frosted/vui.el][vui]]
+- [[https://github.com/d12frosted/vulpea][vulpea]] 2.4.0+
+- [[https://github.com/d12frosted/vui.el][vui]] 1.0+
+- [[https://github.com/BurntSushi/ripgrep][ripgrep]] - optional, used by the [[*Unlinked mentions widget][unlinked mentions widget]]
 
 ** Using package.el (MELPA)
 
@@ -205,6 +206,27 @@ Shows notes that link to the current note, grouped by file with:
   - =†= footnote
   - (no indicator) prose
 
+** Unlinked mentions widget
+
+Shows notes that mention the current note's title or one of its aliases
+as plain text, *without* an =id:= link pointing back - the notes you may
+want to link. Mentions are grouped by the mentioning note; click a
+context line to jump to it.
+
+Unlike the other widgets, this one loads *asynchronously*: scanning the
+whole collection for a note's title is expensive, so the search is
+delegated to [[https://github.com/BurntSushi/ripgrep][ripgrep]] via =vulpea-note-unlinked-mentions-async= and the
+widget shows a =Searching…= state until results arrive. Results are
+cached until you switch notes or refresh the sidebar (=g= /
+=vulpea-ui-sidebar-refresh=); an idle soft-refresh reuses the cache.
+
+If ripgrep is not on =exec-path= the widget reports it instead of
+failing. To disable the widget entirely:
+
+#+begin_src emacs-lisp
+(vulpea-ui-unregister-widget 'unlinked-mentions)
+#+end_src
+
 ** Links widget
 
 #+begin_html
@@ -223,12 +245,13 @@ Widgets are registered with =vulpea-ui-register-widget=, which allows filtering 
 
 vulpea-ui registers these widgets by default:
 
-| Widget      | Order | Component                   |
-|-------------+-------+-----------------------------|
-| =stats=     |   100 | =vulpea-ui-widget-stats=    |
-| =outline=   |   200 | =vulpea-ui-widget-outline=  |
-| =backlinks= |   300 | =vulpea-ui-widget-backlinks= |
-| =links=     |   400 | =vulpea-ui-widget-links=    |
+| Widget              | Order | Component                            |
+|---------------------+-------+--------------------------------------|
+| =stats=             |   100 | =vulpea-ui-widget-stats=             |
+| =outline=           |   200 | =vulpea-ui-widget-outline=           |
+| =backlinks=         |   300 | =vulpea-ui-widget-backlinks=         |
+| =unlinked-mentions= |   350 | =vulpea-ui-widget-unlinked-mentions= |
+| =links=             |   400 | =vulpea-ui-widget-links=             |
 
 ** Registering widgets
 
