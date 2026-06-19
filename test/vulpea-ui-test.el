@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'vulpea-ui)
 
 ;;; Test helpers
@@ -602,6 +603,109 @@ Mirrors the example from the README."
                     (vulpea-ui--get-widgets-for-note
                      (vulpea-ui-test--make-mock-note
                       nil nil '(("SHOW_W" . "t")))))))))
+
+
+;;; Unlinked mentions grouping tests
+
+(ert-deftest vulpea-ui-test-group-mentions-empty ()
+  "Grouping an empty mention list yields nil."
+  (should (null (vulpea-ui--group-mentions nil))))
+
+(ert-deftest vulpea-ui-test-group-mentions-by-note ()
+  "Mentions are grouped by mentioning note, preserving order.
+Groups appear in first-encounter order; mentions keep their order
+within a group and carry :line and :context."
+  (let* ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+         (b (vulpea-ui-test--make-mock-note "id-b" "Note B"))
+         (mentions (list
+                    (list :note a :path "/a.org" :line 3 :context "first a")
+                    (list :note b :path "/b.org" :line 7 :context "only b")
+                    (list :note a :path "/a.org" :line 9 :context "second a")))
+         (groups (vulpea-ui--group-mentions mentions)))
+    ;; Two groups, in first-seen order: A then B
+    (should (= (length groups) 2))
+    (should (equal (vulpea-note-id (plist-get (nth 0 groups) :note)) "id-a"))
+    (should (equal (plist-get (nth 0 groups) :path) "/a.org"))
+    (should (equal (vulpea-note-id (plist-get (nth 1 groups) :note)) "id-b"))
+    ;; A keeps both mentions in original order
+    (let ((a-mentions (plist-get (nth 0 groups) :mentions)))
+      (should (= (length a-mentions) 2))
+      (should (= (plist-get (nth 0 a-mentions) :line) 3))
+      (should (equal (plist-get (nth 0 a-mentions) :context) "first a"))
+      (should (= (plist-get (nth 1 a-mentions) :line) 9))
+      (should (equal (plist-get (nth 1 a-mentions) :context) "second a")))
+    ;; B has its single mention
+    (let ((b-mentions (plist-get (nth 1 groups) :mentions)))
+      (should (= (length b-mentions) 1))
+      (should (= (plist-get (nth 0 b-mentions) :line) 7))
+      (should (equal (plist-get (nth 0 b-mentions) :context) "only b")))))
+
+(ert-deftest vulpea-ui-test-group-mentions-single-group ()
+  "Multiple mentions from one note collapse into a single group."
+  (let* ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+         (mentions (list
+                    (list :note a :path "/a.org" :line 1 :context "one")
+                    (list :note a :path "/a.org" :line 2 :context "two")))
+         (groups (vulpea-ui--group-mentions mentions)))
+    (should (= (length groups) 1))
+    (should (= (length (plist-get (nth 0 groups) :mentions)) 2))))
+
+
+;;; Unlinked mentions widget render tests
+
+(defmacro vulpea-ui-test--render-mentions (mentions-form &rest body)
+  "Render the unlinked-mentions widget and run BODY with OUTPUT bound.
+
+`vulpea-note-unlinked-mentions-async' is stubbed to resolve
+synchronously with MENTIONS-FORM, so the whole async pipeline runs
+deterministically with no ripgrep and no event loop.  OUTPUT is the
+rendered sidebar buffer text.  The widget registry is isolated to the
+unlinked-mentions widget for the duration of the render."
+  (declare (indent 1))
+  `(vulpea-ui-test--with-clean-registry
+     (vulpea-ui-register-widget 'unlinked-mentions
+                                :component 'vulpea-ui-widget-unlinked-mentions
+                                :order 350)
+     (let ((note (vulpea-ui-test--make-mock-note "tgt" "Target"))
+           (buf-name "*vulpea-ui-mentions-test*"))
+       (with-current-buffer (get-buffer-create buf-name)
+         (vulpea-ui-sidebar-mode))
+       (cl-letf (((symbol-function 'vulpea-note-unlinked-mentions-async)
+                  (lambda (_note resolve _reject)
+                    (funcall resolve ,mentions-form)
+                    nil)))
+         (unwind-protect
+             (progn
+               (vui-mount (vui-component 'vulpea-ui-sidebar-root :note note)
+                          buf-name)
+               (let ((output (with-current-buffer buf-name
+                               (buffer-substring-no-properties
+                                (point-min) (point-max)))))
+                 ,@body))
+           (when (get-buffer buf-name)
+             (kill-buffer buf-name)))))))
+
+(ert-deftest vulpea-ui-test-mentions-widget-ready ()
+  "Resolved mentions render grouped under each mentioning note with a count."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+        (b (vulpea-ui-test--make-mock-note "id-b" "Note B")))
+    (vulpea-ui-test--render-mentions
+        (list (list :note a :path "/a.org" :line 3 :context "mentions Target here")
+              (list :note a :path "/a.org" :line 9 :context "Target again")
+              (list :note b :path "/b.org" :line 5 :context "a Target reference"))
+      ;; Header shows the total number of mentions (not groups)
+      (should (string-match-p "Unlinked Mentions (3)" output))
+      ;; Both mentioning notes appear, with their context lines
+      (should (string-match-p "Note A" output))
+      (should (string-match-p "Note B" output))
+      (should (string-match-p "mentions Target here" output))
+      (should (string-match-p "Target again" output))
+      (should (string-match-p "a Target reference" output)))))
+
+(ert-deftest vulpea-ui-test-mentions-widget-empty ()
+  "No mentions renders the empty-state message."
+  (vulpea-ui-test--render-mentions nil
+    (should (string-match-p "No unlinked mentions" output))))
 
 
 (provide 'vulpea-ui-test)

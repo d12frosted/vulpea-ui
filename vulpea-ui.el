@@ -7,7 +7,7 @@
 ;; Maintainer: Boris Buliga <boris@d12frosted.io>
 ;; URL: https://github.com/d12frosted/vulpea-ui
 ;; Version: 1.1.0
-;; Package-Requires: ((emacs "29.1") (vulpea "2.0.0") (vui "0.1"))
+;; Package-Requires: ((emacs "29.1") (vulpea "2.4.0") (vui "1.0"))
 ;; Keywords: outlines hypermedia
 
 ;; This file is NOT part of GNU Emacs.
@@ -34,7 +34,8 @@
 ;; Features:
 ;; - Per-frame sidebar with configurable position and size
 ;; - Widget system built on vui components
-;; - Default widgets: outline, backlinks, forward links, stats
+;; - Default widgets: outline, backlinks, unlinked mentions, forward
+;;   links, stats
 ;; - Easy API for creating custom widgets
 ;;
 ;; Usage:
@@ -294,6 +295,11 @@ Widgets are filtered by predicate and sorted by order."
   "Face for context type indicators (§, •, >, etc.) in backlink previews."
   :group 'vulpea-ui)
 
+(defface vulpea-ui-mention-context-face
+  '((t :inherit shadow))
+  "Face for the context line of an unlinked mention."
+  :group 'vulpea-ui)
+
 
 ;;; Major mode
 
@@ -327,6 +333,13 @@ Used to prevent re-entry during render.")
 
 (defvar vulpea-ui--idle-timer nil
   "Timer for auto-refreshing sidebar on idle.")
+
+(defvar-local vulpea-ui--refresh-generation 0
+  "Counter bumped on each explicit sidebar refresh.
+Async widgets fold this into their `vui-use-async' cache key so that a
+manual or save-triggered refresh (`vulpea-ui-sidebar-refresh', which
+invalidates memos) re-runs them, while an idle soft-refresh
+\(`vui-update-props', which does not bump it) reuses the cached result.")
 
 (defun vulpea-ui--sidebar-buffer-name (&optional frame)
   "Return the sidebar buffer name for FRAME.
@@ -1380,6 +1393,118 @@ Returns a list of plists with :note and :count, sorted by title."
                   result)))))
 
 
+;;; Unlinked mentions widget
+
+(vui-defcomponent vulpea-ui-widget-unlinked-mentions ()
+  "Widget displaying notes that mention the current note without linking.
+
+An unlinked mention is a place where another note writes this note's
+title or one of its aliases as plain text, with no `id:' link pointing
+back.  The search is delegated to `vulpea-note-unlinked-mentions-async'
+\(ripgrep-backed) and runs asynchronously, so the widget shows a loading
+state and fills in when the results arrive.  Results are cached until the
+note changes or the sidebar is refreshed via `vulpea-ui-sidebar-refresh'.
+
+This is the sidebar's first asynchronous widget; it relies on ripgrep
+being available on `exec-path' and reports gracefully when it is not."
+  :render
+  (let ((note (use-vulpea-ui-note)))
+    (when note
+      (let* ((result (vui-use-async
+                         (list (vulpea-note-id note)
+                               vulpea-ui--refresh-generation)
+                       (apply-partially
+                        #'vulpea-note-unlinked-mentions-async note)))
+             (status (plist-get result :status)))
+        (vui-component 'vulpea-ui-widget
+          :title "Unlinked Mentions"
+          :count (when (eq status 'ready)
+                   (length (plist-get result :data)))
+          :children
+          (lambda ()
+            (pcase status
+              ('ready
+               (let ((groups (vulpea-ui--group-mentions
+                              (plist-get result :data))))
+                 (if groups
+                     (vui-vstack
+                      :spacing 1
+                      (seq-map #'vulpea-ui--render-mention-group groups))
+                   (vui-muted "No unlinked mentions"))))
+              ('error
+               (vui-muted (format "Unavailable: %s"
+                                  (plist-get result :error))))
+              (_ (vui-muted "Searching…")))))))))
+
+(defun vulpea-ui--group-mentions (mentions)
+  "Group MENTIONS by their mentioning note.
+
+MENTIONS is the list resolved by `vulpea-note-unlinked-mentions-async':
+each is a plist with :note (the mentioning `vulpea-note'), :path, :line,
+and :context.
+
+Returns a list of group plists, one per mentioning note in
+first-encounter order, each with :note, :path, and :mentions - a list of
+\(:line :context) plists kept in their original order."
+  (let ((meta (make-hash-table :test 'equal))
+        (lists (make-hash-table :test 'equal))
+        (order nil))
+    (dolist (m mentions)
+      (let* ((note (plist-get m :note))
+             (id (and note (vulpea-note-id note))))
+        (when id
+          (unless (gethash id meta)
+            (push id order)
+            (puthash id (list :note note :path (plist-get m :path)) meta))
+          (push (list :line (plist-get m :line)
+                      :context (plist-get m :context))
+                (gethash id lists)))))
+    (mapcar (lambda (id)
+              (let ((info (gethash id meta)))
+                (list :note (plist-get info :note)
+                      :path (plist-get info :path)
+                      :mentions (nreverse (gethash id lists)))))
+            (nreverse order))))
+
+(defun vulpea-ui--render-mention-group (group)
+  "Render a mention GROUP: the mentioning note link and its context lines."
+  (let ((note (plist-get group :note))
+        (path (plist-get group :path))
+        (mentions (plist-get group :mentions)))
+    (vui-vstack
+     :spacing 0
+     (if note
+         (vui-component 'vulpea-ui-note-link :note note)
+       (vui-muted (file-name-nondirectory path)))
+     (vui-vstack
+      :spacing 0
+      :indent 2
+      (seq-map (lambda (m) (vulpea-ui--render-mention m path)) mentions)))))
+
+(defun vulpea-ui--render-mention (mention path)
+  "Render a single MENTION from PATH as a clickable context line.
+Clicking jumps to the mention's line in the main window."
+  (let ((line (plist-get mention :line))
+        (context (plist-get mention :context)))
+    (vui-button context
+      :face 'vulpea-ui-mention-context-face
+      :no-decoration t
+      :on-click (lambda () (vulpea-ui--jump-to-file-line path line))
+      :help-echo nil)))
+
+(defun vulpea-ui--jump-to-file-line (path line)
+  "Jump to LINE in the file at PATH in the main window."
+  (when (and path line)
+    (let ((main-win (vulpea-ui--get-main-window)))
+      (when main-win
+        (select-window main-win)
+        (find-file path)
+        (goto-char (point-min))
+        (forward-line (1- line))
+        (org-fold-show-entry)
+        (recenter)))))
+
+
 ;;; Root component
 
 (vui-defcomponent vulpea-ui-sidebar-content ()
@@ -1499,7 +1624,8 @@ Returns a list of plists with :note and :count, sorted by title."
                (vui-instance-buffer instance)
                (buffer-live-p (vui-instance-buffer instance)))
       (with-current-buffer (vui-instance-buffer instance)
-        (setq vulpea-ui--current-note note))
+        (setq vulpea-ui--current-note note)
+        (cl-incf vulpea-ui--refresh-generation))
       (vui-update instance (list :note note)))))
 
 
@@ -1516,6 +1642,10 @@ Returns a list of plists with :note and :count, sorted by title."
 (vulpea-ui-register-widget 'backlinks
                            :component 'vulpea-ui-widget-backlinks
                            :order 300)
+
+(vulpea-ui-register-widget 'unlinked-mentions
+                           :component 'vulpea-ui-widget-unlinked-mentions
+                           :order 350)
 
 (vulpea-ui-register-widget 'links
                            :component 'vulpea-ui-widget-links
