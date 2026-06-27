@@ -128,6 +128,51 @@ leak into the saved snapshot."
       (should (null (alist-get 'window-width params))))))
 
 
+;;; Side slot guarantee tests
+
+(ert-deftest vulpea-ui-test-ensure-side-slot-raises-disabled ()
+  "A disabled side (zero slots) is raised to a single slot."
+  (should (equal (vulpea-ui--ensure-side-slot '(1 0 0 1) 'right)
+                 '(1 0 1 1)))
+  (should (equal (vulpea-ui--ensure-side-slot '(0 0 0 0) 'left)
+                 '(1 0 0 0)))
+  (should (equal (vulpea-ui--ensure-side-slot '(0 0 0 0) 'bottom)
+                 '(0 0 0 1))))
+
+(ert-deftest vulpea-ui-test-ensure-side-slot-keeps-positive ()
+  "A side that already allows slots is left untouched."
+  (should (equal (vulpea-ui--ensure-side-slot '(1 2 3 4) 'right)
+                 '(1 2 3 4))))
+
+(ert-deftest vulpea-ui-test-ensure-side-slot-keeps-unlimited ()
+  "A nil (unlimited) side is left untouched."
+  (should (equal (vulpea-ui--ensure-side-slot '(nil nil nil nil) 'right)
+                 '(nil nil nil nil))))
+
+(ert-deftest vulpea-ui-test-ensure-side-slot-does-not-mutate ()
+  "The original list is not modified in place."
+  (let ((slots (list 1 0 0 1)))
+    (vulpea-ui--ensure-side-slot slots 'right)
+    (should (equal slots '(1 0 0 1)))))
+
+(ert-deftest vulpea-ui-test-create-sidebar-window-when-side-disabled ()
+  "Sidebar window is created even when its side is disabled.
+With `window-sides-slots' forbidding side windows on the configured
+side, `vulpea-ui--create-sidebar-window' must still produce a real
+side window rather than returning nil (see vulpea-journal#21)."
+  (let ((window-sides-slots '(1 0 0 1))   ; right side disabled
+        (vulpea-ui-sidebar-position 'right))
+    (save-window-excursion
+      (let* ((buf (get-buffer-create " *vulpea-ui-test-sidebar*"))
+             (win (vulpea-ui--create-sidebar-window buf)))
+        (unwind-protect
+            (progn
+              (should (window-live-p win))
+              (should (eq (window-parameter win 'window-side) 'right)))
+          (when (window-live-p win) (ignore-errors (delete-window win)))
+          (when (buffer-live-p buf) (kill-buffer buf)))))))
+
+
 ;;; Number formatting tests
 
 (ert-deftest vulpea-ui-test-format-number-small ()

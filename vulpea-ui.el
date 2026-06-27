@@ -376,9 +376,35 @@ If FRAME is nil, use the selected frame."
                             (dedicated . t)
                             (no-other-window . nil))))))
 
+(defun vulpea-ui--ensure-side-slot (slots side)
+  "Return SLOTS with SIDE guaranteed at least one available slot.
+SLOTS is a value shaped like `window-sides-slots': a list of four
+elements limiting the number of side windows on the left, top, right
+and bottom of a frame.  A nil element means an unlimited number of
+slots and is left untouched.  A numeric element below one is raised to
+one so `display-buffer-in-side-window' will not refuse to create the
+sidebar window.  SIDE is one of `left', `top', `right' or `bottom'.
+The input SLOTS is not modified."
+  (let ((idx (pcase side
+               ('left 0) ('top 1) ('right 2) ('bottom 3)
+               (_ (error "Invalid side: %S" side))))
+        (slots (copy-sequence slots)))
+    (let ((cur (nth idx slots)))
+      (when (and (numberp cur) (< cur 1))
+        (setf (nth idx slots) 1)))
+    slots))
+
 (defun vulpea-ui--create-sidebar-window (buffer)
-  "Create a sidebar window for BUFFER using side window mechanics."
-  (display-buffer-in-side-window buffer (vulpea-ui--display-buffer-params)))
+  "Create a sidebar window for BUFFER using side window mechanics.
+The configured side is guaranteed at least one slot in a local copy of
+`window-sides-slots', so the sidebar is still displayed when the user
+has disabled side windows on that side.  Otherwise
+`display-buffer-in-side-window' would return nil and the sidebar
+buffer would clobber the selected window."
+  (let ((window-sides-slots
+         (vulpea-ui--ensure-side-slot window-sides-slots
+                                      vulpea-ui-sidebar-position)))
+    (display-buffer-in-side-window buffer (vulpea-ui--display-buffer-params))))
 
 (defun vulpea-ui--get-main-window (&optional frame)
   "Get the most recently used non-sidebar window in FRAME."
