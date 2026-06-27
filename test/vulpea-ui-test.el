@@ -173,6 +173,44 @@ side window rather than returning nil (see vulpea-journal#21)."
           (when (buffer-live-p buf) (kill-buffer buf)))))))
 
 
+;;; Sidebar window teardown tests
+
+(ert-deftest vulpea-ui-test-hide-sidebar-window-keeps-non-side-window ()
+  "Hiding leaves a non-side window alone instead of deleting it.
+When the sidebar buffer is displayed in a regular (here sole) window,
+`vulpea-ui--hide-sidebar-window' must be a no-op rather than signalling
+\"Attempt to delete ... sole ordinary window\" (see vulpea-journal#21)."
+  (save-window-excursion
+    (let ((buf (get-buffer-create (vulpea-ui--sidebar-buffer-name))))
+      (unwind-protect
+          (progn
+            (switch-to-buffer buf)
+            (let ((win (selected-window)))
+              ;; Precondition: sidebar buffer shown in a non-side window.
+              (should (eq (vulpea-ui--get-sidebar-window) win))
+              (should-not (window-parameter win 'window-side))
+              ;; Hiding must neither error nor delete the window.
+              (vulpea-ui--hide-sidebar-window)
+              (should (window-live-p win))
+              (should (eq (window-buffer win) buf))))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
+
+(ert-deftest vulpea-ui-test-hide-sidebar-window-deletes-side-window ()
+  "Hiding deletes an actual side window."
+  (save-window-excursion
+    (let* ((buf (get-buffer-create (vulpea-ui--sidebar-buffer-name)))
+           (win (display-buffer-in-side-window
+                 buf '((side . right) (slot . 0)))))
+      (unwind-protect
+          (progn
+            (should (window-live-p win))
+            (should (eq (window-parameter win 'window-side) 'right))
+            (vulpea-ui--hide-sidebar-window)
+            (should-not (window-live-p win)))
+        (when (window-live-p win) (ignore-errors (delete-window win)))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
+
+
 ;;; Number formatting tests
 
 (ert-deftest vulpea-ui-test-format-number-small ()
