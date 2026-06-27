@@ -1561,35 +1561,39 @@ Clicking jumps to the mention's line in the main window."
 ;;; Rendering
 
 (defun vulpea-ui--render-sidebar (note &optional frame)
-  "Render the sidebar with NOTE as context in FRAME."
+  "Render the sidebar with NOTE as context in FRAME.
+Does nothing when FRAME has no live sidebar window.  Mounting calls
+`switch-to-buffer', so rendering without a side window would take over
+whatever window is selected; bailing out keeps the sidebar from
+clobbering an unrelated buffer."
   (let* ((vulpea-ui--rendering t)  ; Prevent re-entry
          (frame (or frame (selected-frame)))
-         (buf-name (vulpea-ui--sidebar-buffer-name frame))
-         (buf (get-buffer-create buf-name))
-         (sidebar-win (vulpea-ui--get-sidebar-window frame))
-         (original-window (selected-window))
-         (existing-instance (gethash frame vulpea-ui--sidebar-instances)))
-    ;; Select sidebar window before mount (vui-mount calls switch-to-buffer)
-    (when sidebar-win
-      (select-window sidebar-win t))
-    (with-current-buffer buf
-      (if (and existing-instance
-               (vui-instance-buffer existing-instance)
-               (buffer-live-p (vui-instance-buffer existing-instance)))
-          ;; Reuse existing instance - update props, preserve memos
-          (vui-update-props existing-instance (list :note note))
-        ;; Mount fresh - first render or instance was lost
-        (let ((new-instance
-               (vui-mount
-                (vui-component 'vulpea-ui-sidebar-root :note note)
-                buf-name)))
-          (puthash frame new-instance vulpea-ui--sidebar-instances)))
-      ;; Set current note AFTER render (vui-mount kills local variables)
-      (setq vulpea-ui--current-note note)
-      (goto-char (point-min)))
-    ;; Restore original window
-    (when (window-live-p original-window)
-      (select-window original-window t))))
+         (sidebar-win (vulpea-ui--get-sidebar-window frame)))
+    (when (window-live-p sidebar-win)
+      (let* ((buf-name (vulpea-ui--sidebar-buffer-name frame))
+             (buf (get-buffer-create buf-name))
+             (original-window (selected-window))
+             (existing-instance (gethash frame vulpea-ui--sidebar-instances)))
+        ;; Select sidebar window before mount (vui-mount calls switch-to-buffer)
+        (select-window sidebar-win t)
+        (with-current-buffer buf
+          (if (and existing-instance
+                   (vui-instance-buffer existing-instance)
+                   (buffer-live-p (vui-instance-buffer existing-instance)))
+              ;; Reuse existing instance - update props, preserve memos
+              (vui-update-props existing-instance (list :note note))
+            ;; Mount fresh - first render or instance was lost
+            (let ((new-instance
+                   (vui-mount
+                    (vui-component 'vulpea-ui-sidebar-root :note note)
+                    buf-name)))
+              (puthash frame new-instance vulpea-ui--sidebar-instances)))
+          ;; Set current note AFTER render (vui-mount kills local variables)
+          (setq vulpea-ui--current-note note)
+          (goto-char (point-min)))
+        ;; Restore original window
+        (when (window-live-p original-window)
+          (select-window original-window t))))))
 
 
 ;;; Commands

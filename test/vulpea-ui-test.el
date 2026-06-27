@@ -211,6 +211,28 @@ When the sidebar buffer is displayed in a regular (here sole) window,
         (when (buffer-live-p buf) (kill-buffer buf))))))
 
 
+;;; Sidebar render tests
+
+(ert-deftest vulpea-ui-test-render-sidebar-without-window-is-noop ()
+  "Rendering without a live sidebar window leaves the selected window alone.
+`vui-mount' calls `switch-to-buffer', so rendering with no side window
+must not run and take over an unrelated window (see vulpea-journal#21)."
+  (save-window-excursion
+    (let ((main-buf (get-buffer-create " *vulpea-ui-test-main*")))
+      (unwind-protect
+          (progn
+            (switch-to-buffer main-buf)
+            ;; Precondition: no sidebar window exists for this frame.
+            (should-not (vulpea-ui--get-sidebar-window))
+            ;; Rendering must neither hijack the window nor create the buffer.
+            (vulpea-ui--render-sidebar nil)
+            (should (eq (window-buffer (selected-window)) main-buf))
+            (should-not (vulpea-ui--get-sidebar-buffer)))
+        (when (buffer-live-p main-buf) (kill-buffer main-buf))
+        (let ((sb (vulpea-ui--get-sidebar-buffer)))
+          (when (and sb (buffer-live-p sb)) (kill-buffer sb)))))))
+
+
 ;;; Number formatting tests
 
 (ert-deftest vulpea-ui-test-format-number-small ()
