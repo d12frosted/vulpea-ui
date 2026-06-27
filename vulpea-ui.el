@@ -487,9 +487,14 @@ Called from `window-buffer-change-functions'."
             (vulpea-ui--render-sidebar note frame))))))))
 
 (defun vulpea-ui--hide-sidebar-window (&optional frame)
-  "Hide the sidebar window in FRAME without killing the buffer."
+  "Hide the sidebar window in FRAME without killing the buffer.
+Only an actual side window is deleted.  When the sidebar buffer is
+displayed in a regular window (for example because it could not be
+shown in a side window), the window is left untouched rather than
+risking deletion of a main or sole window."
   (let ((win (vulpea-ui--get-sidebar-window frame)))
-    (when win
+    (when (and (window-live-p win)
+               (window-parameter win 'window-side))
       (delete-window win))))
 
 (defun vulpea-ui--show-sidebar-window (&optional frame)
@@ -1616,10 +1621,8 @@ Clicking jumps to the mention's line in the main window."
   "Close the vulpea-ui sidebar in the current frame."
   (interactive)
   (let* ((frame (selected-frame))
-         (win (vulpea-ui--get-sidebar-window frame))
          (buf (vulpea-ui--get-sidebar-buffer frame)))
-    (when win
-      (delete-window win))
+    (vulpea-ui--hide-sidebar-window frame)
     (when buf
       (kill-buffer buf))
     ;; Clean up state
