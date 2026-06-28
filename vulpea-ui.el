@@ -1609,7 +1609,9 @@ own file.
 Returns a list of group plists, one per candidate note in first-encounter
 order, each with :note and :mentions - a list of (:line :context) plists
 kept in their original order.  Mentions without a candidate note are
-skipped."
+skipped, and entries that share a note, line and context are
+de-duplicated (upstream emits one entry per matched term, so a note's
+title and alias hitting the same line would otherwise appear twice)."
   (let ((notes (make-hash-table :test 'equal))
         (lists (make-hash-table :test 'equal))
         (order nil))
@@ -1625,7 +1627,7 @@ skipped."
                 (gethash id lists)))))
     (mapcar (lambda (id)
               (list :note (gethash id notes)
-                    :mentions (nreverse (gethash id lists))))
+                    :mentions (delete-dups (nreverse (gethash id lists)))))
             (nreverse order))))
 
 (defun vulpea-ui--render-outgoing-group (group source-path)

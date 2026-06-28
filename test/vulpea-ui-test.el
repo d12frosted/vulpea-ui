@@ -433,6 +433,33 @@ must not run and take over an unrelated window (see vulpea-journal#21)."
     (should (= (length groups) 1))
     (should (eq (plist-get (car groups) :note) note))))
 
+(ert-deftest vulpea-ui-test-group-outgoing-mentions-dedups-same-line ()
+  "Two terms matching one note on the same line collapse to one context line.
+Upstream emits one entry per matched term, so a title and an alias both
+hitting the same line yield identical :line/:context pairs differing only
+in :matched - they must not render twice."
+  (let* ((note (vulpea-ui-test--make-mock-note "n1" "Note One"))
+         (groups (vulpea-ui--group-outgoing-mentions
+                  (list (list :note note :line 6 :context "Note One aka NO"
+                              :matched "Note One")
+                        (list :note note :line 6 :context "Note One aka NO"
+                              :matched "NO")))))
+    (should (= (length groups) 1))
+    (should (equal (plist-get (car groups) :mentions)
+                   (list (list :line 6 :context "Note One aka NO"))))))
+
+(ert-deftest vulpea-ui-test-group-outgoing-mentions-keeps-distinct-lines ()
+  "Distinct lines for the same note are kept, in original order."
+  (let* ((note (vulpea-ui-test--make-mock-note "n1" "Note One"))
+         (groups (vulpea-ui--group-outgoing-mentions
+                  (list (list :note note :line 3 :context "first")
+                        (list :note note :line 3 :context "first")
+                        (list :note note :line 8 :context "second")))))
+    (should (= (length groups) 1))
+    (should (equal (plist-get (car groups) :mentions)
+                   (list (list :line 3 :context "first")
+                         (list :line 8 :context "second"))))))
+
 
 ;;; Mode tests
 
