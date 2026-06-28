@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ** Added
 
 - Unlinked mentions widget showing notes that mention the current note's title or aliases as plain text without an =id:= link back. It is the sidebar's first asynchronous widget: the search is delegated to =vulpea-note-unlinked-mentions-async= (ripgrep) and rendered via =vui-use-async=, so it shows a loading state, fills in when results arrive, and caches them until the note changes or the sidebar is refreshed. Requires [[https://github.com/BurntSushi/ripgrep][ripgrep]] and vulpea 2.4.0+ ([[https://github.com/d12frosted/vulpea-ui/issues/13][#13]]).
+- Outgoing mentions widget, the counterpart to the unlinked mentions widget: it shows existing notes that the current note mentions as plain text *without* an =id:= link to them - the notes you may want to link out to. Suggestions are grouped by the note you could link to, and clicking a context line jumps to the mention in the current note. Like the unlinked mentions widget it is asynchronous: the search is delegated to =vulpea-buffer-unlinked-mentions-async= (ripgrep, scanning the note's live buffer so unsaved edits count) and rendered via =vui-use-async=, with a loading state and results cached until the note changes or the sidebar is refreshed. Requires [[https://github.com/BurntSushi/ripgrep][ripgrep]] and vulpea 2.4.0+ ([[https://github.com/d12frosted/vulpea-ui/issues/33][#33]]).
 
 ** Documentation
 

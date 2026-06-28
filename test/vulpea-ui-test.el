@@ -380,6 +380,60 @@ must not run and take over an unrelated window (see vulpea-journal#21)."
     (should (vulpea-ui--should-update-p note2))))
 
 
+;;; Outgoing mentions tests
+
+(ert-deftest vulpea-ui-test-group-outgoing-mentions-empty ()
+  "Grouping no outgoing mentions yields nil."
+  (should-not (vulpea-ui--group-outgoing-mentions nil)))
+
+(ert-deftest vulpea-ui-test-group-outgoing-mentions-single ()
+  "A single outgoing mention yields one group with one context line."
+  (let* ((note (vulpea-ui-test--make-mock-note "n1" "Note One"))
+         (groups (vulpea-ui--group-outgoing-mentions
+                  (list (list :note note :line 12 :context "see Note One"
+                              :matched "Note One")))))
+    (should (= (length groups) 1))
+    (let ((g (car groups)))
+      (should (eq (plist-get g :note) note))
+      (should (equal (plist-get g :mentions)
+                     (list (list :line 12 :context "see Note One")))))))
+
+(ert-deftest vulpea-ui-test-group-outgoing-mentions-same-note ()
+  "Multiple mentions of the same note are grouped, order preserved."
+  (let* ((note (vulpea-ui-test--make-mock-note "n1" "Note One"))
+         (groups (vulpea-ui--group-outgoing-mentions
+                  (list (list :note note :line 3 :context "first")
+                        (list :note note :line 9 :context "second")))))
+    (should (= (length groups) 1))
+    (should (equal (plist-get (car groups) :mentions)
+                   (list (list :line 3 :context "first")
+                         (list :line 9 :context "second"))))))
+
+(ert-deftest vulpea-ui-test-group-outgoing-mentions-first-encounter-order ()
+  "Groups follow the first-encounter order of candidate notes."
+  (let* ((a (vulpea-ui-test--make-mock-note "a" "Alpha"))
+         (b (vulpea-ui-test--make-mock-note "b" "Beta"))
+         (groups (vulpea-ui--group-outgoing-mentions
+                  (list (list :note b :line 1 :context "b1")
+                        (list :note a :line 2 :context "a1")
+                        (list :note b :line 3 :context "b2")))))
+    (should (equal (mapcar (lambda (g) (vulpea-note-id (plist-get g :note)))
+                           groups)
+                   '("b" "a")))
+    (should (equal (plist-get (nth 0 groups) :mentions)
+                   (list (list :line 1 :context "b1")
+                         (list :line 3 :context "b2"))))))
+
+(ert-deftest vulpea-ui-test-group-outgoing-mentions-skips-noteless ()
+  "Mentions without a candidate note are skipped."
+  (let* ((note (vulpea-ui-test--make-mock-note "n1" "Note One"))
+         (groups (vulpea-ui--group-outgoing-mentions
+                  (list (list :note nil :line 1 :context "orphan")
+                        (list :note note :line 2 :context "kept")))))
+    (should (= (length groups) 1))
+    (should (eq (plist-get (car groups) :note) note))))
+
+
 ;;; Mode tests
 
 (ert-deftest vulpea-ui-test-mode-keymap ()
