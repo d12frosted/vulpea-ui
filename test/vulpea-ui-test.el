@@ -492,6 +492,77 @@ in :matched - they must not render twice."
                    (list (list :note a :line 2 :context "y"))))))
 
 
+;;; Mention linking tests
+
+(ert-deftest vulpea-ui-test-note-link-terms ()
+  "Link terms are the title plus aliases, dropping empty strings."
+  (let ((note (make-vulpea-note :id "n" :title "Title"
+                                :aliases '("A1" "" "A2"))))
+    (should (equal (vulpea-ui--note-link-terms note) '("Title" "A1" "A2")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-single ()
+  "A bare occurrence becomes an id: link; returns 1."
+  (let ((note (make-vulpea-note :id "n1" :title "Note One")))
+    (with-temp-buffer
+      (insert "We had Note One today.\n")
+      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 1))
+      (should (equal (buffer-string)
+                     "We had [[id:n1][Note One]] today.\n")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-skips-linked ()
+  "An occurrence already inside a link is left alone; returns 0."
+  (let ((note (make-vulpea-note :id "n1" :title "Note One")))
+    (with-temp-buffer
+      (insert "See [[id:n1][Note One]] here.\n")
+      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 0))
+      (should (equal (buffer-string)
+                     "See [[id:n1][Note One]] here.\n")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-multiple ()
+  "Two bare occurrences on the line are both linked; returns 2."
+  (let ((note (make-vulpea-note :id "n1" :title "Cab")))
+    (with-temp-buffer
+      (insert "Cab and more Cab.\n")
+      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 2))
+      (should (equal (buffer-string)
+                     "[[id:n1][Cab]] and more [[id:n1][Cab]].\n")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-mixed ()
+  "A bare occurrence is linked while an already-linked one is preserved."
+  (let ((note (make-vulpea-note :id "n1" :title "Cab")))
+    (with-temp-buffer
+      (insert "[[id:n1][Cab]] and bare Cab.\n")
+      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 1))
+      (should (equal (buffer-string)
+                     "[[id:n1][Cab]] and bare [[id:n1][Cab]].\n")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-alias-and-case ()
+  "Matching is case-insensitive and works on aliases; casing is preserved."
+  (let ((note (make-vulpea-note :id "n1" :title "Cabernet"
+                                :aliases '("Cab Sauv"))))
+    (with-temp-buffer
+      (insert "love cab sauv tonight\n")
+      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 1))
+      (should (equal (buffer-string)
+                     "love [[id:n1][cab sauv]] tonight\n")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-word-boundary ()
+  "A term does not match inside a larger word."
+  (let ((note (make-vulpea-note :id "n1" :title "NO")))
+    (with-temp-buffer
+      (insert "Head NORTH now.\n")
+      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 0))
+      (should (equal (buffer-string) "Head NORTH now.\n")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-stale ()
+  "When the term is gone (stale mention), nothing is linked; returns 0."
+  (let ((note (make-vulpea-note :id "n1" :title "Gone")))
+    (with-temp-buffer
+      (insert "nothing here\n")
+      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 0))
+      (should (equal (buffer-string) "nothing here\n")))))
+
+
 ;;; Mode tests
 
 (ert-deftest vulpea-ui-test-mode-keymap ()
