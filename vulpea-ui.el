@@ -1690,6 +1690,83 @@ jumps to."
                mentions)))))
 
 
+;;; Linking unlinked mentions
+
+(defconst vulpea-ui--org-link-re
+  "\\[\\[[^][]*\\]\\(?:\\[[^][]*\\]\\)?\\]"
+  "Regexp matching an Org bracket link: [[target]] or [[target][desc]].
+Targets or descriptions containing square brackets are not matched, which
+is fine for the =id:= links this widget creates and detects.")
+
+(defun vulpea-ui--note-link-terms (note)
+  "Return NOTE's title and aliases as a list of non-empty strings.
+These are the texts an outgoing mention may have matched, and the texts
+to search for when converting a mention into a link."
+  (seq-filter (lambda (s)
+                (and (stringp s) (not (string-empty-p (string-trim s)))))
+              (cons (vulpea-note-title note) (vulpea-note-aliases note))))
+
+(defun vulpea-ui--line-link-spans (bound)
+  "Return a list of (BEG . END) Org link spans between point and BOUND."
+  (let ((spans nil))
+    (save-excursion
+      (while (re-search-forward vulpea-ui--org-link-re bound t)
+        (push (cons (match-beginning 0) (match-end 0)) spans)))
+    (nreverse spans)))
+
+(defun vulpea-ui--pos-in-spans-p (pos spans)
+  "Return non-nil if POS falls within any (BEG . END) span in SPANS."
+  (seq-some (lambda (s) (and (>= pos (car s)) (< pos (cdr s)))) spans))
+
+(defun vulpea-ui--link-mention-line (buffer line note)
+  "Convert plain-text mentions of NOTE on LINE of BUFFER into id: links.
+
+Searches LINE for NOTE's title and aliases (word-bounded and
+case-insensitive, mirroring the ripgrep scan), skips any occurrence
+already inside an Org link, and replaces each remaining occurrence with an
+=id:= link to NOTE, preserving the matched text as the link description.
+
+Re-validates against the live buffer instead of trusting the cached
+position, so a stale or already-linked mention is simply a no-op.  Returns
+the number of occurrences linked."
+  (with-current-buffer buffer
+    (let ((terms (vulpea-ui--note-link-terms note)))
+      (if (null terms)
+          0
+        (save-excursion
+          (goto-char (point-min))
+          (forward-line (1- line))
+          (let ((line-beg (line-beginning-position))
+                (re (concat "\\b\\(?:"
+                            (mapconcat #'regexp-quote terms "\\|")
+                            "\\)\\b"))
+                (case-fold-search t)
+                (count 0)
+                (scanning t))
+            (while scanning
+              (goto-char line-beg)
+              (let ((spans (vulpea-ui--line-link-spans (line-end-position)))
+                    (hit nil))
+                (goto-char line-beg)
+                (while (and (not hit)
+                            (re-search-forward re (line-end-position) t))
+                  (let ((beg (match-beginning 0))
+                        (end (match-end 0)))
+                    (unless (vulpea-ui--pos-in-spans-p beg spans)
+                      (setq hit (cons beg end)))))
+                (if (not hit)
+                    (setq scanning nil)
+                  (let* ((beg (car hit))
+                         (end (cdr hit))
+                         (text (buffer-substring-no-properties beg end))
+                         (link (vulpea-utils-link-make-string note text)))
+                    (goto-char beg)
+                    (delete-region beg end)
+                    (insert link)
+                    (cl-incf count)))))
+            count))))))
+
+
 ;;; Root component
 
 (vui-defcomponent vulpea-ui-sidebar-content ()
