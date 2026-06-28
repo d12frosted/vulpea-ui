@@ -461,6 +461,37 @@ in :matched - they must not render twice."
                          (list :line 8 :context "second"))))))
 
 
+;;; Mention filter tests
+
+(ert-deftest vulpea-ui-test-filter-mentions-identity-keeps-all ()
+  "The default identity filter keeps every mention with a note."
+  (let* ((a (vulpea-ui-test--make-mock-note "a" "Alpha"))
+         (b (vulpea-ui-test--make-mock-note "b" "Beta"))
+         (mentions (list (list :note a :line 1 :context "x")
+                         (list :note b :line 2 :context "y"))))
+    (should (equal (vulpea-ui--filter-mentions mentions #'identity) mentions))))
+
+(ert-deftest vulpea-ui-test-filter-mentions-predicate ()
+  "A predicate drops mentions whose note it rejects."
+  (let* ((keep (vulpea-ui-test--make-mock-note "k" "Keep"))
+         (skip (vulpea-ui-test--make-mock-note "s" "Skip"))
+         (mentions (list (list :note keep :line 1 :context "x")
+                         (list :note skip :line 2 :context "y")))
+         (filtered (vulpea-ui--filter-mentions
+                    mentions
+                    (lambda (n) (not (equal (vulpea-note-title n) "Skip"))))))
+    (should (= (length filtered) 1))
+    (should (eq (plist-get (car filtered) :note) keep))))
+
+(ert-deftest vulpea-ui-test-filter-mentions-drops-noteless ()
+  "Mentions without a note are dropped even under identity."
+  (let* ((a (vulpea-ui-test--make-mock-note "a" "Alpha"))
+         (mentions (list (list :note nil :line 1 :context "x")
+                         (list :note a :line 2 :context "y"))))
+    (should (equal (vulpea-ui--filter-mentions mentions #'identity)
+                   (list (list :note a :line 2 :context "y"))))))
+
+
 ;;; Mode tests
 
 (ert-deftest vulpea-ui-test-mode-keymap ()
