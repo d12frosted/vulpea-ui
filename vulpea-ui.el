@@ -327,6 +327,11 @@ Widgets are filtered by predicate and sorted by order."
   "Face for the context line of an unlinked mention."
   :group 'vulpea-ui)
 
+(defface vulpea-ui-mention-action-face
+  '((t :inherit link :underline nil))
+  "Face for the link action buttons in the outgoing mentions widget."
+  :group 'vulpea-ui)
+
 
 ;;; Major mode
 
@@ -1672,21 +1677,46 @@ title and alias hitting the same line would otherwise appear twice)."
                     :mentions (delete-dups (nreverse (gethash id lists)))))
             (nreverse order))))
 
+(defun vulpea-ui--render-outgoing-mention (mention note source-path)
+  "Render one outgoing MENTION line with a link action.
+The context jumps to the occurrence in SOURCE-PATH; the trailing button
+converts it into an =id:= link to NOTE."
+  (let ((line (plist-get mention :line))
+        (context (plist-get mention :context)))
+    (vui-hstack
+     (vui-button context
+       :face 'vulpea-ui-mention-context-face
+       :no-decoration t
+       :on-click (lambda () (vulpea-ui--jump-to-file-line source-path line))
+       :help-echo nil)
+     (vui-button "link"
+       :face 'vulpea-ui-mention-action-face
+       :on-click (lambda ()
+                   (vulpea-ui--link-mention-action source-path line note))
+       :help-echo "Insert an id: link at this mention"))))
+
 (defun vulpea-ui--render-outgoing-group (group source-path)
   "Render an outgoing mention GROUP.
 
-The candidate note is shown as a link to visit it; SOURCE-PATH is the
-current note's file, where each context line lives and where clicking it
-jumps to."
+The candidate note is shown as a link to visit it, with a \"link all\"
+action that links every occurrence below.  SOURCE-PATH is the current
+note's file, where each context line lives and where clicking it jumps to."
   (let ((note (plist-get group :note))
         (mentions (plist-get group :mentions)))
     (vui-vstack
      :spacing 0
-     (vui-component 'vulpea-ui-note-link :note note)
+     (vui-hstack
+      (vui-component 'vulpea-ui-note-link :note note)
+      (vui-button "link all"
+        :face 'vulpea-ui-mention-action-face
+        :on-click (lambda ()
+                    (vulpea-ui--link-group-action source-path note mentions))
+        :help-echo "Insert id: links for every occurrence below"))
      (vui-vstack
       :spacing 0
       :indent 2
-      (seq-map (lambda (m) (vulpea-ui--render-mention m source-path))
+      (seq-map (lambda (m)
+                 (vulpea-ui--render-outgoing-mention m note source-path))
                mentions)))))
 
 
@@ -1765,6 +1795,38 @@ the number of occurrences linked."
                     (insert link)
                     (cl-incf count)))))
             count))))))
+
+(defun vulpea-ui--link-mention-action (path line note)
+  "Link occurrences of NOTE on LINE of the file at PATH, then refresh.
+Reports the outcome in the echo area; a no-op (e.g. the buffer changed
+since the scan) suggests refreshing.  Intended as a mention button action."
+  (let ((buffer (and path (find-buffer-visiting path))))
+    (if (not (buffer-live-p buffer))
+        (message "vulpea-ui: note buffer is not open")
+      (let ((n (vulpea-ui--link-mention-line buffer line note)))
+        (if (zerop n)
+            (message "vulpea-ui: nothing to link here; press g to refresh")
+          (vulpea-ui-sidebar-refresh)
+          (message "vulpea-ui: linked %d occurrence%s of %s"
+                   n (if (= n 1) "" "s") (vulpea-note-title note)))))))
+
+(defun vulpea-ui--link-group-action (path note mentions)
+  "Link every MENTIONS line for NOTE in the file at PATH, then refresh.
+Sums the occurrences linked across all lines and reports the total.
+Intended as the \"link all\" button action for an outgoing-mention group."
+  (let ((buffer (and path (find-buffer-visiting path))))
+    (if (not (buffer-live-p buffer))
+        (message "vulpea-ui: note buffer is not open")
+      (let ((total 0))
+        (dolist (m mentions)
+          (cl-incf total (vulpea-ui--link-mention-line
+                          buffer (plist-get m :line) note)))
+        (if (zerop total)
+            (message "vulpea-ui: nothing to link for %s; press g to refresh"
+                     (vulpea-note-title note))
+          (vulpea-ui-sidebar-refresh)
+          (message "vulpea-ui: linked %d occurrence%s of %s"
+                   total (if (= total 1) "" "s") (vulpea-note-title note)))))))
 
 
 ;;; Root component
