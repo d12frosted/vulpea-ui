@@ -257,7 +257,12 @@ instead of notes that mention this one without linking back, it shows
 existing notes that *this* note mentions as plain text *without* an =id:=
 link to them - the notes you may want to link out to. Suggestions are
 grouped by the note you could link to; click a context line to jump to
-the mention in the current note. Which notes count as candidates is
+the mention in the current note, or use the =link= button beside it to
+convert that occurrence into an =id:= link in place. Each group also has a
+=link all= button that links every occurrence for that note at once.
+Linking re-checks the live buffer before editing, so a suggestion that has
+gone stale (the surrounding text changed, or you already linked it) is
+simply skipped; press =g= to refresh. Which notes count as candidates is
 controlled by =vulpea-mentions-note-filter= (file-level notes by
 default).
 
@@ -425,6 +430,8 @@ Useful for rendering previews in custom widgets.
 | =vulpea-ui-backlink-meta-key-face=   | Meta block keys         |
 | =vulpea-ui-backlink-meta-value-face= | Meta block values       |
 | =vulpea-ui-backlink-context-face=    | Context type indicators |
+| =vulpea-ui-mention-context-face=     | Mention context line    |
+| =vulpea-ui-mention-action-face=      | Link action buttons     |
 
 * Related Projects
 
