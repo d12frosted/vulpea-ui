@@ -1544,6 +1544,108 @@ Clicking jumps to the mention's line in the main window."
         (recenter)))))
 
 
+;;; Outgoing mentions widget
+
+(vui-defcomponent vulpea-ui-widget-outgoing-mentions ()
+  "Widget displaying notes the current note mentions but does not link to.
+
+An outgoing unlinked mention is a place where this note writes another
+note's title or alias as plain text, with no `id:' link to it - a note
+you may want to link out to.  The search is delegated to
+`vulpea-buffer-unlinked-mentions-async' (ripgrep-backed) and runs over
+the note's live buffer, so unsaved edits are included.  Like the unlinked
+mentions widget it loads asynchronously, showing a loading state until
+results arrive, and caches them until the note changes or the sidebar is
+refreshed via `vulpea-ui-sidebar-refresh'.
+
+It relies on ripgrep being available on `exec-path' and reports
+gracefully when it is not, or when the note's file is not visited in a
+buffer."
+  :render
+  (let ((note (use-vulpea-ui-note)))
+    (when note
+      (let* ((path (vulpea-note-path note))
+             (buffer (and path (find-buffer-visiting path)))
+             (result (vui-use-async
+                         (list (vulpea-note-id note)
+                               vulpea-ui--refresh-generation)
+                       (lambda (resolve reject)
+                         (if (buffer-live-p buffer)
+                             (with-current-buffer buffer
+                               (vulpea-buffer-unlinked-mentions-async
+                                resolve reject))
+                           (funcall reject "note buffer is not open")))))
+             (status (plist-get result :status)))
+        (vui-component 'vulpea-ui-widget
+          :title "Outgoing Mentions"
+          :count (when (eq status 'ready)
+                   (length (plist-get result :data)))
+          :children
+          (lambda ()
+            (pcase status
+              ('ready
+               (let ((groups (vulpea-ui--group-outgoing-mentions
+                              (plist-get result :data))))
+                 (if groups
+                     (vui-vstack
+                      :spacing 1
+                      (seq-map (lambda (group)
+                                 (vulpea-ui--render-outgoing-group group path))
+                               groups))
+                   (vui-muted "No outgoing mentions"))))
+              ('error
+               (vui-muted (format "Unavailable: %s"
+                                  (plist-get result :error))))
+              (_ (vui-muted "Searching…")))))))))
+
+(defun vulpea-ui--group-outgoing-mentions (mentions)
+  "Group outgoing MENTIONS by the candidate note they could link to.
+
+MENTIONS is the list resolved by `vulpea-buffer-unlinked-mentions-async':
+each is a plist with :note (a candidate `vulpea-note' to link to), :line,
+:context, and :matched.  All matches are positions in the current note's
+own file.
+
+Returns a list of group plists, one per candidate note in first-encounter
+order, each with :note and :mentions - a list of (:line :context) plists
+kept in their original order.  Mentions without a candidate note are
+skipped."
+  (let ((notes (make-hash-table :test 'equal))
+        (lists (make-hash-table :test 'equal))
+        (order nil))
+    (dolist (m mentions)
+      (let* ((note (plist-get m :note))
+             (id (and note (vulpea-note-id note))))
+        (when id
+          (unless (gethash id notes)
+            (push id order)
+            (puthash id note notes))
+          (push (list :line (plist-get m :line)
+                      :context (plist-get m :context))
+                (gethash id lists)))))
+    (mapcar (lambda (id)
+              (list :note (gethash id notes)
+                    :mentions (nreverse (gethash id lists))))
+            (nreverse order))))
+
+(defun vulpea-ui--render-outgoing-group (group source-path)
+  "Render an outgoing mention GROUP.
+
+The candidate note is shown as a link to visit it; SOURCE-PATH is the
+current note's file, where each context line lives and where clicking it
+jumps to."
+  (let ((note (plist-get group :note))
+        (mentions (plist-get group :mentions)))
+    (vui-vstack
+     :spacing 0
+     (vui-component 'vulpea-ui-note-link :note note)
+     (vui-vstack
+      :spacing 0
+      :indent 2
+      (seq-map (lambda (m) (vulpea-ui--render-mention m source-path))
+               mentions)))))
+
+
 ;;; Root component
 
 (vui-defcomponent vulpea-ui-sidebar-content ()
@@ -1691,6 +1793,10 @@ clobbering an unrelated buffer."
 (vulpea-ui-register-widget 'links
                            :component 'vulpea-ui-widget-links
                            :order 400)
+
+(vulpea-ui-register-widget 'outgoing-mentions
+                           :component 'vulpea-ui-widget-outgoing-mentions
+                           :order 450)
 
 (provide 'vulpea-ui)
 ;;; vulpea-ui.el ends here
