@@ -152,6 +152,33 @@ with :file-note, :path, and :mentions)."
           (function :tag "Custom comparator"))
   :group 'vulpea-ui)
 
+(defcustom vulpea-ui-unlinked-mentions-note-filter #'identity
+  "Function to filter which notes appear in the unlinked mentions widget.
+Called with the mentioning vulpea-note and should return non-nil to
+include it.  This is a presentation-only filter; to exclude notes from
+the search itself (collection-wide) use `vulpea-mentions-note-filter'.
+A common recipe is to hide notes carrying a particular tag, e.g.
+
+  (setq vulpea-ui-unlinked-mentions-note-filter
+        (lambda (note)
+          (not (member \"index\" (vulpea-note-tags note)))))"
+  :type 'function
+  :group 'vulpea-ui)
+
+(defcustom vulpea-ui-outgoing-mentions-note-filter #'identity
+  "Function to filter which notes appear in the outgoing mentions widget.
+Called with the candidate vulpea-note (the note you could link to) and
+should return non-nil to include it.  This is a presentation-only filter;
+to exclude notes from the search itself (collection-wide) use
+`vulpea-mentions-note-filter'.  A common recipe is to hide notes carrying
+a particular tag, e.g.
+
+  (setq vulpea-ui-outgoing-mentions-note-filter
+        (lambda (note)
+          (not (member \"index\" (vulpea-note-tags note)))))"
+  :type 'function
+  :group 'vulpea-ui)
+
 (defcustom vulpea-ui-fast-parse nil
   "Use fast `org-mode' initialization for parsing.
 When non-nil, skip mode hooks when parsing org files for headings
@@ -1454,17 +1481,20 @@ being available on `exec-path' and reports gracefully when it is not."
                                vulpea-ui--refresh-generation)
                        (apply-partially
                         #'vulpea-note-unlinked-mentions-async note)))
-             (status (plist-get result :status)))
+             (status (plist-get result :status))
+             (data (when (eq status 'ready)
+                     (vulpea-ui--filter-mentions
+                      (plist-get result :data)
+                      vulpea-ui-unlinked-mentions-note-filter))))
         (vui-component 'vulpea-ui-widget
           :title "Unlinked Mentions"
           :count (when (eq status 'ready)
-                   (length (plist-get result :data)))
+                   (length data))
           :children
           (lambda ()
             (pcase status
               ('ready
-               (let ((groups (vulpea-ui--group-mentions
-                              (plist-get result :data))))
+               (let ((groups (vulpea-ui--group-mentions data)))
                  (if groups
                      (vui-vstack
                       :spacing 1
@@ -1474,6 +1504,15 @@ being available on `exec-path' and reports gracefully when it is not."
                (vui-muted (format "Unavailable: %s"
                                   (plist-get result :error))))
               (_ (vui-muted "Searching…")))))))))
+
+(defun vulpea-ui--filter-mentions (mentions filter)
+  "Return MENTIONS whose :note satisfies FILTER.
+FILTER is a predicate on a `vulpea-note'.  Mentions with a nil :note are
+dropped, since they cannot be grouped or acted on."
+  (seq-filter (lambda (m)
+                (let ((note (plist-get m :note)))
+                  (and note (funcall filter note))))
+              mentions))
 
 (defun vulpea-ui--group-mentions (mentions)
   "Group MENTIONS by their mentioning note.
@@ -1575,17 +1614,20 @@ buffer."
                                (vulpea-buffer-unlinked-mentions-async
                                 resolve reject))
                            (funcall reject "note buffer is not open")))))
-             (status (plist-get result :status)))
+             (status (plist-get result :status))
+             (data (when (eq status 'ready)
+                     (vulpea-ui--filter-mentions
+                      (plist-get result :data)
+                      vulpea-ui-outgoing-mentions-note-filter))))
         (vui-component 'vulpea-ui-widget
           :title "Outgoing Mentions"
           :count (when (eq status 'ready)
-                   (length (plist-get result :data)))
+                   (length data))
           :children
           (lambda ()
             (pcase status
               ('ready
-               (let ((groups (vulpea-ui--group-outgoing-mentions
-                              (plist-get result :data))))
+               (let ((groups (vulpea-ui--group-outgoing-mentions data)))
                  (if groups
                      (vui-vstack
                       :spacing 1

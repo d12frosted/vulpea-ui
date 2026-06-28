@@ -227,6 +227,19 @@ failing. To disable the widget entirely:
 (vulpea-ui-unregister-widget 'unlinked-mentions)
 #+end_src
 
+To hide specific notes from the results without changing the search, set
+=vulpea-ui-unlinked-mentions-note-filter= to a predicate on the
+mentioning note, e.g. to drop notes carrying an =index= tag:
+
+#+begin_src emacs-lisp
+(setq vulpea-ui-unlinked-mentions-note-filter
+      (lambda (note)
+        (not (member "index" (vulpea-note-tags note)))))
+#+end_src
+
+To instead exclude notes from the search itself (collection-wide,
+affecting both mention widgets), customise =vulpea-mentions-note-filter=.
+
 ** Links widget
 
 #+begin_html
@@ -259,6 +272,16 @@ failing. To disable the widget entirely:
 
 #+begin_src emacs-lisp
 (vulpea-ui-unregister-widget 'outgoing-mentions)
+#+end_src
+
+To hide specific candidate notes from the results without changing the
+search, set =vulpea-ui-outgoing-mentions-note-filter= to a predicate on
+the candidate note, e.g. to drop notes carrying an =index= tag:
+
+#+begin_src emacs-lisp
+(setq vulpea-ui-outgoing-mentions-note-filter
+      (lambda (note)
+        (not (member "index" (vulpea-note-tags note)))))
 #+end_src
 
 * Widget Registration
