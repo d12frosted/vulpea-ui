@@ -20,7 +20,7 @@ Sidebar infrastructure and widget framework for [[https://github.com/d12frosted/
 
 - Per-frame sidebar with configurable position and size
 - Widget system built on [[https://github.com/d12frosted/vui.el][vui]] components
-- Default widgets: outline, backlinks, unlinked mentions, forward links, outgoing mentions, stats
+- Default widgets: outline, backlinks, unlinked mentions, forward links, outgoing mentions, stats, schema health
 - Easy API for creating custom widgets
 - Auto-hide when switching to non-vulpea buffers
 
@@ -89,6 +89,26 @@ To automatically open the sidebar when entering org-mode buffers:
 ;; Maximum heading depth (nil = unlimited)
 (setq vulpea-ui-outline-max-depth 3)
 #+end_src
+
+** Schema health widget
+
+Flags how the current note measures up to the vulpea schema(s) that apply
+to it: nothing unless a schema applies, a green =healthy= line when the
+note conforms, or the list of violations otherwise. Click a field to
+jump to it in the note; quick-fix editing actions are tracked separately.
+Needs a vulpea with the schema validation engine.
+
+#+begin_src emacs-lisp
+;; Glyphs - portable text by default; swap in nerd-font / all-the-icons
+;; glyphs if you prefer
+(setq vulpea-ui-schema-health-ok-glyph "✓")
+(setq vulpea-ui-schema-health-issue-glyph "✗")
+(setq vulpea-ui-schema-health-bullet "●")
+#+end_src
+
+The faces =vulpea-ui-schema-health-ok-face= / =-error-face= /
+=-warning-face= / =-field-face= / =-message-face= inherit =success= /
+=error= / =warning= / =bold= / =shadow=, so they follow your theme.
 
 ** Backlinks widget
 
@@ -175,6 +195,20 @@ For quick navigation to any widget, consider [[https://github.com/d12frosted/ace
 #+end_html
 
 Shows character count, word count, and link count for the current note.
+
+** Schema health widget
+
+#+begin_html
+<p align="center">
+  <img width="50%" src="./images/vulpea-ui-widget-schema-health.png" alt="Screenshot">
+</p>
+#+end_html
+
+Flags how the current note measures up to the vulpea schema(s) that apply
+to it: a green =healthy= line when it conforms, or its violations
+otherwise - a severity-coloured bullet (red for structural problems,
+amber for value problems), the field, and a terse reason. Click a field
+to jump to it in the note. Shown only when a schema applies.
 
 ** Outline widget
 

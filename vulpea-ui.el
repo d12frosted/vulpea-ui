@@ -2003,11 +2003,234 @@ clobbering an unrelated buffer."
       (vui-update instance (list :note note)))))
 
 
+;;; Schema health widget
+
+(defcustom vulpea-ui-schema-health-ok-glyph "✓"
+  "Glyph shown when the current note conforms to its schema(s).
+A short string; the default is portable across fonts and terminals.
+Set it to a nerd-font or all-the-icons glyph if you prefer."
+  :type 'string
+  :group 'vulpea-ui)
+
+(defcustom vulpea-ui-schema-health-issue-glyph "✗"
+  "Glyph shown in the summary line when the note violates its schema(s)."
+  :type 'string
+  :group 'vulpea-ui)
+
+(defcustom vulpea-ui-schema-health-bullet "●"
+  "Bullet shown before each individual schema violation."
+  :type 'string
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-schema-health-ok-face
+  '((t :inherit success))
+  "Face for the schema widget's healthy status line."
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-schema-health-error-face
+  '((t :inherit error))
+  "Face for structural schema violations (missing, wrong type, bad ref)."
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-schema-health-warning-face
+  '((t :inherit warning))
+  "Face for value schema violations (disallowed, failed check, bad target)."
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-schema-health-field-face
+  '((t :inherit bold))
+  "Face for the field name of a schema violation."
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-schema-health-message-face
+  '((t :inherit shadow))
+  "Face for the reason text of a schema violation."
+  :group 'vulpea-ui)
+
+(defun vulpea-ui--schema-health (note)
+  "Return schema health for NOTE, or nil when no schema is applicable.
+The result is a plist with :schemas (the applicable schema names) and
+:violations (a list of `vulpea-violation' across them).  Returns nil
+when NOTE matches no registered schema, so the widget hides entirely."
+  (when note
+    (when-let* ((schemas (vulpea-schema-applicable note)))
+      (list :schemas schemas
+            :violations (vulpea-schema-note-violations note)))))
+
+(defun vulpea-ui--schema-violation-severity (type)
+  "Return `error' or `warning' for a violation of TYPE.
+A missing field, a wrong type or a broken reference is structural and
+returns `error'; a value problem returns `warning'."
+  (if (memq type '(missing-required wrong-type invalid-reference))
+      'error
+    'warning))
+
+(defun vulpea-ui--schema-type-noun (type)
+  "Return a human phrase naming the expected value TYPE."
+  (pcase type
+    ('number "a number")
+    ('symbol "a symbol")
+    ('note "a note")
+    ('link "a link")
+    (_ "a string")))
+
+(defun vulpea-ui--schema-violation-reason (violation note)
+  "Return a terse, field-free reason for VIOLATION on NOTE.
+Resolves the violated field's spec to phrase the reason precisely - the
+allowed values for a disallowed value, the expected type for a wrong
+type - otherwise falls back to the violation's own message."
+  (let* ((schema (ignore-errors
+                   (vulpea-schema-get (vulpea-violation-schema violation))))
+         (field (and schema
+                     (cl-find (vulpea-violation-field violation)
+                              (vulpea-schema-fields schema)
+                              :key (lambda (f) (plist-get f :key))
+                              :test #'equal))))
+    (pcase (vulpea-violation-type violation)
+      ('missing-required "required")
+      ('wrong-type (format "expected %s"
+                           (vulpea-ui--schema-type-noun (plist-get field :type))))
+      ('invalid-reference "missing note")
+      ('invalid-target "wrong target tags")
+      ('disallowed-value
+       (let ((allowed (let ((one-of (plist-get field :one-of)))
+                        (if (functionp one-of) (funcall one-of note) one-of))))
+         (if allowed
+             (format "not one of %s"
+                     (mapconcat (lambda (x) (format "%s" x)) allowed "/"))
+           (format "invalid value %s" (vulpea-violation-value violation)))))
+      (_ (or (vulpea-violation-message violation) "invalid")))))
+
+(defun vulpea-ui--schema-note-end (note)
+  "Return the end of NOTE's scope in the current buffer.
+Assumes the current buffer is NOTE's file."
+  (save-excursion
+    (goto-char (vulpea-note-pos note))
+    (if (> (vulpea-note-level note) 0)
+        (progn (org-end-of-subtree t t) (point))
+      (if (re-search-forward "^\\*+ " nil t)
+          (line-beginning-position)
+        (point-max)))))
+
+(defun vulpea-ui--schema-meta-position (note)
+  "Return where NOTE's metadata lives, or where it would be inserted.
+With existing metadata, the first metadata line; otherwise the point
+after NOTE's heading, property drawer and keywords, before its body.
+Returns NOTE's own position when its file is not visited."
+  (let* ((path (vulpea-note-path note))
+         (buf (and path (find-buffer-visiting path))))
+    (if (not buf)
+        (vulpea-note-pos note)
+      (with-current-buffer buf
+        (save-excursion
+          (goto-char (vulpea-note-pos note))
+          (let ((end (vulpea-ui--schema-note-end note)))
+            (if (re-search-forward "^[ \t]*-[ \t]+[^\n]+?[ \t]+::" end t)
+                (line-beginning-position)
+              (goto-char (vulpea-note-pos note))
+              (when (> (vulpea-note-level note) 0)
+                (forward-line 1))
+              (when (looking-at-p "^[ \t]*:PROPERTIES:")
+                (when (re-search-forward "^[ \t]*:END:[ \t]*$" end t)
+                  (forward-line 1)))
+              (while (and (< (point) end) (looking-at-p "^[ \t]*#\\+"))
+                (forward-line 1))
+              (point))))))))
+
+(defun vulpea-ui--schema-violation-position (violation note)
+  "Return a position in NOTE's file to jump to for VIOLATION.
+A value violation goes to the offending field's line; a missing field
+\(which has no line yet) goes to NOTE's metadata block, or to where
+metadata would be inserted."
+  (let* ((path (vulpea-note-path note))
+         (buf (and path (find-buffer-visiting path)))
+         (field (vulpea-violation-field violation)))
+    (or
+     (when (and buf field
+                (not (eq (vulpea-violation-type violation) 'missing-required)))
+       (with-current-buffer buf
+         (save-excursion
+           (goto-char (vulpea-note-pos note))
+           (let ((end (vulpea-ui--schema-note-end note)))
+             (when (re-search-forward
+                    (format "^[ \t]*-[ \t]+%s[ \t]+::" (regexp-quote field))
+                    end t)
+               (line-beginning-position))))))
+     (vulpea-ui--schema-meta-position note))))
+
+(defun vulpea-ui--render-schema-violation (violation note)
+  "Render one row for VIOLATION on NOTE.
+The row is a severity bullet, the field name as a button that jumps to
+the offending field, and a terse reason."
+  (let ((face (if (eq (vulpea-ui--schema-violation-severity
+                       (vulpea-violation-type violation))
+                      'error)
+                  'vulpea-ui-schema-health-error-face
+                'vulpea-ui-schema-health-warning-face)))
+    (vui-hstack
+     (vui-text vulpea-ui-schema-health-bullet :face face)
+     (vui-button (or (vulpea-violation-field violation) "")
+       :face 'vulpea-ui-schema-health-field-face
+       :no-decoration t
+       :help-echo nil
+       :on-click (lambda ()
+                   (vulpea-ui--jump-to-position
+                    note
+                    (vulpea-ui--schema-violation-position violation note))))
+     (vui-text (vulpea-ui--schema-violation-reason violation note)
+       :face 'vulpea-ui-schema-health-message-face))))
+
+(vui-defcomponent vulpea-ui-widget-schema-health ()
+  "Widget flagging schema violations for the current note.
+Renders a healthy status when the note conforms, or the list of
+violations when it does not.  The widget hides entirely when no schema
+applies (see its :predicate at registration)."
+  :render
+  (let ((note (use-vulpea-ui-note)))
+    (when note
+      (let* ((note-buf (when (vulpea-note-path note)
+                         (find-buffer-visiting (vulpea-note-path note))))
+             (tick (when note-buf (buffer-modified-tick note-buf)))
+             (health (vui-use-memo (note tick)
+                       (vulpea-ui--schema-health note))))
+        (when health
+          (let* ((schemas (plist-get health :schemas))
+                 (violations (plist-get health :violations))
+                 (names (mapconcat #'symbol-name schemas ", ")))
+            (vui-component 'vulpea-ui-widget
+              :title "Schema"
+              :count (when violations (length violations))
+              :children
+              (lambda ()
+                (if violations
+                    (apply #'vui-vstack
+                           (vui-text (format "%s %s · %d issue%s"
+                                             vulpea-ui-schema-health-issue-glyph
+                                             names
+                                             (length violations)
+                                             (if (= (length violations) 1) "" "s"))
+                             :face 'vulpea-ui-schema-health-error-face)
+                           (seq-map (lambda (v)
+                                      (vulpea-ui--render-schema-violation v note))
+                                    violations))
+                  (vui-text (format "%s %s · healthy"
+                                    vulpea-ui-schema-health-ok-glyph names)
+                    :face 'vulpea-ui-schema-health-ok-face))))))))))
+
+
 ;;; Built-in widget registration
 
 (vulpea-ui-register-widget 'stats
                            :component 'vulpea-ui-widget-stats
                            :order 100)
+
+(vulpea-ui-register-widget 'schema-health
+                           :component 'vulpea-ui-widget-schema-health
+                           :predicate (lambda (note)
+                                        (and note
+                                             (fboundp 'vulpea-schema-note-violations)
+                                             (vulpea-schema-applicable note)))
+                           :order 150)
 
 (vulpea-ui-register-widget 'outline
                            :component 'vulpea-ui-widget-outline

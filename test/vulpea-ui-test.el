@@ -1173,5 +1173,135 @@ unlinked-mentions widget for the duration of the render."
     (should (string-match-p "No unlinked mentions" output))))
 
 
+;;; Schema health widget
+
+(ert-deftest vulpea-ui-test-schema-health-no-schema ()
+  "No applicable schema yields nil, so the widget hides."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq)))
+    (vulpea-schema-define 'wine
+      :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+      :fields '((:key "name" :required t)))
+    (should-not (vulpea-ui--schema-health
+                 (make-vulpea-note :id "b" :title "B" :tags '("beer"))))
+    (should-not (vulpea-ui--schema-health nil))))
+
+(ert-deftest vulpea-ui-test-schema-health-conformant ()
+  "A conformant note reports its schema and no violations."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq)))
+    (vulpea-schema-define 'wine
+      :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+      :fields '((:key "name" :required t)))
+    (let ((h (vulpea-ui--schema-health
+              (make-vulpea-note :id "w" :title "W" :tags '("wine")
+                                :meta '(("name" "Chablis"))))))
+      (should (equal (plist-get h :schemas) '(wine)))
+      (should-not (plist-get h :violations)))))
+
+(ert-deftest vulpea-ui-test-schema-health-violations ()
+  "A non-conformant note reports its violations."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq)))
+    (vulpea-schema-define 'wine
+      :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+      :fields '((:key "name" :required t)
+                (:key "colour" :type symbol :one-of (red white))))
+    (let* ((h (vulpea-ui--schema-health
+               (make-vulpea-note :id "w" :title "W" :tags '("wine")
+                                 :meta '(("colour" "blue")))))
+           (vs (plist-get h :violations)))
+      (should (equal (plist-get h :schemas) '(wine)))
+      (should (= (length vs) 2)))))
+
+(ert-deftest vulpea-ui-test-schema-violation-severity ()
+  "Structural problems are errors; value problems are warnings."
+  (should (eq (vulpea-ui--schema-violation-severity 'missing-required) 'error))
+  (should (eq (vulpea-ui--schema-violation-severity 'wrong-type) 'error))
+  (should (eq (vulpea-ui--schema-violation-severity 'invalid-reference) 'error))
+  (should (eq (vulpea-ui--schema-violation-severity 'disallowed-value) 'warning))
+  (should (eq (vulpea-ui--schema-violation-severity 'invalid-value) 'warning))
+  (should (eq (vulpea-ui--schema-violation-severity 'invalid-target) 'warning)))
+
+(ert-deftest vulpea-ui-test-schema-violation-reason ()
+  "Reason text is terse and field-spec aware."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq)))
+    (vulpea-schema-define 'wine
+      :predicate (lambda (_n) t)
+      :fields '((:key "name" :required t)
+                (:key "colour" :type symbol :one-of (red white rose))
+                (:key "vintage" :type number)))
+    (let* ((note (make-vulpea-note :id "w" :title "W" :tags '("wine")
+                                   :meta '(("colour" "blue") ("vintage" "old"))))
+           (vs (vulpea-schema-validate note 'wine))
+           (by-field (lambda (f) (cl-find f vs :key #'vulpea-violation-field
+                                          :test #'equal))))
+      (should (equal (vulpea-ui--schema-violation-reason
+                      (funcall by-field "name") note)
+                     "required"))
+      (should (string-match-p
+               "red/white/rose"
+               (vulpea-ui--schema-violation-reason (funcall by-field "colour") note)))
+      (should (string-match-p
+               "number"
+               (vulpea-ui--schema-violation-reason
+                (funcall by-field "vintage") note))))))
+
+(defmacro vulpea-ui-test--with-wine-note (content meta &rest body)
+  "Visit a temp wine file of CONTENT; bind NOTE (level-0, META) and BUF.
+Registers a `wine' schema requiring `name' and constraining `colour'."
+  (declare (indent 2))
+  `(let ((vulpea-schema--registry (make-hash-table :test 'eq))
+         (file (make-temp-file "vulpea-ui-schema-" nil ".org")))
+     (unwind-protect
+         (progn
+           (with-temp-file file (insert ,content))
+           (vulpea-schema-define 'wine
+             :predicate (lambda (_n) t)
+             :fields '((:key "name" :required t)
+                       (:key "colour" :type symbol :one-of (red white))))
+           (let ((buf (find-file-noselect file))
+                 (note (make-vulpea-note :id "w1" :title "Wine" :path file
+                                         :level 0 :pos 1 :tags '("wine")
+                                         :meta ,meta)))
+             (unwind-protect (progn ,@body) (kill-buffer buf))))
+       (when (file-exists-p file) (delete-file file)))))
+
+(defun vulpea-ui-test--wine-violation (note field)
+  "Return NOTE's wine-schema violation for FIELD."
+  (cl-find field (vulpea-schema-validate note 'wine)
+           :key #'vulpea-violation-field :test #'equal))
+
+(ert-deftest vulpea-ui-test-schema-violation-position-value ()
+  "A value violation points at its field's line."
+  (vulpea-ui-test--with-wine-note
+      ":PROPERTIES:\n:ID: w1\n:END:\n#+title: Wine\n#+filetags: :wine:\n\n- colour :: blue\n"
+      '(("colour" "blue"))
+    (with-current-buffer buf
+      (goto-char (vulpea-ui--schema-violation-position
+                  (vulpea-ui-test--wine-violation note "colour") note))
+      (should (looking-at-p "^- colour ::")))))
+
+(ert-deftest vulpea-ui-test-schema-violation-position-missing-with-meta ()
+  "A missing field lands on the metadata block, not the top of the file."
+  (vulpea-ui-test--with-wine-note
+      ":PROPERTIES:\n:ID: w1\n:END:\n#+title: Wine\n#+filetags: :wine:\n\n- colour :: blue\n"
+      '(("colour" "blue"))
+    (with-current-buffer buf
+      (let ((pos (vulpea-ui--schema-violation-position
+                  (vulpea-ui-test--wine-violation note "name") note)))
+        (should (> pos (point-min)))
+        (goto-char pos)
+        (should (looking-at-p "^- colour ::"))))))
+
+(ert-deftest vulpea-ui-test-schema-violation-position-missing-no-meta ()
+  "A missing field with no metadata yet lands after the note's header."
+  (vulpea-ui-test--with-wine-note
+      ":PROPERTIES:\n:ID: w1\n:END:\n#+title: Wine\n#+filetags: :wine:\n\nbody text\n"
+      nil
+    (with-current-buffer buf
+      (let ((pos (vulpea-ui--schema-violation-position
+                  (vulpea-ui-test--wine-violation note "name") note)))
+        (should (> pos (point-min)))
+        (goto-char pos)
+        (should-not (looking-at-p "^\\(:\\|#\\+\\)"))))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
