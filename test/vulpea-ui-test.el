@@ -670,6 +670,43 @@ A refresh would re-scan and reset point to the top of the sidebar."
       (delete-directory dir t))))
 
 
+;;; Async display-state tests
+
+(ert-deftest vulpea-ui-test-mentions-display-ready-updates-ref ()
+  "A ready result shows the fresh data and caches it under its note id."
+  (let ((ref (list nil)))
+    (should (equal (vulpea-ui--mentions-display-data 'ready "n1" '(a b) ref)
+                   '(shown a b)))
+    (should (equal (car ref) '("n1" a b)))))
+
+(ert-deftest vulpea-ui-test-mentions-display-pending-keeps-list ()
+  "While re-scanning the same note, the previously loaded list stays shown.
+This is what keeps point from jumping to the top on refresh."
+  (let ((ref (list nil)))
+    (vulpea-ui--mentions-display-data 'ready "n1" '(m1 m2) ref)
+    (should (equal (vulpea-ui--mentions-display-data 'pending "n1" nil ref)
+                   '(shown m1 m2)))))
+
+(ert-deftest vulpea-ui-test-mentions-display-pending-other-note ()
+  "Cached data is never reused for a different note."
+  (let ((ref (list nil)))
+    (vulpea-ui--mentions-display-data 'ready "n1" '(m1) ref)
+    (should (equal (vulpea-ui--mentions-display-data 'pending "n2" nil ref)
+                   '(loading)))))
+
+(ert-deftest vulpea-ui-test-mentions-display-pending-first-load ()
+  "With nothing cached, a pending result is the loading state."
+  (let ((ref (list nil)))
+    (should (equal (vulpea-ui--mentions-display-data 'pending "n1" nil ref)
+                   '(loading)))))
+
+(ert-deftest vulpea-ui-test-mentions-display-error ()
+  "An error result is the error state regardless of any cache."
+  (let ((ref (list '("n1" m1))))
+    (should (equal (vulpea-ui--mentions-display-data 'error "n1" nil ref)
+                   '(error)))))
+
+
 ;;; Mode tests
 
 (ert-deftest vulpea-ui-test-mode-keymap ()

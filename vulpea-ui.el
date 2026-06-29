@@ -1481,34 +1481,41 @@ being available on `exec-path' and reports gracefully when it is not."
   :render
   (let ((note (use-vulpea-ui-note)))
     (when note
-      (let* ((result (vui-use-async
+      (let* ((last-ref (vui-use-ref nil))
+             (result (vui-use-async
                          (list (vulpea-note-id note)
                                vulpea-ui--refresh-generation)
                        (apply-partially
                         #'vulpea-note-unlinked-mentions-async note)))
              (status (plist-get result :status))
-             (data (when (eq status 'ready)
-                     (vulpea-ui--filter-mentions
-                      (plist-get result :data)
-                      vulpea-ui-unlinked-mentions-note-filter))))
+             (fresh (when (eq status 'ready)
+                      (vulpea-ui--filter-mentions
+                       (plist-get result :data)
+                       vulpea-ui-unlinked-mentions-note-filter)))
+             (decision (vulpea-ui--mentions-display-data
+                        status (vulpea-note-id note) fresh last-ref))
+             (state (car decision))
+             (data (cdr decision)))
         (vui-component 'vulpea-ui-widget
           :title "Unlinked Mentions"
-          :count (when (eq status 'ready)
-                   (length data))
+          :count (when (eq state 'shown) (length data))
           :children
           (lambda ()
-            (pcase status
-              ('ready
-               (let ((groups (vulpea-ui--group-mentions data)))
-                 (if groups
-                     (vui-vstack
-                      :spacing 1
-                      (seq-map #'vulpea-ui--render-mention-group groups))
-                   (vui-muted "No unlinked mentions"))))
+            (pcase state
+              ('shown (vulpea-ui--render-unlinked-mentions-body data))
               ('error
                (vui-muted (format "Unavailable: %s"
                                   (plist-get result :error))))
               (_ (vui-muted "Searching…")))))))))
+
+(defun vulpea-ui--render-unlinked-mentions-body (data)
+  "Render incoming mention DATA as grouped context lines."
+  (let ((groups (vulpea-ui--group-mentions data)))
+    (if groups
+        (vui-vstack
+         :spacing 1
+         (seq-map #'vulpea-ui--render-mention-group groups))
+      (vui-muted "No unlinked mentions"))))
 
 (defun vulpea-ui--filter-mentions (mentions filter)
   "Return MENTIONS whose :note satisfies FILTER.
@@ -1518,6 +1525,34 @@ dropped, since they cannot be grouped or acted on."
                 (let ((note (plist-get m :note)))
                   (and note (funcall filter note))))
               mentions))
+
+(defun vulpea-ui--mentions-display-data (status note-id fresh last-ref)
+  "Decide which mention data to render and keep LAST-REF in sync.
+
+STATUS is the `vui-use-async' status for NOTE-ID.  FRESH is the freshly
+loaded, already-filtered data, meaningful when STATUS is `ready'.
+LAST-REF is a ref (a cons, see `vui-use-ref') holding (NOTE-ID . DATA)
+from the previous successful render.
+
+Returns one of:
+  (shown . DATA)  render DATA - the fresh data on `ready', or the cached
+                  data for the same note while a re-scan is `pending', so
+                  the list (and point) stay put instead of blanking to the
+                  loading state and throwing point to the top;
+  (error)         render the error state;
+  (loading)       render the loading state (nothing cached for this note).
+
+Cached data is reused only for a matching NOTE-ID, so switching notes
+never briefly shows another note's mentions."
+  (pcase status
+    ('ready
+     (setcar last-ref (cons note-id fresh))
+     (cons 'shown fresh))
+    ('error '(error))
+    (_ (let ((prev (car last-ref)))
+         (if (and prev (equal (car prev) note-id))
+             (cons 'shown (cdr prev))
+           '(loading))))))
 
 (defun vulpea-ui--group-mentions (mentions)
   "Group MENTIONS by their mentioning note.
@@ -1610,6 +1645,7 @@ buffer."
     (when note
       (let* ((path (vulpea-note-path note))
              (buffer (and path (find-buffer-visiting path)))
+             (last-ref (vui-use-ref nil))
              (result (vui-use-async
                          (list (vulpea-note-id note)
                                vulpea-ui--refresh-generation)
@@ -1620,30 +1656,36 @@ buffer."
                                 resolve reject))
                            (funcall reject "note buffer is not open")))))
              (status (plist-get result :status))
-             (data (when (eq status 'ready)
-                     (vulpea-ui--filter-mentions
-                      (plist-get result :data)
-                      vulpea-ui-outgoing-mentions-note-filter))))
+             (fresh (when (eq status 'ready)
+                      (vulpea-ui--filter-mentions
+                       (plist-get result :data)
+                       vulpea-ui-outgoing-mentions-note-filter)))
+             (decision (vulpea-ui--mentions-display-data
+                        status (vulpea-note-id note) fresh last-ref))
+             (state (car decision))
+             (data (cdr decision)))
         (vui-component 'vulpea-ui-widget
           :title "Outgoing Mentions"
-          :count (when (eq status 'ready)
-                   (length data))
+          :count (when (eq state 'shown) (length data))
           :children
           (lambda ()
-            (pcase status
-              ('ready
-               (let ((groups (vulpea-ui--group-outgoing-mentions data)))
-                 (if groups
-                     (vui-vstack
-                      :spacing 1
-                      (seq-map (lambda (group)
-                                 (vulpea-ui--render-outgoing-group group path))
-                               groups))
-                   (vui-muted "No outgoing mentions"))))
+            (pcase state
+              ('shown (vulpea-ui--render-outgoing-mentions-body data path))
               ('error
                (vui-muted (format "Unavailable: %s"
                                   (plist-get result :error))))
               (_ (vui-muted "Searching…")))))))))
+
+(defun vulpea-ui--render-outgoing-mentions-body (data path)
+  "Render outgoing mention DATA as grouped suggestions for PATH."
+  (let ((groups (vulpea-ui--group-outgoing-mentions data)))
+    (if groups
+        (vui-vstack
+         :spacing 1
+         (seq-map (lambda (group)
+                    (vulpea-ui--render-outgoing-group group path))
+                  groups))
+      (vui-muted "No outgoing mentions"))))
 
 (defun vulpea-ui--group-outgoing-mentions (mentions)
   "Group outgoing MENTIONS by the candidate note they could link to.
