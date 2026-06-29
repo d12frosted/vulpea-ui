@@ -13,6 +13,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'vui)
 (require 'vulpea-ui)
 
 ;;; Test helpers
@@ -561,6 +562,112 @@ in :matched - they must not render twice."
       (insert "nothing here\n")
       (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 0))
       (should (equal (buffer-string) "nothing here\n")))))
+
+
+;;; Mention link action tests
+
+(vui-defcomponent vulpea-ui-test--outgoing-mention-wrap (mention note path)
+  "Test wrapper rendering a single outgoing MENTION line."
+  :render (vulpea-ui--render-outgoing-mention mention note path))
+
+(vui-defcomponent vulpea-ui-test--outgoing-group-wrap (group path)
+  "Test wrapper rendering an outgoing GROUP."
+  :render (vulpea-ui--render-outgoing-group group path))
+
+(ert-deftest vulpea-ui-test-render-outgoing-mention-link-before-context ()
+  "The link button renders before the context text, not after it."
+  (let ((note (make-vulpea-note :id "n1" :title "Cab"))
+        (mention (list :line 2 :context "had Cab today")))
+    (with-temp-buffer
+      (vui-mount (vui-component 'vulpea-ui-test--outgoing-mention-wrap
+                   :mention mention :note note :path "/tmp/x.org")
+                 (buffer-name))
+      (let ((s (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "link" s))
+        (should (string-match-p "had Cab today" s))
+        (should (< (string-match "link" s)
+                   (string-match "had Cab today" s)))))))
+
+(ert-deftest vulpea-ui-test-link-action-does-not-refresh ()
+  "Linking a single mention does not trigger a sidebar refresh.
+A refresh would re-scan and reset point to the top of the sidebar."
+  (let* ((dir (make-temp-file "vui-nr-" t))
+         (f (expand-file-name "note.org" dir))
+         (note (make-vulpea-note :id "tid" :title "Target"))
+         (refreshed nil))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert "Mention Target here.\n"))
+          (let ((note-buf (find-file-noselect f)))
+            (unwind-protect
+                (cl-letf (((symbol-function 'vulpea-ui-sidebar-refresh)
+                           (lambda () (setq refreshed t))))
+                  (vulpea-ui--link-mention-action f 1 note)
+                  (should-not refreshed)
+                  (with-current-buffer note-buf
+                    (should (string-match-p
+                             (regexp-quote "[[id:tid][Target]]")
+                             (buffer-string)))))
+              (kill-buffer note-buf))))
+      (delete-directory dir t))))
+
+(ert-deftest vulpea-ui-test-link-group-action-does-not-refresh ()
+  "Linking a whole group does not trigger a sidebar refresh."
+  (let* ((dir (make-temp-file "vui-nrg-" t))
+         (f (expand-file-name "note.org" dir))
+         (note (make-vulpea-note :id "tid" :title "Target"))
+         (refreshed nil))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert "Target a\nTarget b\n"))
+          (let ((note-buf (find-file-noselect f)))
+            (unwind-protect
+                (cl-letf (((symbol-function 'vulpea-ui-sidebar-refresh)
+                           (lambda () (setq refreshed t))))
+                  (vulpea-ui--link-group-action
+                   f note (list (list :line 1 :context "Target a")
+                                (list :line 2 :context "Target b")))
+                  (should-not refreshed)
+                  (with-current-buffer note-buf
+                    (let ((s (buffer-string)))
+                      ;; The title "Target" links word-bounded, so " a"/" b"
+                      ;; remain after each inserted link.
+                      (should (string-match-p
+                               (regexp-quote "[[id:tid][Target]] a") s))
+                      (should (string-match-p
+                               (regexp-quote "[[id:tid][Target]] b") s)))))
+              (kill-buffer note-buf))))
+      (delete-directory dir t))))
+
+(ert-deftest vulpea-ui-test-link-action-keeps-sidebar-point ()
+  "Linking from the sidebar leaves point where it was, not at the top."
+  (let* ((dir (make-temp-file "vui-pt-" t))
+         (f (expand-file-name "note.org" dir))
+         (note (make-vulpea-note :id "tid" :title "Target"))
+         (group (list :note note
+                      :mentions (list (list :line 1 :context "Target one")
+                                      (list :line 2 :context "Target two")))))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert "Target one\nTarget two\n"))
+          (let ((note-buf (find-file-noselect f)))
+            (unwind-protect
+                (with-temp-buffer
+                  (vui-mount (vui-component 'vulpea-ui-test--outgoing-group-wrap
+                               :group group :path f)
+                             (buffer-name))
+                  ;; Park point on the second mention's link button: skip the
+                  ;; group's "link all" and the first mention's "link".
+                  (goto-char (point-min))
+                  (should (search-forward "link" nil t))
+                  (should (search-forward "link" nil t))
+                  (should (search-forward "link" nil t))
+                  (let ((parked (point)))
+                    (vulpea-ui--link-mention-action f 1 note)
+                    (should (= (point) parked))
+                    (should (/= (point) (point-min)))))
+              (kill-buffer note-buf))))
+      (delete-directory dir t))))
 
 
 ;;; Mode tests
