@@ -257,14 +257,16 @@ instead of notes that mention this one without linking back, it shows
 existing notes that *this* note mentions as plain text *without* an =id:=
 link to them - the notes you may want to link out to. Suggestions are
 grouped by the note you could link to; click a context line to jump to
-the mention in the current note, or use the =link= button beside it to
+the mention in the current note, or use the =link= button before it to
 convert that occurrence into an =id:= link in place. Each group also has a
 =link all= button that links every occurrence for that note at once.
 Linking re-checks the live buffer before editing, so a suggestion that has
 gone stale (the surrounding text changed, or you already linked it) is
-simply skipped; press =g= to refresh. Which notes count as candidates is
-controlled by =vulpea-mentions-note-filter= (file-level notes by
-default).
+simply skipped. It keeps your place in the sidebar and does not re-scan,
+so the suggestion stays listed (and point stays put) until you refresh
+with =g= or save - which makes it easy to link several in a row. Which
+notes count as candidates is controlled by =vulpea-mentions-note-filter=
+(file-level notes by default).
 
 Like the unlinked mentions widget it loads *asynchronously* via ripgrep
 (=vulpea-buffer-unlinked-mentions-async=), scanning the note's live

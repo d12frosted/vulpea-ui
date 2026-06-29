@@ -1679,21 +1679,21 @@ title and alias hitting the same line would otherwise appear twice)."
 
 (defun vulpea-ui--render-outgoing-mention (mention note source-path)
   "Render one outgoing MENTION line with a link action.
-The context jumps to the occurrence in SOURCE-PATH; the trailing button
-converts it into an =id:= link to NOTE."
+The leading button converts the occurrence into an =id:= link to NOTE;
+the context that follows jumps to the occurrence in SOURCE-PATH."
   (let ((line (plist-get mention :line))
         (context (plist-get mention :context)))
     (vui-hstack
-     (vui-button context
-       :face 'vulpea-ui-mention-context-face
-       :no-decoration t
-       :on-click (lambda () (vulpea-ui--jump-to-file-line source-path line))
-       :help-echo nil)
      (vui-button "link"
        :face 'vulpea-ui-mention-action-face
        :on-click (lambda ()
                    (vulpea-ui--link-mention-action source-path line note))
-       :help-echo "Insert an id: link at this mention"))))
+       :help-echo "Insert an id: link at this mention")
+     (vui-button context
+       :face 'vulpea-ui-mention-context-face
+       :no-decoration t
+       :on-click (lambda () (vulpea-ui--jump-to-file-line source-path line))
+       :help-echo nil))))
 
 (defun vulpea-ui--render-outgoing-group (group source-path)
   "Render an outgoing mention GROUP.
@@ -1797,23 +1797,29 @@ the number of occurrences linked."
             count))))))
 
 (defun vulpea-ui--link-mention-action (path line note)
-  "Link occurrences of NOTE on LINE of the file at PATH, then refresh.
-Reports the outcome in the echo area; a no-op (e.g. the buffer changed
-since the scan) suggests refreshing.  Intended as a mention button action."
+  "Link occurrences of NOTE on LINE of the file at PATH.
+Edits the note's buffer in place and reports the outcome.  Deliberately
+does not refresh the sidebar: a refresh re-scans and would reset point to
+the top, making it tedious to link several mentions in a row, so point is
+left where it is and you press =g= when you want the list to catch up.  A
+no-op (e.g. the buffer changed since the scan) is reported instead.
+Intended as a mention button action."
   (let ((buffer (and path (find-buffer-visiting path))))
     (if (not (buffer-live-p buffer))
         (message "vulpea-ui: note buffer is not open")
       (let ((n (vulpea-ui--link-mention-line buffer line note)))
         (if (zerop n)
             (message "vulpea-ui: nothing to link here; press g to refresh")
-          (vulpea-ui-sidebar-refresh)
-          (message "vulpea-ui: linked %d occurrence%s of %s"
-                   n (if (= n 1) "" "s") (vulpea-note-title note)))))))
+          (message
+           "vulpea-ui: linked %d occurrence%s of %s (press g to refresh)"
+           n (if (= n 1) "" "s") (vulpea-note-title note)))))))
 
 (defun vulpea-ui--link-group-action (path note mentions)
-  "Link every MENTIONS line for NOTE in the file at PATH, then refresh.
-Sums the occurrences linked across all lines and reports the total.
-Intended as the \"link all\" button action for an outgoing-mention group."
+  "Link every MENTIONS line for NOTE in the file at PATH.
+Sums the occurrences linked across all lines and reports the total.  Like
+`vulpea-ui--link-mention-action' it leaves the sidebar unrefreshed so
+point is preserved; press =g= to update the list.  Intended as the \"link
+all\" button action for an outgoing-mention group."
   (let ((buffer (and path (find-buffer-visiting path))))
     (if (not (buffer-live-p buffer))
         (message "vulpea-ui: note buffer is not open")
@@ -1824,9 +1830,9 @@ Intended as the \"link all\" button action for an outgoing-mention group."
         (if (zerop total)
             (message "vulpea-ui: nothing to link for %s; press g to refresh"
                      (vulpea-note-title note))
-          (vulpea-ui-sidebar-refresh)
-          (message "vulpea-ui: linked %d occurrence%s of %s"
-                   total (if (= total 1) "" "s") (vulpea-note-title note)))))))
+          (message
+           "vulpea-ui: linked %d occurrence%s of %s (press g to refresh)"
+           total (if (= total 1) "" "s") (vulpea-note-title note)))))))
 
 
 ;;; Root component
