@@ -211,6 +211,39 @@ When the sidebar buffer is displayed in a regular (here sole) window,
         (when (buffer-live-p buf) (kill-buffer buf))))))
 
 
+;;; Main window detection tests
+
+(ert-deftest vulpea-ui-test-get-main-window-skips-other-side-windows ()
+  "`vulpea-ui--get-main-window' never returns a non-sidebar side window.
+A *Help*-style side window (here on the left, as produced by a
+`display-buffer-alist' entry) must not be treated as the main window even
+when it is selected.  Otherwise focusing it makes
+`vulpea-ui--on-buffer-change' believe the user left the vulpea note and
+triggers an auto-hide/show thrash that, under `window-combination-resize',
+shrinks the note window on every switch (see
+https://github.com/d12frosted/vulpea-ui/issues/36)."
+  (save-window-excursion
+    (let* ((main-buf (get-buffer-create " *vulpea-ui-test-main*"))
+           (side-buf (get-buffer-create " *vulpea-ui-test-side*"))
+           main-win side-win)
+      (unwind-protect
+          (progn
+            ;; A plain main window holding the note buffer.
+            (switch-to-buffer main-buf)
+            (setq main-win (selected-window))
+            (should-not (window-parameter main-win 'window-side))
+            ;; A left side window, like *Help* via `display-buffer-alist'.
+            (setq side-win (display-buffer-in-side-window
+                            side-buf '((side . left) (slot . 0))))
+            (should (eq (window-parameter side-win 'window-side) 'left))
+            ;; Even with the side window selected, the main window wins.
+            (select-window side-win)
+            (should (eq (vulpea-ui--get-main-window) main-win)))
+        (when (window-live-p side-win) (ignore-errors (delete-window side-win)))
+        (when (buffer-live-p main-buf) (kill-buffer main-buf))
+        (when (buffer-live-p side-buf) (kill-buffer side-buf))))))
+
+
 ;;; Sidebar render tests
 
 (ert-deftest vulpea-ui-test-render-sidebar-without-window-is-noop ()

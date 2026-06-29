@@ -407,20 +407,28 @@ buffer would clobber the selected window."
     (display-buffer-in-side-window buffer (vulpea-ui--display-buffer-params))))
 
 (defun vulpea-ui--get-main-window (&optional frame)
-  "Get the most recently used non-sidebar window in FRAME."
+  "Get the most recently used main window in FRAME.
+A main window is a live, non-minibuffer window that is neither the
+sidebar nor any other side window.  Side windows created via
+`display-buffer-in-side-window' (e.g. a *Help* buffer pinned to a side
+by the user's `display-buffer-alist') are skipped: they are never the
+main editing window, so focusing one must not be mistaken for switching
+away from the vulpea note.  Treating such a window as the main one made
+`vulpea-ui--on-buffer-change' auto-hide and then re-show the sidebar on
+every focus change, which under `window-combination-resize' steadily
+shrank the note window (see vulpea-ui#36)."
   (let* ((frame (or frame (selected-frame)))
          (sidebar-win (vulpea-ui--get-sidebar-window frame))
-         (selected (frame-selected-window frame)))
+         (selected (frame-selected-window frame))
+         (mainp (lambda (win)
+                  (and (not (eq win sidebar-win))
+                       (not (window-parameter win 'window-side))
+                       (not (window-minibuffer-p win))))))
     ;; Prefer the currently selected window if it's a valid main window
-    (if (and selected
-             (not (eq selected sidebar-win))
-             (not (window-minibuffer-p selected)))
+    (if (and selected (funcall mainp selected))
         selected
       ;; Fallback to first valid window
-      (or (seq-find (lambda (win)
-                      (and (not (eq win sidebar-win))
-                           (not (window-minibuffer-p win))))
-                    (window-list frame nil))
+      (or (seq-find mainp (window-list frame nil))
           (frame-first-window frame)))))
 
 
