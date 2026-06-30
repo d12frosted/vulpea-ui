@@ -1,7 +1,7 @@
 #+title: vulpea-ui
 #+author: Boris Buliga
 
-Sidebar infrastructure and widget framework for [[https://github.com/d12frosted/vulpea][vulpea]] notes.
+Visual tools for [[https://github.com/d12frosted/vulpea][vulpea]] notes: a per-note sidebar of widgets, plus standalone views like the schema dashboard.
 
 #+begin_html
 <p>
@@ -18,11 +18,11 @@ Sidebar infrastructure and widget framework for [[https://github.com/d12frosted/
 
 * Features
 
-- Per-frame sidebar with configurable position and size
-- Widget system built on [[https://github.com/d12frosted/vui.el][vui]] components
-- Default widgets: outline, backlinks, unlinked mentions, forward links, outgoing mentions, stats, schema health
-- Easy API for creating custom widgets
-- Auto-hide when switching to non-vulpea buffers
+- Two ways to see your notes: a per-note *sidebar* of widgets, and standalone *views*
+- Configurable per-frame sidebar (position, size, auto-hide)
+- Built-in widgets: outline, backlinks, unlinked mentions, forward links, outgoing mentions, stats, schema health
+- Schema dashboard: a collection-wide view of how every note measures up to its schema
+- Built on [[https://github.com/d12frosted/vui.el][vui]] components, with an easy API for your own widgets
 
 * Installation
 
@@ -191,15 +191,17 @@ For quick navigation to any widget, consider [[https://github.com/d12frosted/ace
 
 #+begin_html
 <p align="center">
-  <img width="60%" src="./images/vulpea-ui-schema-dashboard.png" alt="Screenshot">
+  <img width="70%" src="./images/vulpea-ui-schema-dashboard.png" alt="Screenshot">
 </p>
 #+end_html
 
-Where the schema health widget answers "is /this/ note healthy?", the
-schema dashboard answers it for the whole collection. =M-x
-vulpea-ui-schema-dashboard= opens a =*vulpea schema*= buffer (not the
-sidebar) listing every registered schema with how many notes it covers
-and how many are invalid, sorted so the schemas needing attention come
+The schema dashboard is vulpea-ui's first standalone view: a dedicated
+buffer rather than a sidebar widget. Where the schema health widget
+answers "is /this/ note healthy?", the dashboard answers it for the whole
+collection. =M-x
+vulpea-ui-schema-dashboard= opens a =*vulpea schema*= buffer listing
+every registered schema with how many notes it covers and how many are
+invalid, sorted so the schemas needing attention come
 first and unused ones sink to the bottom. =:include= relationships are
 annotated both ways (=includes= / =included by=).
 
