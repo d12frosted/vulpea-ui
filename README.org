@@ -94,9 +94,10 @@ To automatically open the sidebar when entering org-mode buffers:
 
 Flags how the current note measures up to the vulpea schema(s) that apply
 to it: nothing unless a schema applies, a green =healthy= line when the
-note conforms, or the list of violations otherwise. Click a field to
-jump to it in the note; quick-fix editing actions are tracked separately.
-Needs a vulpea with the schema validation engine.
+note conforms, or the list of violations otherwise. Each violation has a
+=fix= button that prompts for a corrected value and writes it back, and
+the field name jumps to it in the note. Needs a vulpea with the schema
+validation engine (the =fix= button needs =vulpea-schema-fix-violation=).
 
 #+begin_src emacs-lisp
 ;; Glyphs - portable text by default; swap in nerd-font / all-the-icons
@@ -107,8 +108,9 @@ Needs a vulpea with the schema validation engine.
 #+end_src
 
 The faces =vulpea-ui-schema-health-ok-face= / =-error-face= /
-=-warning-face= / =-field-face= / =-message-face= inherit =success= /
-=error= / =warning= / =bold= / =shadow=, so they follow your theme.
+=-warning-face= / =-field-face= / =-message-face= / =-action-face= inherit
+=success= / =error= / =warning= / =bold= / =shadow= / =link=, so they
+follow your theme.
 
 ** Backlinks widget
 
@@ -207,8 +209,10 @@ Shows character count, word count, and link count for the current note.
 Flags how the current note measures up to the vulpea schema(s) that apply
 to it: a green =healthy= line when it conforms, or its violations
 otherwise - a severity-coloured bullet (red for structural problems,
-amber for value problems), the field, and a terse reason. Click a field
-to jump to it in the note. Shown only when a schema applies.
+amber for value problems), the field, and a terse reason. Each violation
+has a =fix= button that prompts for a corrected value and writes it back,
+and the field name jumps to it in the note. Shown only when a schema
+applies.
 
 ** Outline widget
 
