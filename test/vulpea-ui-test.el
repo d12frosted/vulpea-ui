@@ -1507,5 +1507,30 @@ Registers a `wine' schema requiring `name' and constraining `colour'."
         (goto-char (point-min))
         (should (re-search-forward "^- name :: Chateau Test" nil t))))))
 
+(ert-deftest vulpea-ui-test-schema-dashboard-refresh-targets-buffer ()
+  "Refreshing from another buffer updates the dashboard, not the caller."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq)))
+    (vulpea-schema-define 'wine
+      :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+      :fields '((:key "name" :required t)))
+    (cl-letf (((symbol-function 'vulpea-db-query)
+               (lambda (&rest _)
+                 (list (make-vulpea-note :id "b" :title "Bad Wine"
+                                         :tags '("wine") :meta nil)))))
+      (let ((other (get-buffer-create "*not-the-dashboard*")))
+        (unwind-protect
+            (save-window-excursion
+              (vulpea-ui-schema-dashboard)
+              (with-current-buffer other
+                (insert "untouched")
+                (vulpea-ui-schema-dashboard-refresh)
+                (should (equal (buffer-string) "untouched"))
+                (should-not vulpea-ui-schema-dashboard--instance))
+              (with-current-buffer vulpea-ui-schema-dashboard-buffer-name
+                (should vulpea-ui-schema-dashboard--instance)))
+          (kill-buffer other)
+          (when (get-buffer vulpea-ui-schema-dashboard-buffer-name)
+            (kill-buffer vulpea-ui-schema-dashboard-buffer-name)))))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
