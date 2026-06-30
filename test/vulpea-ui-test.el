@@ -1450,5 +1450,63 @@ Registers a `wine' schema requiring `name' and constraining `colour'."
           (when (get-buffer "*vulpea schema*")
             (kill-buffer "*vulpea schema*")))))))
 
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-note ()
+  "Fixing a note from the dashboard fixes each violation, then refreshes."
+  (vulpea-ui-test--with-wine-note
+      ":PROPERTIES:\n:ID: w1\n:END:\n#+title: Wine\n#+filetags: :wine:\n\n- colour :: blue\n"
+      '(("colour" "blue"))
+    (let ((fixed nil) (reindexed nil) (refreshed nil) (saved nil)
+          (vs (list (make-vulpea-violation :type 'missing-required :field "name")
+                    (make-vulpea-violation :type 'disallowed-value :field "colour"))))
+      (cl-letf (((symbol-function 'vulpea-schema-fix-violation)
+                 (lambda (v &optional _bound) (push v fixed) "x"))
+                ((symbol-function 'vulpea-db-update-file)
+                 (lambda (p) (setq reindexed p)))
+                ((symbol-function 'vulpea-ui-schema-dashboard-refresh)
+                 (lambda () (setq refreshed t)))
+                ((symbol-function 'save-buffer)
+                 (lambda (&rest _) (setq saved t))))
+        (vulpea-ui-schema-dashboard--fix-note note vs)
+        (should (= (length fixed) 2))
+        (should saved)
+        (should (equal reindexed (vulpea-note-path note)))
+        (should refreshed)))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-note-skip ()
+  "A note whose fixes are all skipped persists nothing."
+  (vulpea-ui-test--with-wine-note
+      ":PROPERTIES:\n:ID: w1\n:END:\n#+title: Wine\n#+filetags: :wine:\n\n- colour :: blue\n"
+      '(("colour" "blue"))
+    (let ((reindexed nil) (refreshed nil) (saved nil)
+          (vs (list (make-vulpea-violation :type 'disallowed-value :field "colour"))))
+      (cl-letf (((symbol-function 'vulpea-schema-fix-violation)
+                 (lambda (_v &optional _b) nil))
+                ((symbol-function 'vulpea-db-update-file)
+                 (lambda (_p) (setq reindexed t)))
+                ((symbol-function 'vulpea-ui-schema-dashboard-refresh)
+                 (lambda () (setq refreshed t)))
+                ((symbol-function 'save-buffer)
+                 (lambda (&rest _) (setq saved t))))
+        (vulpea-ui-schema-dashboard--fix-note note vs)
+        (should-not saved)
+        (should-not reindexed)
+        (should-not refreshed)))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-note-writes ()
+  "The dashboard fix drives the real fixer over the note's violations."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation))
+  (vulpea-ui-test--with-wine-note
+      ":PROPERTIES:\n:ID: w1\n:END:\n#+title: Wine\n#+filetags: :wine:\n\n- colour :: red\n"
+      '(("colour" "red"))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (&rest _) "Chateau Test"))
+              ((symbol-function 'vulpea-db-update-file) #'ignore)
+              ((symbol-function 'vulpea-ui-schema-dashboard-refresh) #'ignore))
+      (vulpea-ui-schema-dashboard--fix-note
+       note (vulpea-schema-validate note 'wine))
+      (with-current-buffer buf
+        (goto-char (point-min))
+        (should (re-search-forward "^- name :: Chateau Test" nil t))))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here

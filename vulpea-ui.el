@@ -2364,17 +2364,44 @@ applies (see its :predicate at registration)."
       'vulpea-ui-schema-health-error-face
     'vulpea-ui-schema-health-warning-face))
 
+(defun vulpea-ui-schema-dashboard--fix-note (note violations)
+  "Fix NOTE's VIOLATIONS in its file, then refresh the dashboard.
+Open NOTE's file, prompt to fix each violation, save, re-index, and
+re-render.  Do nothing when every prompt is skipped."
+  (when-let* ((path (vulpea-note-path note))
+              (buf (find-file-noselect path)))
+    (let ((bound (when (> (vulpea-note-level note) 0) (vulpea-note-pos note)))
+          (fixed nil))
+      (with-current-buffer buf
+        (dolist (violation violations)
+          (when (vulpea-schema-fix-violation violation bound)
+            (setq fixed t)))
+        (when fixed (save-buffer)))
+      (when fixed
+        (vulpea-db-update-file path)
+        (vulpea-ui-schema-dashboard-refresh)))))
+
 (defun vulpea-ui-schema-dashboard--render-note (entry)
   "Render one invalid-note ENTRY, a (note . violations) pair."
   (let* ((note (car entry))
          (violations (cdr entry))
          (count (length violations)))
-    (vui-hstack
-     (vui-text vulpea-ui-schema-health-bullet
-               :face (vulpea-ui-schema-dashboard--note-face violations))
-     (vui-component 'vulpea-ui-note-link :note note)
-     (vui-text (format "%d %s" count (if (= count 1) "issue" "issues"))
-               :face 'vulpea-ui-schema-health-message-face))))
+    (apply
+     #'vui-hstack
+     (delq
+      nil
+      (list
+       (vui-text vulpea-ui-schema-health-bullet
+                 :face (vulpea-ui-schema-dashboard--note-face violations))
+       (when (fboundp 'vulpea-schema-fix-violation)
+         (vui-button "fix"
+           :face 'vulpea-ui-schema-health-action-face
+           :on-click (lambda ()
+                       (vulpea-ui-schema-dashboard--fix-note note violations))
+           :help-echo "Fix this note's violations"))
+       (vui-component 'vulpea-ui-note-link :note note)
+       (vui-text (format "%d %s" count (if (= count 1) "issue" "issues"))
+                 :face 'vulpea-ui-schema-health-message-face))))))
 
 (vui-defcomponent vulpea-ui-schema-dashboard-section (entry)
   "One schema's section in the dashboard.

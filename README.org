@@ -206,11 +206,13 @@ first and unused ones sink to the bottom. =:include= relationships are
 annotated both ways (=includes= / =included by=).
 
 Each schema is collapsible, and schemas with violations start expanded.
-Expand one to see its invalid notes as clickable links: =RET= or a click
-jumps to the note, where the health widget and quick-fix actions take
-over. =g= rescans, =q= buries the buffer. The scan is one query plus an
-in-memory pass, so it stays fast on a large collection. Needs a vulpea
-with =vulpea-schema-collection-health=.
+Expand one to see its invalid notes. Each row has a =fix= button that
+prompts to fix the note's violations in place, then re-indexes and
+refreshes so the note drops off once it is healthy, and a link that jumps
+to the note for a closer look. =g= rescans, =q= buries the buffer. The
+scan is one query plus an in-memory pass, so it stays fast on a large
+collection. Needs a vulpea with =vulpea-schema-collection-health= (the
+=fix= button additionally needs =vulpea-schema-fix-violation=).
 
 * Default widgets
 
