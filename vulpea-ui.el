@@ -2354,59 +2354,97 @@ applies (see its :predicate at registration)."
             (if (= flagged 0) "all healthy"
               (format "%d with issues" flagged)))))
 
-(defun vulpea-ui-schema-dashboard--note-face (violations)
-  "Return the severity face for a note carrying VIOLATIONS."
-  (if (cl-some (lambda (v)
-                 (eq (vulpea-ui--schema-violation-severity
-                      (vulpea-violation-type v))
-                     'error))
-               violations)
-      'vulpea-ui-schema-health-error-face
-    'vulpea-ui-schema-health-warning-face))
+(defun vulpea-ui-schema-dashboard--width ()
+  "Return the dashboard window's body width for right-aligned headers.
+Fall back to `fill-column' when the dashboard is not shown in a window."
+  (let ((win (get-buffer-window (current-buffer) t)))
+    (if win (window-body-width win) fill-column)))
 
-(defun vulpea-ui-schema-dashboard--fix-note (note violations)
-  "Fix NOTE's VIOLATIONS in its file, then refresh the dashboard.
-Open NOTE's file, prompt to fix each violation, save, re-index, and
-re-render.  Do nothing when every prompt is skipped."
+(defun vulpea-ui-schema-dashboard--visit-field (note violation)
+  "Show NOTE and move point to VIOLATION's field, returning its buffer."
   (when-let* ((path (vulpea-note-path note))
               (buf (find-file-noselect path)))
-    (let ((bound (when (> (vulpea-note-level note) 0) (vulpea-note-pos note)))
-          (fixed nil))
-      (with-current-buffer buf
-        (dolist (violation violations)
-          (when (vulpea-schema-fix-violation violation bound)
-            (setq fixed t)))
-        (when fixed (save-buffer)))
-      (when fixed
-        (vulpea-db-update-file path)
-        (vulpea-ui-schema-dashboard-refresh)))))
+    (pop-to-buffer buf)
+    (with-current-buffer buf
+      (goto-char (vulpea-ui--schema-violation-position violation note)))
+    buf))
 
-(defun vulpea-ui-schema-dashboard--render-note (entry)
-  "Render one invalid-note ENTRY, a (note . violations) pair."
-  (let* ((note (car entry))
-         (violations (cdr entry))
-         (count (length violations)))
+(defun vulpea-ui-schema-dashboard--fix-violation (note violation)
+  "Show NOTE at VIOLATION's field, fix it, then refresh the dashboard.
+Do nothing when the prompt is skipped."
+  (when-let* ((buf (vulpea-ui-schema-dashboard--visit-field note violation)))
+    (when (with-current-buffer buf
+            (vulpea-schema-fix-violation
+             violation
+             (when (> (vulpea-note-level note) 0) (vulpea-note-pos note))))
+      (with-current-buffer buf (save-buffer))
+      (vulpea-db-update-file (vulpea-note-path note))
+      (vulpea-ui-schema-dashboard-refresh))))
+
+(defun vulpea-ui-schema-dashboard--render-violation (note violation)
+  "Render one VIOLATION row for NOTE: bullet, fix, field, and reason."
+  (let ((face (if (eq (vulpea-ui--schema-violation-severity
+                       (vulpea-violation-type violation))
+                      'error)
+                  'vulpea-ui-schema-health-error-face
+                'vulpea-ui-schema-health-warning-face)))
     (apply
      #'vui-hstack
      (delq
       nil
       (list
-       (vui-text vulpea-ui-schema-health-bullet
-                 :face (vulpea-ui-schema-dashboard--note-face violations))
+       (vui-text vulpea-ui-schema-health-bullet :face face)
        (when (fboundp 'vulpea-schema-fix-violation)
          (vui-button "fix"
            :face 'vulpea-ui-schema-health-action-face
            :on-click (lambda ()
-                       (vulpea-ui-schema-dashboard--fix-note note violations))
-           :help-echo "Fix this note's violations"))
-       (vui-component 'vulpea-ui-note-link :note note)
-       (vui-text (format "%d %s" count (if (= count 1) "issue" "issues"))
-                 :face 'vulpea-ui-schema-health-message-face))))))
+                       (vulpea-ui-schema-dashboard--fix-violation note violation))
+           :help-echo "Show the note and fix this violation"))
+       (vui-button (or (vulpea-violation-field violation) "")
+         :face 'vulpea-ui-schema-health-field-face
+         :no-decoration t
+         :help-echo nil
+         :on-click (lambda ()
+                     (vulpea-ui-schema-dashboard--visit-field note violation)))
+       (vui-text (vulpea-ui--schema-violation-reason violation note)
+         :face 'vulpea-ui-schema-health-message-face))))))
+
+(vui-defcomponent vulpea-ui-schema-dashboard-note (entry indent)
+  "One invalid note in the dashboard, collapsible to its violations.
+ENTRY is a (note . violations) pair; the note starts collapsed.  INDENT
+is the column the row sits at, so the right-aligned count lines up with
+the schema headers above."
+  :state ((expanded nil))
+  :render
+  (let* ((note (car entry))
+         (violations (cdr entry))
+         (count (length violations))
+         (indicator (if expanded "▼" "▶")))
+    (vui-vstack
+     :spacing 0
+     (vui-flex
+      :width #'vulpea-ui-schema-dashboard--width
+      :indent (or indent 0)
+      :justify :space-between
+      (vui-button (format "%s %s" indicator
+                          (or (vulpea-note-title note) "(untitled)"))
+        :no-decoration t
+        :help-echo "Toggle this note's violations"
+        :on-click (lambda () (vui-set-state :expanded (not expanded))))
+      (vui-text (format "%d %s" count (if (= count 1) "issue" "issues"))
+                :face 'vulpea-ui-schema-health-message-face))
+     (when expanded
+       (vui-vstack
+        :indent 2
+        :spacing 0
+        (seq-map (lambda (v)
+                   (vulpea-ui-schema-dashboard--render-violation note v))
+                 violations))))))
 
 (vui-defcomponent vulpea-ui-schema-dashboard-section (entry)
   "One schema's section in the dashboard.
-ENTRY is a `vulpea-schema-health'.  The header toggles a list of the
-schema's invalid notes; a schema with violations starts expanded."
+ENTRY is a `vulpea-schema-health'.  The header toggles the schema's
+invalid notes; a schema with violations starts expanded."
   :state ((expanded :unset))
   :render
   (let* ((invalid (vulpea-schema-health-invalid entry))
@@ -2415,7 +2453,9 @@ schema's invalid notes; a schema with violations starts expanded."
          (includes (vulpea-ui-schema-dashboard--includes-text entry)))
     (vui-vstack
      :spacing 0
-     (vui-hstack
+     (vui-flex
+      :width #'vulpea-ui-schema-dashboard--width
+      :justify :space-between
       (vui-button (format "%s %s" indicator
                           (symbol-name (vulpea-schema-health-schema entry)))
         :no-decoration t
@@ -2425,13 +2465,18 @@ schema's invalid notes; a schema with violations starts expanded."
       (vui-text (vulpea-ui-schema-dashboard--status-text entry)
                 :face (vulpea-ui-schema-dashboard--status-face entry)))
      (when is-expanded
-       (vui-vstack
-        :indent 4
-        :spacing 0
-        (when includes
-          (vui-text includes :face 'vulpea-ui-schema-health-message-face))
-        (seq-map #'vulpea-ui-schema-dashboard--render-note
-                 (vulpea-schema-health-invalid-notes entry)))))))
+       (let ((note-indent 4))
+         (vui-vstack
+          :indent note-indent
+          :spacing 0
+          (when includes
+            (vui-text includes :face 'vulpea-ui-schema-health-message-face))
+          (seq-map (lambda (h)
+                     (vui-component 'vulpea-ui-schema-dashboard-note
+                                    :entry h
+                                    :indent note-indent
+                                    :key (vulpea-note-id (car h))))
+                   (vulpea-schema-health-invalid-notes entry))))))))
 
 (vui-defcomponent vulpea-ui-schema-dashboard-root (health)
   "Root of the schema dashboard.
