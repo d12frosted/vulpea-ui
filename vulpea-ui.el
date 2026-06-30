@@ -2047,6 +2047,11 @@ Set it to a nerd-font or all-the-icons glyph if you prefer."
   "Face for the reason text of a schema violation."
   :group 'vulpea-ui)
 
+(defface vulpea-ui-schema-health-action-face
+  '((t :inherit link :underline nil))
+  "Face for the quick-fix action buttons of schema violations."
+  :group 'vulpea-ui)
+
 (defun vulpea-ui--schema-health (note)
   "Return schema health for NOTE, or nil when no schema is applicable.
 The result is a plist with :schemas (the applicable schema names) and
@@ -2158,27 +2163,55 @@ metadata would be inserted."
                (line-beginning-position))))))
      (vulpea-ui--schema-meta-position note))))
 
+(declare-function vulpea-schema-fix-violation "vulpea" (violation &optional bound))
+
+(defun vulpea-ui--schema-fix-violation-action (note violation)
+  "Fix VIOLATION on NOTE, persist the change, and refresh the sidebar.
+Prompt for a corrected value, write it to NOTE's file, re-index, and
+re-render.  Do nothing when the prompt is skipped or NOTE's buffer is
+not visiting a file."
+  (when-let* ((path (vulpea-note-path note))
+              (buf (find-buffer-visiting path)))
+    (when (with-current-buffer buf
+            (vulpea-schema-fix-violation
+             violation
+             (when (> (vulpea-note-level note) 0)
+               (vulpea-note-pos note))))
+      (with-current-buffer buf (save-buffer))
+      (vulpea-db-update-file path)
+      (vulpea-ui-sidebar-refresh))))
+
 (defun vulpea-ui--render-schema-violation (violation note)
   "Render one row for VIOLATION on NOTE.
-The row is a severity bullet, the field name as a button that jumps to
-the offending field, and a terse reason."
+The row is a severity bullet, an optional quick-fix button, the field
+name as a button that jumps to the offending field, and a terse reason."
   (let ((face (if (eq (vulpea-ui--schema-violation-severity
                        (vulpea-violation-type violation))
                       'error)
                   'vulpea-ui-schema-health-error-face
                 'vulpea-ui-schema-health-warning-face)))
-    (vui-hstack
-     (vui-text vulpea-ui-schema-health-bullet :face face)
-     (vui-button (or (vulpea-violation-field violation) "")
-       :face 'vulpea-ui-schema-health-field-face
-       :no-decoration t
-       :help-echo nil
-       :on-click (lambda ()
-                   (vulpea-ui--jump-to-position
-                    note
-                    (vulpea-ui--schema-violation-position violation note))))
-     (vui-text (vulpea-ui--schema-violation-reason violation note)
-       :face 'vulpea-ui-schema-health-message-face))))
+    (apply
+     #'vui-hstack
+     (delq
+      nil
+      (list
+       (vui-text vulpea-ui-schema-health-bullet :face face)
+       (when (fboundp 'vulpea-schema-fix-violation)
+         (vui-button "fix"
+           :face 'vulpea-ui-schema-health-action-face
+           :on-click (lambda ()
+                       (vulpea-ui--schema-fix-violation-action note violation))
+           :help-echo "Prompt for a value and fix this violation"))
+       (vui-button (or (vulpea-violation-field violation) "")
+         :face 'vulpea-ui-schema-health-field-face
+         :no-decoration t
+         :help-echo nil
+         :on-click (lambda ()
+                     (vulpea-ui--jump-to-position
+                      note
+                      (vulpea-ui--schema-violation-position violation note))))
+       (vui-text (vulpea-ui--schema-violation-reason violation note)
+         :face 'vulpea-ui-schema-health-message-face))))))
 
 (vui-defcomponent vulpea-ui-widget-schema-health ()
   "Widget flagging schema violations for the current note.
