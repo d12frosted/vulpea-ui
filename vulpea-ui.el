@@ -2285,5 +2285,196 @@ applies (see its :predicate at registration)."
                            :component 'vulpea-ui-widget-outgoing-mentions
                            :order 450)
 
+;;; Schema dashboard
+
+(declare-function vulpea-schema-collection-health "vulpea-schema" (&optional notes))
+
+(defface vulpea-ui-schema-dashboard-schema-face
+  '((t :inherit bold))
+  "Face for a schema name in the schema dashboard."
+  :group 'vulpea-ui)
+
+(defun vulpea-ui-schema-dashboard--rank (health)
+  "Return a sort rank for HEALTH: 0 needs attention, 1 covered, 2 unused."
+  (cond ((> (vulpea-schema-health-invalid health) 0) 0)
+        ((> (vulpea-schema-health-covered health) 0) 1)
+        (t 2)))
+
+(defun vulpea-ui-schema-dashboard--sort (healths)
+  "Order HEALTHS for display: needs-attention first, unused last, then by name."
+  (sort (copy-sequence healths)
+        (lambda (a b)
+          (let ((ra (vulpea-ui-schema-dashboard--rank a))
+                (rb (vulpea-ui-schema-dashboard--rank b)))
+            (if (= ra rb)
+                (string< (symbol-name (vulpea-schema-health-schema a))
+                         (symbol-name (vulpea-schema-health-schema b)))
+              (< ra rb))))))
+
+(defun vulpea-ui-schema-dashboard--status-text (health)
+  "Return the status string shown to the right of HEALTH's schema name."
+  (let ((covered (vulpea-schema-health-covered health))
+        (invalid (vulpea-schema-health-invalid health)))
+    (cond
+     ((= covered 0) "unused")
+     ((= invalid 0)
+      (format "%d %s · all valid" covered (if (= covered 1) "note" "notes")))
+     (t (format "%d %s · %d invalid"
+                covered (if (= covered 1) "note" "notes") invalid)))))
+
+(defun vulpea-ui-schema-dashboard--status-face (health)
+  "Return the face for HEALTH's status string."
+  (let ((covered (vulpea-schema-health-covered health))
+        (invalid (vulpea-schema-health-invalid health)))
+    (cond
+     ((= covered 0) 'shadow)
+     ((= invalid 0) 'vulpea-ui-schema-health-ok-face)
+     (t 'vulpea-ui-schema-health-error-face))))
+
+(defun vulpea-ui-schema-dashboard--includes-text (health)
+  "Return HEALTH's include-relationship line, or nil when it has none."
+  (let ((inc (vulpea-schema-health-includes health))
+        (by (vulpea-schema-health-included-by health)))
+    (cond
+     ((and inc by)
+      (format "includes %s · included by %s"
+              (mapconcat #'symbol-name inc ", ")
+              (mapconcat #'symbol-name by ", ")))
+     (inc (format "includes %s" (mapconcat #'symbol-name inc ", ")))
+     (by (format "included by %s" (mapconcat #'symbol-name by ", ")))
+     (t nil))))
+
+(defun vulpea-ui-schema-dashboard--summary-text (healths)
+  "Return the collection summary line for HEALTHS."
+  (let ((n (length healths))
+        (flagged (cl-count-if (lambda (h) (> (vulpea-schema-health-invalid h) 0))
+                              healths)))
+    (format "%d %s · %s"
+            n (if (= n 1) "schema" "schemas")
+            (if (= flagged 0) "all healthy"
+              (format "%d with issues" flagged)))))
+
+(defun vulpea-ui-schema-dashboard--note-face (violations)
+  "Return the severity face for a note carrying VIOLATIONS."
+  (if (cl-some (lambda (v)
+                 (eq (vulpea-ui--schema-violation-severity
+                      (vulpea-violation-type v))
+                     'error))
+               violations)
+      'vulpea-ui-schema-health-error-face
+    'vulpea-ui-schema-health-warning-face))
+
+(defun vulpea-ui-schema-dashboard--render-note (entry)
+  "Render one invalid-note ENTRY, a (note . violations) pair."
+  (let* ((note (car entry))
+         (violations (cdr entry))
+         (count (length violations)))
+    (vui-hstack
+     (vui-text vulpea-ui-schema-health-bullet
+               :face (vulpea-ui-schema-dashboard--note-face violations))
+     (vui-component 'vulpea-ui-note-link :note note)
+     (vui-text (format "%d %s" count (if (= count 1) "issue" "issues"))
+               :face 'vulpea-ui-schema-health-message-face))))
+
+(vui-defcomponent vulpea-ui-schema-dashboard-section (entry)
+  "One schema's section in the dashboard.
+ENTRY is a `vulpea-schema-health'.  The header toggles a list of the
+schema's invalid notes; a schema with violations starts expanded."
+  :state ((expanded :unset))
+  :render
+  (let* ((invalid (vulpea-schema-health-invalid entry))
+         (is-expanded (if (eq expanded :unset) (> invalid 0) expanded))
+         (indicator (if is-expanded "▼" "▶"))
+         (includes (vulpea-ui-schema-dashboard--includes-text entry)))
+    (vui-vstack
+     :spacing 0
+     (vui-hstack
+      (vui-button (format "%s %s" indicator
+                          (symbol-name (vulpea-schema-health-schema entry)))
+        :no-decoration t
+        :face 'vulpea-ui-schema-dashboard-schema-face
+        :help-echo "Toggle this schema"
+        :on-click (lambda () (vui-set-state :expanded (not is-expanded))))
+      (vui-text (vulpea-ui-schema-dashboard--status-text entry)
+                :face (vulpea-ui-schema-dashboard--status-face entry)))
+     (when is-expanded
+       (vui-vstack
+        :indent 4
+        :spacing 0
+        (when includes
+          (vui-text includes :face 'vulpea-ui-schema-health-message-face))
+        (seq-map #'vulpea-ui-schema-dashboard--render-note
+                 (vulpea-schema-health-invalid-notes entry)))))))
+
+(vui-defcomponent vulpea-ui-schema-dashboard-root (health)
+  "Root of the schema dashboard.
+HEALTH is a list of `vulpea-schema-health', already sorted for display."
+  :render
+  (vui-vstack
+   :spacing 1
+   (vui-vstack
+    :spacing 0
+    (vui-text "Schema health" :face 'vulpea-ui-widget-header-face)
+    (vui-text (vulpea-ui-schema-dashboard--summary-text health)
+              :face 'shadow))
+   (vui-vstack
+    :spacing 0
+    (seq-map (lambda (h)
+               (vui-component 'vulpea-ui-schema-dashboard-section
+                              :entry h
+                              :key (vulpea-schema-health-schema h)))
+             health))))
+
+(defvar vulpea-ui-schema-dashboard-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "g") #'vulpea-ui-schema-dashboard-refresh)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Keymap for `vulpea-ui-schema-dashboard-mode'.")
+
+(define-derived-mode vulpea-ui-schema-dashboard-mode vui-mode "vulpea-schema"
+  "Major mode for the vulpea schema health dashboard.
+\\{vulpea-ui-schema-dashboard-mode-map}"
+  :group 'vulpea-ui
+  (setq-local truncate-lines t))
+
+(defvar-local vulpea-ui-schema-dashboard--instance nil
+  "The vui instance mounted in the schema dashboard buffer.")
+
+(defun vulpea-ui-schema-dashboard--render ()
+  "Compute schema health and (re-)render the dashboard in the current buffer."
+  (let ((health (vulpea-ui-schema-dashboard--sort
+                 (vulpea-schema-collection-health))))
+    (if (and vulpea-ui-schema-dashboard--instance
+             (vui-instance-buffer vulpea-ui-schema-dashboard--instance)
+             (buffer-live-p (vui-instance-buffer
+                             vulpea-ui-schema-dashboard--instance)))
+        (vui-update vulpea-ui-schema-dashboard--instance (list :health health))
+      (setq vulpea-ui-schema-dashboard--instance
+            (vui-mount (vui-component 'vulpea-ui-schema-dashboard-root
+                                      :health health)
+                       (buffer-name))))))
+
+(defun vulpea-ui-schema-dashboard-refresh ()
+  "Recompute schema health and re-render the dashboard."
+  (interactive)
+  (vulpea-ui-schema-dashboard--render))
+
+;;;###autoload
+(defun vulpea-ui-schema-dashboard ()
+  "Open the vulpea schema health dashboard.
+List every registered schema with how many notes it covers and how many
+are invalid; expand a schema to see its invalid notes and jump to them.
+Press \\<vulpea-ui-schema-dashboard-mode-map>\\[vulpea-ui-schema-dashboard-refresh] to refresh."
+  (interactive)
+  (unless (fboundp 'vulpea-schema-collection-health)
+    (user-error "This vulpea has no schema engine (need a newer vulpea)"))
+  (let ((buf (get-buffer-create "*vulpea schema*")))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'vulpea-ui-schema-dashboard-mode)
+        (vulpea-ui-schema-dashboard-mode)))
+    (pop-to-buffer buf)
+    (vulpea-ui-schema-dashboard--render)))
+
 (provide 'vulpea-ui)
 ;;; vulpea-ui.el ends here
