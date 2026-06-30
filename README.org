@@ -79,7 +79,9 @@ To automatically open the sidebar when entering org-mode buffers:
 ;; Position: 'right (default), 'left, 'top, 'bottom
 (setq vulpea-ui-sidebar-position 'right)
 
-;; Size as fraction of frame (0.0-1.0)
+;; Size of the sidebar. A float is a fraction of the frame (0.0-1.0),
+;; an integer is a column/line count. See the docstring for the full
+;; set of options.
 (setq vulpea-ui-sidebar-size 0.33)
 #+end_src
 
