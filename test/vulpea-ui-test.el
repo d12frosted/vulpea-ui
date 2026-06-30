@@ -1532,5 +1532,26 @@ Registers a `wine' schema requiring `name' and constraining `colour'."
           (when (get-buffer vulpea-ui-schema-dashboard-buffer-name)
             (kill-buffer vulpea-ui-schema-dashboard-buffer-name)))))))
 
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-keeps-note-buffer ()
+  "Fixing from the dashboard leaves the note's own buffer an org buffer."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation))
+  (vulpea-ui-test--with-wine-note
+      ":PROPERTIES:\n:ID: w1\n:END:\n#+title: Wine\n#+filetags: :wine:\n\n- colour :: red\n"
+      '(("colour" "red"))
+    (cl-letf (((symbol-function 'vulpea-db-query) (lambda (&rest _) (list note)))
+              ((symbol-function 'read-string) (lambda (&rest _) "Chateau Test"))
+              ((symbol-function 'vulpea-db-update-file) #'ignore))
+      (unwind-protect
+          (save-window-excursion
+            (vulpea-ui-schema-dashboard)
+            (vulpea-ui-schema-dashboard--fix-violation
+             note (car (vulpea-schema-validate note 'wine)))
+            (should (buffer-live-p buf))
+            (with-current-buffer buf
+              (should (derived-mode-p 'org-mode))
+              (should-not vulpea-ui-schema-dashboard--instance)))
+        (when (get-buffer vulpea-ui-schema-dashboard-buffer-name)
+          (kill-buffer vulpea-ui-schema-dashboard-buffer-name))))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
