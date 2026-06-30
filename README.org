@@ -165,12 +165,13 @@ For large org files or many backlinks, enable fast parsing:
 
 * Commands
 
-| Command                     | Description               |
-|-----------------------------+---------------------------|
-| =vulpea-ui-sidebar-open=    | Open the sidebar          |
-| =vulpea-ui-sidebar-close=   | Close the sidebar         |
-| =vulpea-ui-sidebar-toggle=  | Toggle sidebar visibility |
-| =vulpea-ui-sidebar-refresh= | Force refresh content     |
+| Command                      | Description               |
+|------------------------------+---------------------------|
+| =vulpea-ui-sidebar-open=     | Open the sidebar          |
+| =vulpea-ui-sidebar-close=    | Close the sidebar         |
+| =vulpea-ui-sidebar-toggle=   | Toggle sidebar visibility |
+| =vulpea-ui-sidebar-refresh=  | Force refresh content     |
+| =vulpea-ui-schema-dashboard= | Open the schema dashboard |
 
 * Sidebar keybindings
 
@@ -185,6 +186,23 @@ For large org files or many backlinks, enable fast parsing:
 =TAB=, =S-TAB=, and =RET= are inherited from =vui-mode=. =q= and =g= are sidebar-specific.
 
 For quick navigation to any widget, consider [[https://github.com/d12frosted/ace-link-vui][ace-link-vui]].
+
+* Schema dashboard
+
+Where the schema health widget answers "is /this/ note healthy?", the
+schema dashboard answers it for the whole collection. =M-x
+vulpea-ui-schema-dashboard= opens a =*vulpea schema*= buffer (not the
+sidebar) listing every registered schema with how many notes it covers
+and how many are invalid, sorted so the schemas needing attention come
+first and unused ones sink to the bottom. =:include= relationships are
+annotated both ways (=includes= / =included by=).
+
+Each schema is collapsible, and schemas with violations start expanded.
+Expand one to see its invalid notes as clickable links: =RET= or a click
+jumps to the note, where the health widget and quick-fix actions take
+over. =g= rescans, =q= buries the buffer. The scan is one query plus an
+in-memory pass, so it stays fast on a large collection. Needs a vulpea
+with =vulpea-schema-collection-health=.
 
 * Default widgets
 

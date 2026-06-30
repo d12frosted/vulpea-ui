@@ -1360,5 +1360,95 @@ Registers a `wine' schema requiring `name' and constraining `colour'."
         (goto-char (point-min))
         (should (re-search-forward "^- name :: Chateau Test" nil t))))))
 
+;;; Schema dashboard
+
+(ert-deftest vulpea-ui-test-schema-dashboard-sort ()
+  "Schemas needing attention sort first, unused last, then by name."
+  (let ((wine (vulpea-schema-health--create :schema 'wine :covered 5 :invalid 2))
+        (apple (vulpea-schema-health--create :schema 'apple :covered 3 :invalid 1))
+        (producer (vulpea-schema-health--create :schema 'producer :covered 5 :invalid 0))
+        (region (vulpea-schema-health--create :schema 'region :covered 0 :invalid 0)))
+    (should (equal (mapcar #'vulpea-schema-health-schema
+                           (vulpea-ui-schema-dashboard--sort
+                            (list producer region wine apple)))
+                   '(apple wine producer region)))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-status ()
+  "Status text and face reflect covered and invalid counts."
+  (let ((inv (vulpea-schema-health--create :schema 'w :covered 5 :invalid 2))
+        (ok (vulpea-schema-health--create :schema 'w :covered 5 :invalid 0))
+        (one (vulpea-schema-health--create :schema 'w :covered 1 :invalid 0))
+        (unused (vulpea-schema-health--create :schema 'w :covered 0 :invalid 0)))
+    (should (equal (vulpea-ui-schema-dashboard--status-text inv) "5 notes · 2 invalid"))
+    (should (equal (vulpea-ui-schema-dashboard--status-text ok) "5 notes · all valid"))
+    (should (equal (vulpea-ui-schema-dashboard--status-text one) "1 note · all valid"))
+    (should (equal (vulpea-ui-schema-dashboard--status-text unused) "unused"))
+    (should (eq (vulpea-ui-schema-dashboard--status-face inv)
+                'vulpea-ui-schema-health-error-face))
+    (should (eq (vulpea-ui-schema-dashboard--status-face ok)
+                'vulpea-ui-schema-health-ok-face))
+    (should (eq (vulpea-ui-schema-dashboard--status-face unused) 'shadow))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-summary ()
+  "The summary counts schemas and how many have issues."
+  (let ((a (vulpea-schema-health--create :schema 'a :covered 5 :invalid 2))
+        (b (vulpea-schema-health--create :schema 'b :covered 5 :invalid 0))
+        (c (vulpea-schema-health--create :schema 'c :covered 0 :invalid 0)))
+    (should (equal (vulpea-ui-schema-dashboard--summary-text (list a b c))
+                   "3 schemas · 1 with issues"))
+    (should (equal (vulpea-ui-schema-dashboard--summary-text (list b c))
+                   "2 schemas · all healthy"))
+    (should (equal (vulpea-ui-schema-dashboard--summary-text (list a))
+                   "1 schema · 1 with issues"))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-includes-text ()
+  "Include relationships render both ways, or nil when absent."
+  (let ((inc (vulpea-schema-health--create :schema 'wine :includes '(base-thing)))
+        (by (vulpea-schema-health--create :schema 'base :included-by '(wine producer)))
+        (both (vulpea-schema-health--create :schema 'mid :includes '(base)
+                                            :included-by '(leaf)))
+        (none (vulpea-schema-health--create :schema 'lonely)))
+    (should (equal (vulpea-ui-schema-dashboard--includes-text inc)
+                   "includes base-thing"))
+    (should (equal (vulpea-ui-schema-dashboard--includes-text by)
+                   "included by wine, producer"))
+    (should (equal (vulpea-ui-schema-dashboard--includes-text both)
+                   "includes base · included by leaf"))
+    (should-not (vulpea-ui-schema-dashboard--includes-text none))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-note-face ()
+  "A structural violation makes a note an error; value-only a warning."
+  (let ((structural (list (make-vulpea-violation :type 'missing-required)))
+        (value (list (make-vulpea-violation :type 'disallowed-value))))
+    (should (eq (vulpea-ui-schema-dashboard--note-face structural)
+                'vulpea-ui-schema-health-error-face))
+    (should (eq (vulpea-ui-schema-dashboard--note-face value)
+                'vulpea-ui-schema-health-warning-face))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-renders ()
+  "The command builds a buffer listing schemas, counts, and invalid notes."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq)))
+    (vulpea-schema-define 'wine
+      :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+      :fields '((:key "name" :required t)))
+    (cl-letf (((symbol-function 'vulpea-db-query)
+               (lambda (&rest _)
+                 (list (make-vulpea-note :id "a" :title "Good Wine"
+                                         :tags '("wine") :meta '(("name" "A")))
+                       (make-vulpea-note :id "b" :title "Bad Wine"
+                                         :tags '("wine") :meta nil)))))
+      (save-window-excursion
+        (unwind-protect
+            (progn
+              (vulpea-ui-schema-dashboard)
+              (with-current-buffer "*vulpea schema*"
+                (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+                  (should (string-match-p "Schema health" text))
+                  (should (string-match-p "wine" text))
+                  (should (string-match-p "1 invalid" text))
+                  (should (string-match-p "Bad Wine" text)))))
+          (when (get-buffer "*vulpea schema*")
+            (kill-buffer "*vulpea schema*")))))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
