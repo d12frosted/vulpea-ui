@@ -2435,7 +2435,7 @@ the schema headers above."
                 :face 'vulpea-ui-schema-health-message-face))
      (when expanded
        (vui-vstack
-        :indent 2
+        :indent (+ (or indent 0) 2)
         :spacing 0
         (seq-map (lambda (v)
                    (vulpea-ui-schema-dashboard--render-violation note v))
@@ -2525,7 +2525,10 @@ HEALTH is a list of `vulpea-schema-health', already sorted for display."
       (setq vulpea-ui-schema-dashboard--instance
             (vui-mount (vui-component 'vulpea-ui-schema-dashboard-root
                                       :health health)
-                       (buffer-name))))))
+                       (buffer-name)))
+      ;; right-aligned counts depend on the window width, so reflow on resize
+      (when (fboundp 'vui-rerender-on-resize)
+        (vui-rerender-on-resize)))))
 
 (defun vulpea-ui-schema-dashboard-refresh ()
   "Recompute schema health and re-render the dashboard."
