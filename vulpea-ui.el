@@ -74,11 +74,12 @@ One of `left', `right', `top', or `bottom'."
   :group 'vulpea-ui)
 
 (defcustom vulpea-ui-sidebar-size 0.33
-  "Width of the sidebar when `vulpea-ui-sidebar-position' is \\='left or
-\\='right. Or height of the sidebar if `vulpea-ui-sidebar-position' is
-\\='top or \\='bottom. It can be an integer, a floating-point number,
-and more. See entries 'window-height' and 'window-width' of Info
-node `(elisp) Buffer Display Action Alists'."
+  "Size of the sidebar window.
+This is the width when `vulpea-ui-sidebar-position' is \\='left or
+\\='right, or the height when it is \\='top or \\='bottom.  It can be an
+integer, a floating-point number, and more.  See entries
+`window-height' and `window-width' of Info node `(elisp) Buffer
+Display Action Alists'."
   :type '(choice (float :tag "Fraction of frame (0.0-1.0)")
                  (integer :tag "Total lines or columns")
                  (cons :tag "Body size"
