@@ -2379,15 +2379,21 @@ Fall back to `fill-column' when the dashboard is not shown in a window."
 
 (defun vulpea-ui-schema-dashboard--fix-violation (note violation)
   "Show NOTE at VIOLATION's field, fix it, then refresh the dashboard.
-Do nothing when the prompt is skipped."
-  (when-let* ((buf (vulpea-ui-schema-dashboard--visit-field note violation)))
-    (when (with-current-buffer buf
-            (vulpea-schema-fix-violation
-             violation
-             (when (> (vulpea-note-level note) 0) (vulpea-note-pos note))))
-      (with-current-buffer buf (save-buffer))
-      (vulpea-db-update-file (vulpea-note-path note))
-      (vulpea-ui-schema-dashboard-refresh))))
+Pop the note for context only while the prompt is open, then restore the
+previous window layout so you land back on the dashboard.  Do nothing
+when the prompt is skipped."
+  (let ((windows (current-window-configuration)))
+    (when-let* ((buf (vulpea-ui-schema-dashboard--visit-field note violation)))
+      (let ((fixed (with-current-buffer buf
+                     (vulpea-schema-fix-violation
+                      violation
+                      (when (> (vulpea-note-level note) 0)
+                        (vulpea-note-pos note))))))
+        (when fixed
+          (with-current-buffer buf (save-buffer))
+          (vulpea-db-update-file (vulpea-note-path note)))
+        (set-window-configuration windows)
+        (when fixed (vulpea-ui-schema-dashboard-refresh))))))
 
 (defun vulpea-ui-schema-dashboard--render-violation (note violation)
   "Render one VIOLATION row for NOTE: bullet, fix, field, and reason."
@@ -2518,25 +2524,34 @@ HEALTH is a list of `vulpea-schema-health', already sorted for display."
   :group 'vulpea-ui
   (setq-local truncate-lines t))
 
+(defconst vulpea-ui-schema-dashboard-buffer-name "*vulpea schema*"
+  "Name of the schema dashboard buffer.")
+
 (defvar-local vulpea-ui-schema-dashboard--instance nil
   "The vui instance mounted in the schema dashboard buffer.")
 
 (defun vulpea-ui-schema-dashboard--render ()
-  "Compute schema health and (re-)render the dashboard in the current buffer."
-  (let ((health (vulpea-ui-schema-dashboard--sort
-                 (vulpea-schema-collection-health))))
-    (if (and vulpea-ui-schema-dashboard--instance
-             (vui-instance-buffer vulpea-ui-schema-dashboard--instance)
-             (buffer-live-p (vui-instance-buffer
-                             vulpea-ui-schema-dashboard--instance)))
-        (vui-update vulpea-ui-schema-dashboard--instance (list :health health))
-      (setq vulpea-ui-schema-dashboard--instance
-            (vui-mount (vui-component 'vulpea-ui-schema-dashboard-root
-                                      :health health)
-                       (buffer-name)))
-      ;; right-aligned counts depend on the window width, so reflow on resize
-      (when (fboundp 'vui-rerender-on-resize)
-        (vui-rerender-on-resize)))))
+  "Compute schema health and (re-)render the dashboard buffer.
+Always targets `vulpea-ui-schema-dashboard-buffer-name', so it is safe to
+call from any buffer - in particular from a fix action while the note's
+own buffer is current, where rendering against the current buffer would
+mount a second dashboard into it."
+  (when-let* ((buf (get-buffer vulpea-ui-schema-dashboard-buffer-name)))
+    (with-current-buffer buf
+      (let ((health (vulpea-ui-schema-dashboard--sort
+                     (vulpea-schema-collection-health))))
+        (if (and vulpea-ui-schema-dashboard--instance
+                 (vui-instance-buffer vulpea-ui-schema-dashboard--instance)
+                 (buffer-live-p (vui-instance-buffer
+                                 vulpea-ui-schema-dashboard--instance)))
+            (vui-update vulpea-ui-schema-dashboard--instance (list :health health))
+          (setq vulpea-ui-schema-dashboard--instance
+                (vui-mount (vui-component 'vulpea-ui-schema-dashboard-root
+                                          :health health)
+                           vulpea-ui-schema-dashboard-buffer-name))
+          ;; right-aligned counts depend on the window width, reflow on resize
+          (when (fboundp 'vui-rerender-on-resize)
+            (vui-rerender-on-resize)))))))
 
 (defun vulpea-ui-schema-dashboard-refresh ()
   "Recompute schema health and re-render the dashboard."
@@ -2552,11 +2567,11 @@ Press \\<vulpea-ui-schema-dashboard-mode-map>\\[vulpea-ui-schema-dashboard-refre
   (interactive)
   (unless (fboundp 'vulpea-schema-collection-health)
     (user-error "This vulpea has no schema engine (need a newer vulpea)"))
-  (let ((buf (get-buffer-create "*vulpea schema*")))
+  (let ((buf (get-buffer-create vulpea-ui-schema-dashboard-buffer-name)))
     (with-current-buffer buf
       (unless (derived-mode-p 'vulpea-ui-schema-dashboard-mode)
         (vulpea-ui-schema-dashboard-mode)))
-    (pop-to-buffer buf)
+    (switch-to-buffer buf)
     (vulpea-ui-schema-dashboard--render)))
 
 (provide 'vulpea-ui)

@@ -1507,5 +1507,51 @@ Registers a `wine' schema requiring `name' and constraining `colour'."
         (goto-char (point-min))
         (should (re-search-forward "^- name :: Chateau Test" nil t))))))
 
+(ert-deftest vulpea-ui-test-schema-dashboard-refresh-targets-buffer ()
+  "Refreshing from another buffer updates the dashboard, not the caller."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq)))
+    (vulpea-schema-define 'wine
+      :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+      :fields '((:key "name" :required t)))
+    (cl-letf (((symbol-function 'vulpea-db-query)
+               (lambda (&rest _)
+                 (list (make-vulpea-note :id "b" :title "Bad Wine"
+                                         :tags '("wine") :meta nil)))))
+      (let ((other (get-buffer-create "*not-the-dashboard*")))
+        (unwind-protect
+            (save-window-excursion
+              (vulpea-ui-schema-dashboard)
+              (with-current-buffer other
+                (insert "untouched")
+                (vulpea-ui-schema-dashboard-refresh)
+                (should (equal (buffer-string) "untouched"))
+                (should-not vulpea-ui-schema-dashboard--instance))
+              (with-current-buffer vulpea-ui-schema-dashboard-buffer-name
+                (should vulpea-ui-schema-dashboard--instance)))
+          (kill-buffer other)
+          (when (get-buffer vulpea-ui-schema-dashboard-buffer-name)
+            (kill-buffer vulpea-ui-schema-dashboard-buffer-name)))))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-keeps-note-buffer ()
+  "Fixing from the dashboard leaves the note's own buffer an org buffer."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation))
+  (vulpea-ui-test--with-wine-note
+      ":PROPERTIES:\n:ID: w1\n:END:\n#+title: Wine\n#+filetags: :wine:\n\n- colour :: red\n"
+      '(("colour" "red"))
+    (cl-letf (((symbol-function 'vulpea-db-query) (lambda (&rest _) (list note)))
+              ((symbol-function 'read-string) (lambda (&rest _) "Chateau Test"))
+              ((symbol-function 'vulpea-db-update-file) #'ignore))
+      (unwind-protect
+          (save-window-excursion
+            (vulpea-ui-schema-dashboard)
+            (vulpea-ui-schema-dashboard--fix-violation
+             note (car (vulpea-schema-validate note 'wine)))
+            (should (buffer-live-p buf))
+            (with-current-buffer buf
+              (should (derived-mode-p 'org-mode))
+              (should-not vulpea-ui-schema-dashboard--instance)))
+        (when (get-buffer vulpea-ui-schema-dashboard-buffer-name)
+          (kill-buffer vulpea-ui-schema-dashboard-buffer-name))))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
