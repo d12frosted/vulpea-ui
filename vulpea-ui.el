@@ -2571,7 +2571,7 @@ Press \\<vulpea-ui-schema-dashboard-mode-map>\\[vulpea-ui-schema-dashboard-refre
     (with-current-buffer buf
       (unless (derived-mode-p 'vulpea-ui-schema-dashboard-mode)
         (vulpea-ui-schema-dashboard-mode)))
-    (pop-to-buffer buf)
+    (switch-to-buffer buf)
     (vulpea-ui-schema-dashboard--render)))
 
 (provide 'vulpea-ui)
