@@ -189,6 +189,12 @@ For quick navigation to any widget, consider [[https://github.com/d12frosted/ace
 
 * Schema dashboard
 
+#+begin_html
+<p align="center">
+  <img width="60%" src="./images/vulpea-ui-schema-dashboard.png" alt="Screenshot">
+</p>
+#+end_html
+
 Where the schema health widget answers "is /this/ note healthy?", the
 schema dashboard answers it for the whole collection. =M-x
 vulpea-ui-schema-dashboard= opens a =*vulpea schema*= buffer (not the
