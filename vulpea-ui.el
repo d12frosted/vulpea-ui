@@ -77,9 +77,9 @@ One of `left', `right', `top', or `bottom'."
   "Size of the sidebar window.
 This is the width when `vulpea-ui-sidebar-position' is \\='left or
 \\='right, or the height when it is \\='top or \\='bottom.  It can be an
-integer, a floating-point number, and more.  See entries
-`window-height' and `window-width' of Info node `(elisp) Buffer
-Display Action Alists'."
+integer, a floating-point number, and more.  See the window height and
+window width entries of Info node `(elisp) Buffer Display Action
+Alists'."
   :type '(choice (float :tag "Fraction of frame (0.0-1.0)")
                  (integer :tag "Total lines or columns")
                  (cons :tag "Body size"
