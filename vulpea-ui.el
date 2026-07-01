@@ -2395,13 +2395,22 @@ when the prompt is skipped."
         (set-window-configuration windows)
         (when fixed (vulpea-ui-schema-dashboard-refresh))))))
 
-(defun vulpea-ui-schema-dashboard--render-violation (note violation)
-  "Render one VIOLATION row for NOTE: bullet, fix, field, and reason."
-  (let ((face (if (eq (vulpea-ui--schema-violation-severity
-                       (vulpea-violation-type violation))
-                      'error)
-                  'vulpea-ui-schema-health-error-face
-                'vulpea-ui-schema-health-warning-face)))
+(defun vulpea-ui-schema-dashboard--render-violation (schema note violation index)
+  "Render one VIOLATION row for NOTE under SCHEMA: bullet, fix, field, reason.
+INDEX is the violation's position among NOTE's violations.  SCHEMA, the
+violation's field and type, and INDEX go into the fix and field buttons'
+keys, so each row keeps a stable cursor identity that is unique across
+the whole buffer: SCHEMA separates a note invalid under two schemas, and
+INDEX separates two violations that share a field and type (a multi-value
+field can fail its `:one-of' more than once).  See `vui--widget-identity'."
+  (let* ((face (if (eq (vulpea-ui--schema-violation-severity
+                        (vulpea-violation-type violation))
+                       'error)
+                   'vulpea-ui-schema-health-error-face
+                 'vulpea-ui-schema-health-warning-face))
+         (note-id (vulpea-note-id note))
+         (field (vulpea-violation-field violation))
+         (type (vulpea-violation-type violation)))
     (apply
      #'vui-hstack
      (delq
@@ -2411,86 +2420,73 @@ when the prompt is skipped."
        (when (fboundp 'vulpea-schema-fix-violation)
          (vui-button "fix"
            :face 'vulpea-ui-schema-health-action-face
+           :key (list 'fix schema note-id field type index)
            :on-click (lambda ()
                        (vulpea-ui-schema-dashboard--fix-violation note violation))
            :help-echo "Show the note and fix this violation"))
-       (vui-button (or (vulpea-violation-field violation) "")
+       (vui-button (or field "")
          :face 'vulpea-ui-schema-health-field-face
          :no-decoration t
+         :key (list 'field schema note-id field type index)
          :help-echo nil
          :on-click (lambda ()
                      (vulpea-ui-schema-dashboard--visit-field note violation)))
        (vui-text (vulpea-ui--schema-violation-reason violation note)
          :face 'vulpea-ui-schema-health-message-face))))))
 
-(vui-defcomponent vulpea-ui-schema-dashboard-note (entry indent)
+(vui-defcomponent vulpea-ui-schema-dashboard-note (entry schema)
   "One invalid note in the dashboard, collapsible to its violations.
-ENTRY is a (note . violations) pair; the note starts collapsed.  INDENT
-is the column the row sits at, so the right-aligned count lines up with
-the schema headers above."
-  :state ((expanded nil))
+ENTRY is a (note . violations) pair and SCHEMA is the owning schema,
+threaded in so this note's toggle and its violation buttons stay
+globally unique when the same note is invalid under more than one
+schema.  Built on `vui-collapsible', which owns the collapsed state and
+gives the toggle a stable cursor identity; the note starts collapsed and
+its count keeps right-aligning to the window edge via `:header-width'."
   :render
   (let* ((note (car entry))
          (violations (cdr entry))
-         (count (length violations))
-         (indicator (if expanded "▼" "▶")))
-    (vui-vstack
-     :spacing 0
-     (vui-flex
-      :width #'vulpea-ui-schema-dashboard--width
-      :indent (or indent 0)
-      :justify :space-between
-      (vui-button (format "%s %s" indicator
-                          (or (vulpea-note-title note) "(untitled)"))
-        :no-decoration t
-        :help-echo "Toggle this note's violations"
-        :on-click (lambda () (vui-set-state :expanded (not expanded))))
-      (vui-text (format "%d %s" count (if (= count 1) "issue" "issues"))
-                :face 'vulpea-ui-schema-health-message-face))
-     (when expanded
-       (vui-vstack
-        :indent (+ (or indent 0) 2)
-        :spacing 0
-        (seq-map (lambda (v)
-                   (vulpea-ui-schema-dashboard--render-violation note v))
-                 violations))))))
+         (count (length violations)))
+    (vui-collapsible
+     :title (or (vulpea-note-title note) "(untitled)")
+     :header-right (vui-text
+                    (format "%d %s" count (if (= count 1) "issue" "issues"))
+                    :face 'vulpea-ui-schema-health-message-face)
+     :header-width #'vulpea-ui-schema-dashboard--width
+     :key (list schema (vulpea-note-id note))
+     (seq-map-indexed
+      (lambda (v i)
+        (vulpea-ui-schema-dashboard--render-violation schema note v i))
+      violations))))
 
 (vui-defcomponent vulpea-ui-schema-dashboard-section (entry)
   "One schema's section in the dashboard.
-ENTRY is a `vulpea-schema-health'.  The header toggles the schema's
-invalid notes; a schema with violations starts expanded."
-  :state ((expanded :unset))
+ENTRY is a `vulpea-schema-health'.  Built on `vui-collapsible': the
+header toggles the schema's invalid notes and a schema with violations
+starts expanded.  The toggle carries the schema symbol as its key, so
+its cursor identity is stable across the ▶/▼ flip and unique in the
+buffer; the status keeps right-aligning to the window edge via
+`:header-width'."
   :render
-  (let* ((invalid (vulpea-schema-health-invalid entry))
-         (is-expanded (if (eq expanded :unset) (> invalid 0) expanded))
-         (indicator (if is-expanded "▼" "▶"))
+  (let* ((schema (vulpea-schema-health-schema entry))
+         (invalid (vulpea-schema-health-invalid entry))
          (includes (vulpea-ui-schema-dashboard--includes-text entry)))
-    (vui-vstack
-     :spacing 0
-     (vui-flex
-      :width #'vulpea-ui-schema-dashboard--width
-      :justify :space-between
-      (vui-button (format "%s %s" indicator
-                          (symbol-name (vulpea-schema-health-schema entry)))
-        :no-decoration t
-        :face 'vulpea-ui-schema-dashboard-schema-face
-        :help-echo "Toggle this schema"
-        :on-click (lambda () (vui-set-state :expanded (not is-expanded))))
-      (vui-text (vulpea-ui-schema-dashboard--status-text entry)
-                :face (vulpea-ui-schema-dashboard--status-face entry)))
-     (when is-expanded
-       (let ((note-indent 4))
-         (vui-vstack
-          :indent note-indent
-          :spacing 0
-          (when includes
-            (vui-text includes :face 'vulpea-ui-schema-health-message-face))
-          (seq-map (lambda (h)
-                     (vui-component 'vulpea-ui-schema-dashboard-note
-                                    :entry h
-                                    :indent note-indent
-                                    :key (vulpea-note-id (car h))))
-                   (vulpea-schema-health-invalid-notes entry))))))))
+    (vui-collapsible
+     :title (symbol-name schema)
+     :title-face 'vulpea-ui-schema-dashboard-schema-face
+     :header-right (vui-text (vulpea-ui-schema-dashboard--status-text entry)
+                             :face (vulpea-ui-schema-dashboard--status-face entry))
+     :header-width #'vulpea-ui-schema-dashboard--width
+     :indent 4
+     :initially-expanded (> invalid 0)
+     :key schema
+     (when includes
+       (vui-text includes :face 'vulpea-ui-schema-health-message-face))
+     (seq-map (lambda (h)
+                (vui-component 'vulpea-ui-schema-dashboard-note
+                               :entry h
+                               :schema schema
+                               :key (list schema (vulpea-note-id (car h)))))
+              (vulpea-schema-health-invalid-notes entry)))))
 
 (vui-defcomponent vulpea-ui-schema-dashboard-root (health)
   "Root of the schema dashboard.

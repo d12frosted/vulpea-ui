@@ -1553,5 +1553,183 @@ Registers a `wine' schema requiring `name' and constraining `colour'."
         (when (get-buffer vulpea-ui-schema-dashboard-buffer-name)
           (kill-buffer vulpea-ui-schema-dashboard-buffer-name))))))
 
+;;; Schema dashboard cursor identity
+
+(defun vulpea-ui-test--dashboard-health ()
+  "Build a two-schema health list that stresses key uniqueness.
+`producer' and `wine' both flag note a (Chateau) for a missing `name',
+so the same note and the same name/missing-required violation appear in
+two sections (keys must separate them by schema).  `wine' also flags
+Chateau's colour and gives note c (Rioja) two colour/disallowed-value
+violations, which share a field and type within one section (keys must
+separate them by their per-note index)."
+  (let* ((chateau (make-vulpea-note :id "a" :title "Chateau"
+                                    :path "/tmp/a.org" :level 0 :pos 1))
+         (rioja (make-vulpea-note :id "c" :title "Rioja"
+                                  :path "/tmp/c.org" :level 0 :pos 1))
+         (mk (lambda (schema field type)
+               (make-vulpea-violation :schema schema :field field :type type
+                                      :note-id "x" :note-title "x")))
+         (wine (vulpea-schema-health--create
+                :schema 'wine :covered 3 :invalid 2
+                :invalid-notes
+                (list (cons chateau
+                            (list (funcall mk 'wine "name" 'missing-required)
+                                  (funcall mk 'wine "colour" 'disallowed-value)))
+                      (cons rioja
+                            (list (funcall mk 'wine "colour" 'disallowed-value)
+                                  (funcall mk 'wine "colour" 'disallowed-value))))))
+         (producer (vulpea-schema-health--create
+                    :schema 'producer :covered 2 :invalid 1
+                    :invalid-notes
+                    (list (cons chateau
+                                (list (funcall mk 'producer "name"
+                                               'missing-required)))))))
+    (vulpea-ui-schema-dashboard--sort (list wine producer))))
+
+(defun vulpea-ui-test--expand-notes ()
+  "Press every collapsed note toggle (▶ Chateau/Rioja) until all expand.
+Bounded so a stuck render never spins forever."
+  (let ((titles '("Chateau" "Rioja"))
+        (guard 0))
+    (catch 'done
+      (while (< guard 20)
+        (setq guard (1+ guard))
+        (let ((pressed nil))
+          (catch 'again
+            (dolist (w (vui--collect-widgets))
+              (let ((tag (widget-get w :tag)))
+                (when (and tag (string-prefix-p "▶ " tag)
+                           (member (substring tag 2) titles))
+                  (widget-apply-action w)
+                  (setq pressed t)
+                  (throw 'again nil)))))
+          (unless pressed (throw 'done nil)))))))
+
+(defmacro vulpea-ui-test--with-dashboard (&rest body)
+  "Mount the dashboard root on the two-schema fixture, run BODY, clean up.
+BODY runs in the dashboard buffer with all note toggles expanded and
+`vui-render-delay' disabled so presses re-render synchronously."
+  (declare (indent 0))
+  `(let ((vui-render-delay nil)
+         (fill-column 60))
+     (unwind-protect
+         (progn
+           (vui-mount (vui-component 'vulpea-ui-schema-dashboard-root
+                                     :health (vulpea-ui-test--dashboard-health))
+                      "*vulpea schema test*")
+           (with-current-buffer "*vulpea schema test*"
+             (vulpea-ui-test--expand-notes)
+             ,@body))
+       (when (get-buffer "*vulpea schema test*")
+         (kill-buffer "*vulpea schema test*")))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-widget-keys ()
+  "Every toggle and violation button carries a stable, globally-unique key.
+Cursor restoration searches the whole buffer by a widget's `:vui-key', so
+the keys have to be unique across sections, not merely within one."
+  (vulpea-ui-test--with-dashboard
+    (let ((keys (mapcar (lambda (w) (widget-get w :vui-key))
+                        (vui--collect-widgets))))
+      ;; Section toggles keyed by their schema symbol.
+      (should (member 'wine keys))
+      (should (member 'producer keys))
+      ;; Note toggles keyed by (schema note-id); the shared note a gets a
+      ;; distinct key under each schema.
+      (should (member (list 'wine "a") keys))
+      (should (member (list 'producer "a") keys))
+      (should (member (list 'wine "c") keys))
+      ;; Field buttons keyed by (field schema note-id field type index).
+      ;; SCHEMA keeps a's name/missing-required distinct across sections.
+      (should (member (list 'field 'wine "a" "name" 'missing-required 0) keys))
+      (should (member (list 'field 'producer "a" "name" 'missing-required 0) keys))
+      (should (member (list 'field 'wine "a" "colour" 'disallowed-value 1) keys))
+      ;; Rioja's two colour/disallowed-value violations share a field and
+      ;; type; the per-note INDEX is what keeps their keys apart.
+      (should (member (list 'field 'wine "c" "colour" 'disallowed-value 0) keys))
+      (should (member (list 'field 'wine "c" "colour" 'disallowed-value 1) keys))
+      ;; Fix buttons mirror the field keys under a `fix' tag (when the fixer
+      ;; is available, which is when the button renders at all).
+      (when (fboundp 'vulpea-schema-fix-violation)
+        (should (member (list 'fix 'wine "a" "name" 'missing-required 0) keys))
+        (should (member (list 'fix 'producer "a" "name" 'missing-required 0) keys))
+        (should (member (list 'fix 'wine "a" "colour" 'disallowed-value 1) keys))
+        (should (member (list 'fix 'wine "c" "colour" 'disallowed-value 0) keys))
+        (should (member (list 'fix 'wine "c" "colour" 'disallowed-value 1) keys)))
+      ;; No interactive widget is left keyless, and no two share a key
+      ;; (this is what would fail if the multi-value index were dropped).
+      (should-not (memq nil keys))
+      (should (= (length keys) (length (seq-uniq keys #'equal)))))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-cursor-keeps-widget ()
+  "Toggling a note keeps point on that toggle, not a same-label sibling.
+Note a (Chateau) is invalid under both schemas, so two `▶ Chateau'
+toggles exist.  Expanding wine's flips its label to `▼ Chateau'; without
+a stable key, cursor restoration relocates point onto producer's
+still-collapsed `▶ Chateau'."
+  (let ((vui-render-delay nil)
+        (fill-column 60))
+    (unwind-protect
+        (progn
+          (vui-mount (vui-component 'vulpea-ui-schema-dashboard-root
+                                    :health (vulpea-ui-test--dashboard-health))
+                     "*vulpea schema test*")
+          (with-current-buffer "*vulpea schema test*"
+            (let* ((toggles (seq-filter
+                             (lambda (w) (equal (widget-get w :tag) "▶ Chateau"))
+                             (vui--collect-widgets)))
+                   (wine-chateau (car (last toggles))))
+              ;; Two collapsed Chateau toggles, one per section.
+              (should (= (length toggles) 2))
+              ;; Park point on wine's Chateau toggle and expand it.
+              (goto-char (car (vui--widget-bounds wine-chateau)))
+              (widget-apply-action wine-chateau)
+              ;; Point rides the toggle we pressed: it is now expanded
+              ;; (▼ Chateau), not producer's still-collapsed ▶ Chateau.
+              (should (equal (widget-get (widget-at (point)) :tag)
+                             "▼ Chateau")))))
+      (when (get-buffer "*vulpea schema test*")
+        (kill-buffer "*vulpea schema test*")))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-cursor-survives-refresh ()
+  "A refresh that drops rows above point keeps point on its own fix button.
+This is the g-refresh / after-fix path: `vui-update' rebuilds the whole
+buffer and rows above the target shift.  Every fix button shares the
+label `fix', so only its key keeps point from sliding onto a sibling."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation)) ; no fix buttons otherwise
+  (let ((vui-render-delay nil)
+        (fill-column 60))
+    (unwind-protect
+        (let ((instance
+               (vui-mount (vui-component 'vulpea-ui-schema-dashboard-root
+                                         :health (vulpea-ui-test--dashboard-health))
+                          "*vulpea schema test*")))
+          (with-current-buffer "*vulpea schema test*"
+            (vulpea-ui-test--expand-notes)
+            ;; Fix buttons in buffer order: producer/Chateau/name (0),
+            ;; wine/Chateau/name (1, our target), wine/Chateau/colour, then
+            ;; Rioja's two.  Locate the target by POSITION, not by its key, so
+            ;; a broken key makes this fail rather than silently skip.
+            (let* ((fixes (seq-filter
+                           (lambda (w) (equal (widget-get w :tag) "fix"))
+                           (vui--collect-widgets)))
+                   (target (nth 1 fixes))
+                   (target-key (list 'fix 'wine "a" "name" 'missing-required 0)))
+              (should (equal (widget-get target :vui-key) target-key))
+              ;; Park point on it, then refresh with producer gone so the rows
+              ;; above it disappear.
+              (goto-char (car (vui--widget-bounds target)))
+              (vui-update instance
+                          (list :health
+                                (seq-filter
+                                 (lambda (h)
+                                   (eq (vulpea-schema-health-schema h) 'wine))
+                                 (vulpea-ui-test--dashboard-health))))
+              ;; Point is still on the very same fix button, not another `fix'.
+              (should (equal (widget-get (widget-at (point)) :vui-key)
+                             target-key)))))
+      (when (get-buffer "*vulpea schema test*")
+        (kill-buffer "*vulpea schema test*")))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
