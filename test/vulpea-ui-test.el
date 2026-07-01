@@ -1731,5 +1731,170 @@ label `fix', so only its key keeps point from sliding onto a sibling."
       (when (get-buffer "*vulpea schema test*")
         (kill-buffer "*vulpea schema test*")))))
 
+;;; Schema dashboard point after a fix
+
+(defun vulpea-ui-test--fix-health (where target-issues)
+  "Wine health with a Target note among siblings; plus a trailing `zzz'.
+WHERE places Target `middle' (Alpha, Target, Gamma) or `last' (Alpha,
+Beta, Target).  Target carries TARGET-ISSUES vintage/wrong-type issues;
+0 omits it, standing in for a note whose last issue was just fixed away."
+  (let* ((note (lambda (id)
+                 (make-vulpea-note :id id :title (concat "N-" id)
+                                   :path (expand-file-name (format "/tmp/%s.org" id))
+                                   :level 0 :pos 1)))
+         (viols (lambda (n)
+                  (make-list n (make-vulpea-violation
+                                :schema 'wine :field "vintage" :type 'wrong-type
+                                :note-id "x" :note-title "x"))))
+         (entry (lambda (id n) (cons (funcall note id) (funcall viols n))))
+         (target (and (> target-issues 0) (funcall entry "target" target-issues)))
+         (notes (delq nil
+                      (pcase where
+                        ('middle (list (funcall entry "alpha" 1) target
+                                       (funcall entry "gamma" 1)))
+                        ('last (list (funcall entry "alpha" 1)
+                                     (funcall entry "beta" 1) target))))))
+    (vulpea-ui-schema-dashboard--sort
+     (list (vulpea-schema-health--create
+            :schema 'wine :covered 9 :invalid (length notes) :invalid-notes notes)
+           (vulpea-schema-health--create :schema 'zzz :covered 2 :invalid 0)))))
+
+(defun vulpea-ui-test--simulate-fix (instance where before after)
+  "Stand on Target's toggle, refresh to health (WHERE AFTER), return where
+point lands.  This mirrors `vulpea-ui-schema-dashboard--fix-violation',
+which anchors point on the fixed note's toggle before refreshing and
+leaves the landing to vui's cursor restoration."
+  (ignore before)
+  (goto-char (car (vui--widget-bounds
+                   (seq-find (lambda (w) (equal (widget-get w :vui-key)
+                                                (list 'wine "target")))
+                             (vui--collect-widgets)))))
+  (vui-update instance (list :health (vulpea-ui-test--fix-health where after)))
+  (widget-get (widget-at (point)) :vui-key))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-lands-on-next-note ()
+  "Fixing a middle note leaves point on the note that slid into its place.
+When the note is fixed away, vui's cursor restoration lands on the
+sibling now at its tree path: the next note."
+  (let ((vui-render-delay nil) (fill-column 80)
+        (bufname vulpea-ui-schema-dashboard-buffer-name))
+    (unwind-protect
+        (let ((instance (vui-mount
+                         (vui-component 'vulpea-ui-schema-dashboard-root
+                                        :health (vulpea-ui-test--fix-health 'middle 1))
+                         bufname)))
+          (with-current-buffer bufname
+            (let ((landed (vulpea-ui-test--simulate-fix instance 'middle 1 0)))
+              (should-not (= (point) (point-min)))
+              (should (equal landed (list 'wine "gamma"))))))
+      (when (get-buffer bufname) (kill-buffer bufname)))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-keeps-point-on-note ()
+  "Fixing one of a note's several issues keeps point on that note.
+The note survives the refresh with one fewer issue, so point on its
+toggle is restored to the same toggle."
+  (let ((vui-render-delay nil) (fill-column 80)
+        (bufname vulpea-ui-schema-dashboard-buffer-name))
+    (unwind-protect
+        (let ((instance (vui-mount
+                         (vui-component 'vulpea-ui-schema-dashboard-root
+                                        :health (vulpea-ui-test--fix-health 'middle 2))
+                         bufname)))
+          (with-current-buffer bufname
+            (should (equal (vulpea-ui-test--simulate-fix instance 'middle 2 1)
+                           (list 'wine "target")))))
+      (when (get-buffer bufname) (kill-buffer bufname)))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-last-note-moves-up ()
+  "Fixing the section's last note moves point up to the previous note.
+Target is wine's last note; once it is gone vui recovers to the previous
+note in the same section (a longer shared path prefix) rather than down
+into the trailing `zzz' section."
+  (let ((vui-render-delay nil) (fill-column 80)
+        (bufname vulpea-ui-schema-dashboard-buffer-name))
+    (unwind-protect
+        (let ((instance (vui-mount
+                         (vui-component 'vulpea-ui-schema-dashboard-root
+                                        :health (vulpea-ui-test--fix-health 'last 1))
+                         bufname)))
+          (with-current-buffer bufname
+            (should (equal (vulpea-ui-test--simulate-fix instance 'last 1 0)
+                           (list 'wine "beta")))))
+      (when (get-buffer bufname) (kill-buffer bufname)))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-violation-repositions-point ()
+  "The whole fix action leaves point on the previous note when it clears the
+section's last note: the dashboard anchors point on the fixed note and vui
+recovers from there.  Here point starts on the note, as after activating
+the fix button from the keyboard."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation))
+  (let ((vui-render-delay nil) (fill-column 80)
+        (bufname vulpea-ui-schema-dashboard-buffer-name)
+        (gone nil))
+    (cl-letf (((symbol-function 'vulpea-schema-collection-health)
+               (lambda (&rest _) (vulpea-ui-test--fix-health 'last (if gone 0 1))))
+              ((symbol-function 'vulpea-ui-schema-dashboard--visit-field)
+               (lambda (&rest _) (get-buffer-create "*fix-note*")))
+              ((symbol-function 'vulpea-schema-fix-violation)
+               (lambda (&rest _) (setq gone t) "2020"))
+              ((symbol-function 'save-buffer) #'ignore)
+              ((symbol-function 'vulpea-db-update-file) #'ignore))
+      (unwind-protect
+          (save-window-excursion
+            (vulpea-ui-schema-dashboard)
+            (with-current-buffer bufname
+              ;; Stand on wine's last note, then fix its only issue away.
+              (goto-char (car (vui--widget-bounds
+                               (seq-find (lambda (w) (equal (widget-get w :vui-key)
+                                                            (list 'wine "target")))
+                                         (vui--collect-widgets)))))
+              (vulpea-ui-schema-dashboard--fix-violation
+               (make-vulpea-note :id "target" :title "N-target"
+                                 :path "/tmp/target.org" :level 0 :pos 1)
+               (make-vulpea-violation :schema 'wine :field "vintage"
+                                      :type 'wrong-type :note-id "target"))
+              ;; wine's last note is gone; point moves up to the previous one.
+              (should-not (= (point) (point-min)))
+              (should (equal (widget-get (widget-at (point)) :vui-key)
+                             (list 'wine "beta")))))
+        (when (get-buffer bufname) (kill-buffer bufname))
+        (when (get-buffer "*fix-note*") (kill-buffer "*fix-note*"))))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-violation-off-widget ()
+  "Fixing still lands on the previous note when point was not on any widget.
+Clicking the fix button with the mouse does not move point, so it can sit
+on the summary line at the top when the refresh runs.  vui would keep that
+non-widget line, dropping point to the top; the dashboard anchors point on
+the fixed note first, so vui recovers to the previous note instead."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation))
+  (let ((vui-render-delay nil) (fill-column 80)
+        (bufname vulpea-ui-schema-dashboard-buffer-name)
+        (gone nil))
+    (cl-letf (((symbol-function 'vulpea-schema-collection-health)
+               (lambda (&rest _) (vulpea-ui-test--fix-health 'last (if gone 0 1))))
+              ((symbol-function 'vulpea-ui-schema-dashboard--visit-field)
+               (lambda (&rest _) (get-buffer-create "*fix-note*")))
+              ((symbol-function 'vulpea-schema-fix-violation)
+               (lambda (&rest _) (setq gone t) "2020"))
+              ((symbol-function 'save-buffer) #'ignore)
+              ((symbol-function 'vulpea-db-update-file) #'ignore))
+      (unwind-protect
+          (save-window-excursion
+            (vulpea-ui-schema-dashboard)
+            (with-current-buffer bufname
+              ;; A mouse click on the fix button does not move point: it sits
+              ;; at point-min, off any widget, when the refresh runs.
+              (goto-char (point-min))
+              (vulpea-ui-schema-dashboard--fix-violation
+               (make-vulpea-note :id "target" :title "N-target"
+                                 :path "/tmp/target.org" :level 0 :pos 1)
+               (make-vulpea-violation :schema 'wine :field "vintage"
+                                      :type 'wrong-type :note-id "target"))
+              (should-not (= (point) (point-min)))
+              (should (equal (widget-get (widget-at (point)) :vui-key)
+                             (list 'wine "beta")))))
+        (when (get-buffer bufname) (kill-buffer bufname))
+        (when (get-buffer "*fix-note*") (kill-buffer "*fix-note*"))))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
