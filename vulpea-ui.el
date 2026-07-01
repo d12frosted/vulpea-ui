@@ -2368,6 +2368,9 @@ Fall back to `fill-column' when the dashboard is not shown in a window."
   (let ((win (get-buffer-window (current-buffer) t)))
     (if win (window-body-width win) fill-column)))
 
+(defconst vulpea-ui-schema-dashboard-buffer-name "*vulpea schema*"
+  "Name of the schema dashboard buffer.")
+
 (defun vulpea-ui-schema-dashboard--visit-field (note violation)
   "Show NOTE and move point to VIOLATION's field, returning its buffer."
   (when-let* ((path (vulpea-note-path note))
@@ -2380,8 +2383,14 @@ Fall back to `fill-column' when the dashboard is not shown in a window."
 (defun vulpea-ui-schema-dashboard--fix-violation (note violation)
   "Show NOTE at VIOLATION's field, fix it, then refresh the dashboard.
 Pop the note for context only while the prompt is open, then restore the
-previous window layout so you land back on the dashboard.  Do nothing
-when the prompt is skipped."
+previous window layout so you land back on the dashboard.  Before the
+refresh, put point on NOTE's own row so vui has a widget to recover from:
+clicking the fix button with the mouse does not move point, so it may sit
+on a non-widget line (the summary at the top), and vui would faithfully
+keep it there instead of following the note.  Anchored on the note, vui's
+cursor restoration lands on the nearest surviving row once the fix clears
+the note away, the next note or the previous one when this was the
+section's last.  Do nothing when the prompt is skipped."
   (let ((windows (current-window-configuration)))
     (when-let* ((buf (vulpea-ui-schema-dashboard--visit-field note violation)))
       (let ((fixed (with-current-buffer buf
@@ -2393,7 +2402,12 @@ when the prompt is skipped."
           (with-current-buffer buf (save-buffer))
           (vulpea-db-update-file (vulpea-note-path note)))
         (set-window-configuration windows)
-        (when fixed (vulpea-ui-schema-dashboard-refresh))))))
+        (when fixed
+          (when-let* ((dashboard (get-buffer vulpea-ui-schema-dashboard-buffer-name)))
+            (with-current-buffer dashboard
+              (vui-goto-key (list (vulpea-violation-schema violation)
+                                  (vulpea-note-id note)))))
+          (vulpea-ui-schema-dashboard-refresh))))))
 
 (defun vulpea-ui-schema-dashboard--render-violation (schema note violation index)
   "Render one VIOLATION row for NOTE under SCHEMA: bullet, fix, field, reason.
@@ -2519,9 +2533,6 @@ HEALTH is a list of `vulpea-schema-health', already sorted for display."
 \\{vulpea-ui-schema-dashboard-mode-map}"
   :group 'vulpea-ui
   (setq-local truncate-lines t))
-
-(defconst vulpea-ui-schema-dashboard-buffer-name "*vulpea schema*"
-  "Name of the schema dashboard buffer.")
 
 (defvar-local vulpea-ui-schema-dashboard--instance nil
   "The vui instance mounted in the schema dashboard buffer.")
