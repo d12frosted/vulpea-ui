@@ -29,8 +29,8 @@ Visual tools for [[https://github.com/d12frosted/vulpea][vulpea]] notes: a per-n
 ** Dependencies
 
 - Emacs 29.1+
-- [[https://github.com/d12frosted/vulpea][vulpea]] 2.4.0+
-- [[https://github.com/d12frosted/vui.el][vui]] 1.0+
+- [[https://github.com/d12frosted/vulpea][vulpea]] 2.5.0+
+- [[https://github.com/d12frosted/vui.el][vui]] 1.3.0+
 - [[https://github.com/BurntSushi/ripgrep][ripgrep]] - optional, used by the [[*Unlinked mentions widget][unlinked mentions widget]]
 
 ** Using package.el (MELPA)

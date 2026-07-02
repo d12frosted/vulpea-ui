@@ -7,7 +7,7 @@
 ;; Maintainer: Boris Buliga <boris@d12frosted.io>
 ;; URL: https://github.com/d12frosted/vulpea-ui
 ;; Version: 1.1.0
-;; Package-Requires: ((emacs "29.1") (vulpea "2.4.0") (vui "1.0"))
+;; Package-Requires: ((emacs "29.1") (vulpea "2.5.0") (vui "1.3.0"))
 ;; Keywords: outlines hypermedia
 
 ;; This file is NOT part of GNU Emacs.
