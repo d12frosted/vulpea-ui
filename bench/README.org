@@ -1,0 +1,117 @@
+#+title: vulpea-ui benchmarks
+#+author: Boris Buliga
+
+Development-only benchmarks for vulpea-ui. They are excluded from the
+package and from CI lint/compile (see the =eldev-standard-excludes= line
+in [[file:../Eldev][Eldev]]), so they never ship and never gate a build. Run them by hand
+when you want to check a performance claim.
+
+* Dashboard render benchmark
+
+=vulpea-ui-bench-render.el= measures how long it takes to render the
+schema dashboard (=vui-mount= of =vulpea-ui-schema-dashboard-root=) as
+the number of invalid notes grows. It is meant for comparing *vui
+versions*: the render path is where the difference between an old,
+widget-based vui and the newer button-based one shows up.
+
+** What it measures
+
+The bench fabricates invalid wine notes entirely in memory, builds the
+collection health straight from them (=vulpea-schema-collection-health=
+on an explicit note list, then =vulpea-ui-schema-dashboard--sort=), and
+times the render. There is no DB, no ripgrep, and no file I/O; nothing
+is written to disk.
+
+Two modes are timed at each scale:
+
+- *Default (collapsed)* is the primary, robust measurement. Invalid
+  notes start collapsed, so the dashboard draws one toggle per invalid
+  note plus the per-schema headers. This is the render a user actually
+  hits when opening the dashboard on a large, messy collection, and it
+  does not depend on the internals of the note component.
+- *Expanded* forces every note open so each violation row renders too. It
+  is a heavier stress test, but it is *coupled to the current dashboard
+  note component*: the bench redefines =vulpea-ui-schema-dashboard-note=
+  in vui's registry with an =:initially-expanded t= clone of the real
+  component. If that component changes, the clone in the bench has to be
+  updated to match, or the expanded numbers stop measuring the real
+  render. The collapsed benchmark has no such coupling.
+
+Each timing does one warmup render, then reports the faster of two timed
+renders.
+
+** Running it
+
+The bench lives in =bench/=, which is excluded from the build, so put it
+on the load-path in the =eldev exec= form:
+
+#+begin_src bash
+eldev exec "(progn (add-to-list 'load-path (expand-file-name \"bench\")) \
+                   (require 'vulpea-ui-bench-render) \
+                   (vulpea-ui-bench-render-run))"
+#+end_src
+
+That runs against the vui that eldev resolves for the project (a local
+checkout if you have one, otherwise the pinned VC repo). It prints a
+small table and writes nothing.
+
+*** Comparing vui versions
+
+To pin a specific vui checkout, set =VULPEA_UI_BENCH_VUI_DIR= to that
+checkout's directory. Only that directory is put on the load-path for
+vui, so the version under test is unambiguous (the bench prints where
+=vui= and =vulpea-ui= were loaded from, so double-check the header):
+
+#+begin_src bash
+VULPEA_UI_BENCH_VUI_DIR=~/path/to/some-vui \
+  eldev exec "(progn (add-to-list 'load-path (expand-file-name \"bench\")) \
+                     (require 'vulpea-ui-bench-render) \
+                     (vulpea-ui-bench-render-run))"
+#+end_src
+
+Run it once per vui checkout you want to compare (e.g. an old vui, then
+the PR#108 branch, then the PR#109 branch) and line up the tables. The
+scales default to 2000 / 20000 / 50000 invalid notes; bind
+=vulpea-ui-bench-render-scales= before the run to change them.
+
+** Caveat: batch vs. redisplay
+
+These numbers time the *render* only: building the vui tree and writing
+its text into a buffer. Run in batch (=eldev exec=), there is no
+redisplay, no font-lock, no window. Interactive Emacs adds redisplay and
+fontification of the produced buffer on top, so the wall-clock time a
+user feels when opening the dashboard is higher than the render time
+here. The bench is a fair *relative* comparison between vui versions on
+the same machine, not an absolute latency figure.
+
+** What it works against
+
+This bench renders the *current* =vui-collapsible= dashboard, so it needs
+a vui that supports rich collapsible headers ([[https://github.com/d12frosted/vui.el/pull/108][vui #108]] and later). It is
+usable across vui versions from #108 onward: point =VULPEA_UI_BENCH_VUI_DIR=
+at each vui checkout and compare. An old, pre-#108 vui *cannot* render the
+current dashboard at all (it predates the rich-header support the dashboard
+relies on), so this bench does not compare against it.
+
+** Reference numbers
+
+Approximate figures from a run on the current dashboard and the current
+vui, at 2000 invalid notes (each with two violations), in batch:
+
+- default (collapsed): roughly 0.1-0.2 s, on the order of 60-90 us per row
+- expanded: roughly 0.2 s
+
+These are only a sanity anchor. Timings depend on the machine and its
+load, and on the exact vui version, so run the bench against your own vui
+for numbers that mean anything for your setup. The value is the relative
+comparison across vui versions on one machine, not the absolute figure.
+
+** History
+
+This bench exists because an older vui rendered the dashboard's buttons in
+O(n^2) and could crash a large dashboard. [[https://github.com/d12frosted/vui.el/pull/108][vui #108]] made the render linear
+and [[https://github.com/d12frosted/vui.el/pull/109][vui #109]] cut the per-row cost further by rendering real =button.el=
+text buttons instead of widgets. That original investigation, with the
+before/after measurements on the dashboard of the day, is recorded on
+[[https://github.com/d12frosted/vui.el/issues/107][vui #107]]. The bench here is the guard that stays behind: it exercises the
+current dashboard render and lets you compare vui versions from #108 on.
