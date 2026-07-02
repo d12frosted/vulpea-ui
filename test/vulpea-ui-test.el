@@ -1598,10 +1598,10 @@ Bounded so a stuck render never spins forever."
         (let ((pressed nil))
           (catch 'again
             (dolist (w (vui--collect-widgets))
-              (let ((tag (widget-get w :tag)))
+              (let ((tag (vui-element-get w :vui-tag)))
                 (when (and tag (string-prefix-p "▶ " tag)
                            (member (substring tag 2) titles))
-                  (widget-apply-action w)
+                  (vui-activate (car (vui--widget-bounds w)))
                   (setq pressed t)
                   (throw 'again nil)))))
           (unless pressed (throw 'done nil)))))))
@@ -1629,7 +1629,7 @@ BODY runs in the dashboard buffer with all note toggles expanded and
 Cursor restoration searches the whole buffer by a widget's `:vui-key', so
 the keys have to be unique across sections, not merely within one."
   (vulpea-ui-test--with-dashboard
-    (let ((keys (mapcar (lambda (w) (widget-get w :vui-key))
+    (let ((keys (mapcar (lambda (w) (vui-element-get w :vui-key))
                         (vui--collect-widgets))))
       ;; Section toggles keyed by their schema symbol.
       (should (member 'wine keys))
@@ -1676,17 +1676,17 @@ still-collapsed `▶ Chateau'."
                      "*vulpea schema test*")
           (with-current-buffer "*vulpea schema test*"
             (let* ((toggles (seq-filter
-                             (lambda (w) (equal (widget-get w :tag) "▶ Chateau"))
+                             (lambda (w) (equal (vui-element-get w :vui-tag) "▶ Chateau"))
                              (vui--collect-widgets)))
                    (wine-chateau (car (last toggles))))
               ;; Two collapsed Chateau toggles, one per section.
               (should (= (length toggles) 2))
               ;; Park point on wine's Chateau toggle and expand it.
               (goto-char (car (vui--widget-bounds wine-chateau)))
-              (widget-apply-action wine-chateau)
+              (vui-activate)
               ;; Point rides the toggle we pressed: it is now expanded
               ;; (▼ Chateau), not producer's still-collapsed ▶ Chateau.
-              (should (equal (widget-get (widget-at (point)) :tag)
+              (should (equal (vui-element-get (vui-element-at) :vui-tag)
                              "▼ Chateau")))))
       (when (get-buffer "*vulpea schema test*")
         (kill-buffer "*vulpea schema test*")))))
@@ -1711,11 +1711,11 @@ label `fix', so only its key keeps point from sliding onto a sibling."
             ;; Rioja's two.  Locate the target by POSITION, not by its key, so
             ;; a broken key makes this fail rather than silently skip.
             (let* ((fixes (seq-filter
-                           (lambda (w) (equal (widget-get w :tag) "fix"))
+                           (lambda (w) (equal (vui-element-get w :vui-tag) "fix"))
                            (vui--collect-widgets)))
                    (target (nth 1 fixes))
                    (target-key (list 'fix 'wine "a" "name" 'missing-required 0)))
-              (should (equal (widget-get target :vui-key) target-key))
+              (should (equal (vui-element-get target :vui-key) target-key))
               ;; Park point on it, then refresh with producer gone so the rows
               ;; above it disappear.
               (goto-char (car (vui--widget-bounds target)))
@@ -1726,7 +1726,7 @@ label `fix', so only its key keeps point from sliding onto a sibling."
                                    (eq (vulpea-schema-health-schema h) 'wine))
                                  (vulpea-ui-test--dashboard-health))))
               ;; Point is still on the very same fix button, not another `fix'.
-              (should (equal (widget-get (widget-at (point)) :vui-key)
+              (should (equal (vui-key-at)
                              target-key)))))
       (when (get-buffer "*vulpea schema test*")
         (kill-buffer "*vulpea schema test*")))))
@@ -1766,11 +1766,11 @@ which anchors point on the fixed note's toggle before refreshing and
 leaves the landing to vui's cursor restoration."
   (ignore before)
   (goto-char (car (vui--widget-bounds
-                   (seq-find (lambda (w) (equal (widget-get w :vui-key)
+                   (seq-find (lambda (w) (equal (vui-element-get w :vui-key)
                                                 (list 'wine "target")))
                              (vui--collect-widgets)))))
   (vui-update instance (list :health (vulpea-ui-test--fix-health where after)))
-  (widget-get (widget-at (point)) :vui-key))
+  (vui-key-at))
 
 (ert-deftest vulpea-ui-test-schema-dashboard-fix-lands-on-next-note ()
   "Fixing a middle note leaves point on the note that slid into its place.
@@ -1845,7 +1845,7 @@ the fix button from the keyboard."
             (with-current-buffer bufname
               ;; Stand on wine's last note, then fix its only issue away.
               (goto-char (car (vui--widget-bounds
-                               (seq-find (lambda (w) (equal (widget-get w :vui-key)
+                               (seq-find (lambda (w) (equal (vui-element-get w :vui-key)
                                                             (list 'wine "target")))
                                          (vui--collect-widgets)))))
               (vulpea-ui-schema-dashboard--fix-violation
@@ -1855,7 +1855,7 @@ the fix button from the keyboard."
                                       :type 'wrong-type :note-id "target"))
               ;; wine's last note is gone; point moves up to the previous one.
               (should-not (= (point) (point-min)))
-              (should (equal (widget-get (widget-at (point)) :vui-key)
+              (should (equal (vui-key-at)
                              (list 'wine "beta")))))
         (when (get-buffer bufname) (kill-buffer bufname))
         (when (get-buffer "*fix-note*") (kill-buffer "*fix-note*"))))))
@@ -1891,7 +1891,7 @@ the fixed note first, so vui recovers to the previous note instead."
                (make-vulpea-violation :schema 'wine :field "vintage"
                                       :type 'wrong-type :note-id "target"))
               (should-not (= (point) (point-min)))
-              (should (equal (widget-get (widget-at (point)) :vui-key)
+              (should (equal (vui-key-at)
                              (list 'wine "beta")))))
         (when (get-buffer bufname) (kill-buffer bufname))
         (when (get-buffer "*fix-note*") (kill-buffer "*fix-note*"))))))

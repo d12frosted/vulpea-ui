@@ -682,9 +682,7 @@ For use within widget components."
 (defun vulpea-ui-follow-link-at-point ()
   "Follow the link or item under point."
   (interactive)
-  (let ((widget (widget-at (point))))
-    (when widget
-      (widget-apply widget :action))))
+  (vui-activate))
 
 (defun vulpea-ui-widget-toggle-at-point ()
   "Toggle the widget collapse state at point."
