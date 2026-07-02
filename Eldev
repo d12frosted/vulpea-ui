@@ -2,6 +2,10 @@
 
 (setf eldev-project-main-file "vulpea-ui.el")
 
+;; Keep dev-only benchmarks out of lint/compile: they depend on the
+;; dashboard + vui at runtime and are not part of the package.
+(setf eldev-standard-excludes `(:or ,eldev-standard-excludes "bench/"))
+
 (eldev-use-package-archive 'gnu)
 (eldev-use-package-archive 'melpa-unstable)
 
