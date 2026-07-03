@@ -1181,9 +1181,9 @@ unlinked-mentions widget for the duration of the render."
     (vulpea-schema-define 'wine
       :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
       :fields '((:key "name" :required t)))
-    (should-not (vulpea-ui--schema-health
+    (should-not (vulpea-ui--schema-note-health
                  (make-vulpea-note :id "b" :title "B" :tags '("beer"))))
-    (should-not (vulpea-ui--schema-health nil))))
+    (should-not (vulpea-ui--schema-note-health nil))))
 
 (ert-deftest vulpea-ui-test-schema-health-conformant ()
   "A conformant note reports its schema and no violations."
@@ -1191,7 +1191,7 @@ unlinked-mentions widget for the duration of the render."
     (vulpea-schema-define 'wine
       :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
       :fields '((:key "name" :required t)))
-    (let ((h (vulpea-ui--schema-health
+    (let ((h (vulpea-ui--schema-note-health
               (make-vulpea-note :id "w" :title "W" :tags '("wine")
                                 :meta '(("name" "Chablis"))))))
       (should (equal (plist-get h :schemas) '(wine)))
@@ -1204,7 +1204,7 @@ unlinked-mentions widget for the duration of the render."
       :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
       :fields '((:key "name" :required t)
                 (:key "colour" :type symbol :one-of (red white))))
-    (let* ((h (vulpea-ui--schema-health
+    (let* ((h (vulpea-ui--schema-note-health
                (make-vulpea-note :id "w" :title "W" :tags '("wine")
                                  :meta '(("colour" "blue")))))
            (vs (plist-get h :violations)))
@@ -1895,6 +1895,686 @@ the fixed note first, so vui recovers to the previous note instead."
                              (list 'wine "beta")))))
         (when (get-buffer bufname) (kill-buffer bufname))
         (when (get-buffer "*fix-note*") (kill-buffer "*fix-note*"))))))
+
+;;; Schema - heading-level notes
+
+;; The file-level schema tests above never exercise a heading-level note
+;; (every fixture is `:level 0').  These cover the heading paths - the
+;; same class of scoping that vulpea#356/#357 fixed in vulpea itself:
+;; scope must be the heading's subtree, not the whole file.
+
+(defmacro vulpea-ui-test--with-heading-note (meta &rest body)
+  "Visit a file whose FILE-level note is not wine but which holds a wine
+HEADING; bind NOTE to that heading (level-1, META) and BUF.
+
+The fixture is shaped like vulpea#356: a `journal' file with a `* Wine
+:wine:' heading, a trailing sibling heading so the subtree end differs
+from `point-max', and a file-level meta line so a file-scoped bug is
+visible.  Registers a `wine' schema requiring `name', constraining
+`colour'."
+  (declare (indent 1))
+  `(let ((vulpea-schema--registry (make-hash-table :test 'eq))
+         (file (make-temp-file "vulpea-ui-schema-h-" nil ".org")))
+     (unwind-protect
+         (progn
+           (with-temp-file file
+             (insert ":PROPERTIES:\n:ID: file-1\n:END:\n"
+                     "#+title: Journal\n#+filetags: :journal:\n\n"
+                     "- note :: file level meta\n\n"
+                     "* Wine :wine:\n"
+                     ":PROPERTIES:\n:ID: w-head\n:END:\n"
+                     "- colour :: blue\n\n"
+                     "* Other :misc:\ntrailing text\n"))
+           (vulpea-schema-define 'wine
+             :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+             :fields '((:key "name" :required t)
+                       (:key "colour" :type symbol :one-of (red white))))
+           (let* ((buf (find-file-noselect file))
+                  (pos (with-current-buffer buf
+                         (save-excursion
+                           (goto-char (point-min))
+                           (re-search-forward "^\\* Wine")
+                           (line-beginning-position))))
+                  (note (make-vulpea-note :id "w-head" :title "Wine" :path file
+                                          :level 1 :pos pos :tags '("wine")
+                                          :meta ,meta)))
+             (unwind-protect (progn ,@body) (kill-buffer buf))))
+       (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest vulpea-ui-test-schema-note-end-heading ()
+  "A heading note's scope ends at its subtree, not `point-max'."
+  (vulpea-ui-test--with-heading-note '(("colour" "blue"))
+    (with-current-buffer buf
+      (let ((end (vulpea-ui--schema-note-end note)))
+        (should (> end (vulpea-note-pos note)))
+        (should (< end (point-max)))
+        (let ((sub (buffer-substring-no-properties (vulpea-note-pos note) end)))
+          (should (string-match-p "colour :: blue" sub))
+          (should-not (string-match-p "trailing text" sub)))))))
+
+(ert-deftest vulpea-ui-test-schema-meta-position-heading ()
+  "Metadata resolves to the heading's own meta, below its heading line."
+  (vulpea-ui-test--with-heading-note '(("colour" "blue"))
+    (with-current-buffer buf
+      (goto-char (vulpea-ui--schema-meta-position note))
+      (should (looking-at-p "^- colour ::"))
+      (should (> (point) (vulpea-note-pos note))))))
+
+(ert-deftest vulpea-ui-test-schema-violation-position-heading-missing ()
+  "A missing field on a heading lands inside its subtree, not the file top."
+  (vulpea-ui-test--with-heading-note '(("colour" "blue"))
+    (with-current-buffer buf
+      (let ((pos (vulpea-ui--schema-violation-position
+                  (vulpea-ui-test--wine-violation note "name") note)))
+        (should (>= pos (vulpea-note-pos note)))
+        (should (< pos (vulpea-ui--schema-note-end note)))
+        (goto-char pos)
+        (should (looking-at-p "^- colour ::"))))))
+
+(ert-deftest vulpea-ui-test-schema-violation-position-heading-value ()
+  "A value violation on a heading points at that heading's field line."
+  (vulpea-ui-test--with-heading-note '(("colour" "blue"))
+    (with-current-buffer buf
+      (goto-char (vulpea-ui--schema-violation-position
+                  (vulpea-ui-test--wine-violation note "colour") note))
+      (should (looking-at-p "^- colour ::"))
+      (should (> (point) (vulpea-note-pos note))))))
+
+(ert-deftest vulpea-ui-test-schema-note-end-stops-before-child ()
+  "A heading's section ends at its first child, not at the subtree end.
+Metadata under a child heading belongs to the child note, so it must be
+out of the parent's scope."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq))
+        (file (make-temp-file "vulpea-ui-nested-" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert ":PROPERTIES:\n:ID: file-1\n:END:\n#+title: J\n\n"
+                    "* Wine :wine:\n:PROPERTIES:\n:ID: w\n:END:\n"
+                    "** Child\n- foo :: bar\n"))
+          (vulpea-schema-define 'wine :predicate (lambda (_n) t)
+            :fields '((:key "name" :required t)))
+          (let* ((buf (find-file-noselect file))
+                 (wpos (with-current-buffer buf
+                         (save-excursion (goto-char (point-min))
+                                         (re-search-forward "^\\* Wine")
+                                         (line-beginning-position))))
+                 (cpos (with-current-buffer buf
+                         (save-excursion (goto-char (point-min))
+                                         (re-search-forward "^\\*\\* Child")
+                                         (line-beginning-position))))
+                 (note (make-vulpea-note :id "w" :title "Wine" :path file
+                                         :level 1 :pos wpos :tags '("wine"))))
+            (unwind-protect
+                (with-current-buffer buf
+                  ;; scope ends at the child heading, excluding its meta
+                  (should (<= (vulpea-ui--schema-note-end note) cpos))
+                  ;; a missing field lands in the parent's own section, at
+                  ;; or before the child boundary - never on the child's
+                  ;; "- foo :: bar"
+                  (let ((pos (vulpea-ui--schema-violation-position
+                              (vulpea-ui-test--wine-violation note "name") note)))
+                    (should (>= pos (vulpea-note-pos note)))
+                    (should (<= pos cpos))
+                    (goto-char pos)
+                    (should-not (looking-at-p "^- foo"))))
+              (kill-buffer buf))))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest vulpea-ui-test-schema-fix-violation-action-heading-writes ()
+  "Fixing a heading note's missing field writes INTO the heading.
+The vulpea-ui#356 analog: the field must land below the `* Wine'
+heading and above the next heading, never at the top of the file."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation))
+  (vulpea-ui-test--with-heading-note '(("colour" "blue"))
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Chateau Test"))
+              ((symbol-function 'vulpea-db-update-file) #'ignore)
+              ((symbol-function 'vulpea-ui-sidebar-refresh) #'ignore))
+      (vulpea-ui--schema-fix-violation-action
+       note (vulpea-ui-test--wine-violation note "name"))
+      (with-current-buffer buf
+        (let* ((body (buffer-string))
+               (name-at (string-match "^- name :: Chateau Test" body))
+               (wine-at (string-match "^\\* Wine" body))
+               (other-at (string-match "^\\* Other" body)))
+          (should name-at)
+          (should (> name-at wine-at))
+          (should (< name-at other-at)))))))
+
+(ert-deftest vulpea-ui-test-schema-dashboard-fix-heading-writes ()
+  "Fixing a heading note's missing field from the dashboard writes INTO it."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation))
+  (vulpea-ui-test--with-heading-note '(("colour" "blue"))
+    (cl-letf (((symbol-function 'pop-to-buffer) #'ignore)
+              ((symbol-function 'read-string) (lambda (&rest _) "Chateau Test"))
+              ((symbol-function 'vulpea-db-update-file) #'ignore)
+              ((symbol-function 'vulpea-ui-schema-dashboard-refresh) #'ignore))
+      (vulpea-ui-schema-dashboard--fix-violation
+       note (vulpea-ui-test--wine-violation note "name"))
+      (with-current-buffer buf
+        (let* ((body (buffer-string))
+               (name-at (string-match "^- name :: Chateau Test" body))
+               (wine-at (string-match "^\\* Wine" body))
+               (other-at (string-match "^\\* Other" body)))
+          (should name-at)
+          (should (> name-at wine-at))
+          (should (< name-at other-at)))))))
+
+(ert-deftest vulpea-ui-test-schema-sidebar-tracks-file-level ()
+  "The sidebar anchors on the FILE-level note, even with point on a heading.
+`vulpea-ui--get-note-from-buffer' reads the file-level ID regardless of
+point, so the whole-file widgets (outline, backlinks, stats) stay
+file-scoped.  The schema widget is no longer limited to that one note -
+it breaks the whole file down from this note's path (see the per-file
+breakdown tests) - but the sidebar's anchor is still the file note."
+  (vulpea-ui-test--with-heading-note '(("colour" "blue"))
+    (cl-letf (((symbol-function 'vulpea-db-get-by-id)
+               (lambda (id) (make-vulpea-note :id id :title id))))
+      (with-current-buffer buf
+        (goto-char (vulpea-note-pos note))
+        (forward-line 2)
+        (let ((shown (vulpea-ui--get-note-from-buffer buf)))
+          (should (equal (vulpea-note-id shown) "file-1"))
+          (should-not (equal (vulpea-note-id shown) "w-head")))))))
+
+;;; Schema - per-file breakdown (file + heading notes)
+
+;; The schema widget reports on every note in the file, not just the one
+;; anchoring the sidebar.  These cover the data layer (pure), the render
+;; (single vs multi-note), the heading-only-file anchor, and the keyed
+;; cursor identity that keeps point put across a fix.
+
+(defmacro vulpea-ui-test--with-wine-schema (&rest body)
+  "Run BODY with a fresh registry holding a `wine' schema.
+`wine' applies to notes tagged \"wine\", requires `name', constrains
+`colour' to red/white."
+  (declare (indent 0))
+  `(let ((vulpea-schema--registry (make-hash-table :test 'eq)))
+     (vulpea-schema-define 'wine
+       :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+       :fields '((:key "name" :required t)
+                 (:key "colour" :type symbol :one-of (red white))))
+     ,@body))
+
+(defun vulpea-ui-test--wnote (id title pos level &optional tags meta)
+  "A note at POS/LEVEL tagged TAGS (default wine) with META, in /tmp/wf.org."
+  (make-vulpea-note :id id :title title :path "/tmp/wf.org"
+                    :level level :pos pos
+                    :tags (or tags '("wine")) :meta meta))
+
+;; --- data layer: vulpea-ui--schema-file-health (pure) -----------------
+
+(ert-deftest vulpea-ui-test-schema-file-health-empty ()
+  "No notes yields an empty, zero-count breakdown."
+  (let ((h (vulpea-ui--schema-file-health nil)))
+    (should-not (plist-get h :entries))
+    (should-not (plist-get h :violated))
+    (should (= (plist-get h :healthy-count) 0))
+    (should (= (plist-get h :issue-count) 0))))
+
+(ert-deftest vulpea-ui-test-schema-file-health-filters-non-schema ()
+  "Notes no schema applies to are dropped from the breakdown."
+  (vulpea-ui-test--with-wine-schema
+    (let* ((wine (vulpea-ui-test--wnote "w" "Wine" 1 0 '("wine") '(("name" "A"))))
+           (misc (vulpea-ui-test--wnote "m" "Misc" 40 1 '("misc")))
+           (h (vulpea-ui--schema-file-health (list wine misc)))
+           (entries (plist-get h :entries)))
+      (should (= (length entries) 1))
+      (should (equal (vulpea-note-id (plist-get (car entries) :note)) "w")))))
+
+(ert-deftest vulpea-ui-test-schema-file-health-sorts-by-pos ()
+  "Entries are ordered by buffer position: file-level note first."
+  (vulpea-ui-test--with-wine-schema
+    (let* ((h2 (vulpea-ui-test--wnote "h2" "White" 80 1 '("wine") nil))
+           (file (vulpea-ui-test--wnote "f" "Cellar" 1 0 '("wine") nil))
+           (h1 (vulpea-ui-test--wnote "h1" "Red" 40 1 '("wine") nil))
+           ;; Deliberately out of order on input.
+           (h (vulpea-ui--schema-file-health (list h2 file h1)))
+           (titles (mapcar (lambda (e) (vulpea-note-title (plist-get e :note)))
+                           (plist-get h :entries))))
+      (should (equal titles '("Cellar" "Red" "White"))))))
+
+(ert-deftest vulpea-ui-test-schema-file-health-counts ()
+  "Violated, healthy-count and issue-count reflect the whole file."
+  (vulpea-ui-test--with-wine-schema
+    (let* ((file (vulpea-ui-test--wnote "f" "Cellar" 1 0 '("wine")
+                                        '(("name" "C") ("colour" "red"))))
+           (h1 (vulpea-ui-test--wnote "h1" "Red" 40 1 '("wine") nil)) ; miss name
+           (h2 (vulpea-ui-test--wnote "h2" "Blue" 80 1 '("wine")
+                                      '(("colour" "blue"))))          ; miss name + bad colour
+           (h (vulpea-ui--schema-file-health (list file h1 h2))))
+      (should (= (length (plist-get h :entries)) 3))
+      (should (= (length (plist-get h :violated)) 2))
+      (should (= (plist-get h :healthy-count) 1))
+      (should (= (plist-get h :issue-count) 3))
+      ;; violated stays in document order
+      (should (equal (mapcar (lambda (e) (vulpea-note-title (plist-get e :note)))
+                             (plist-get h :violated))
+                     '("Red" "Blue"))))))
+
+(ert-deftest vulpea-ui-test-schema-file-health-multi-schema-note ()
+  "A note matching two schemas reports both, with the union of violations."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq)))
+    (vulpea-schema-define 'wine
+      :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+      :fields '((:key "name" :required t)))
+    (vulpea-schema-define 'producer
+      :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+      :fields '((:key "region" :required t)))
+    (let* ((note (vulpea-ui-test--wnote "w" "Wine" 1 0 '("wine") nil))
+           (h (vulpea-ui--schema-file-health (list note)))
+           (entry (car (plist-get h :entries)))
+           (schemas (plist-get entry :schemas)))
+      (should (memq 'wine schemas))
+      (should (memq 'producer schemas))
+      (should (= (plist-get h :issue-count) 2)))))
+
+;; --- data layer: vulpea-ui--schema-file-notes (DB wrapper) ------------
+
+(ert-deftest vulpea-ui-test-schema-file-notes-query ()
+  "The file-notes wrapper passes the path to the DB and returns its rows."
+  (let ((seen nil)
+        (rows (list (vulpea-ui-test--wnote "a" "A" 1 0))))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-file-path)
+               (lambda (path &rest _) (setq seen path) rows)))
+      (should (eq (vulpea-ui--schema-file-notes "/tmp/wf.org") rows))
+      (should (equal seen "/tmp/wf.org"))
+      ;; nil path never touches the DB
+      (setq seen 'untouched)
+      (should-not (vulpea-ui--schema-file-notes nil))
+      (should (eq seen 'untouched)))))
+
+;; --- render: mount the widget over a mocked file query ----------------
+
+(vui-defcomponent vulpea-ui-test--schema-harness (note)
+  "Mount only the schema-health widget under NOTE's context."
+  :render
+  (vulpea-ui-note-provider note
+    (vui-component 'vulpea-ui-widget-schema-health)))
+
+(defmacro vulpea-ui-test--with-schema-widget (notes anchor &rest body)
+  "Mount the schema widget over NOTES (the mocked file-path query) with
+ANCHOR as the sidebar note; run BODY in the widget buffer with the mount
+INSTANCE bound.  A `wine' schema is registered."
+  (declare (indent 2))
+  `(vulpea-ui-test--with-wine-schema
+     (let ((vui-render-delay nil)
+           (bufname "*vulpea-ui schema widget test*"))
+       (cl-letf (((symbol-function 'vulpea-db-query-by-file-path)
+                  (lambda (&rest _) ,notes)))
+         (unwind-protect
+             (let ((instance
+                    (vui-mount (vui-component 'vulpea-ui-test--schema-harness
+                                              :note ,anchor)
+                               bufname)))
+               (ignore instance)
+               (with-current-buffer bufname ,@body))
+           (when (get-buffer bufname) (kill-buffer bufname)))))))
+
+(ert-deftest vulpea-ui-test-schema-widget-single-note ()
+  "One schema note in the file renders the classic per-note view."
+  (let ((note (vulpea-ui-test--wnote "w" "Wine" 1 0 '("wine")
+                                     '(("colour" "blue")))))
+    (vulpea-ui-test--with-schema-widget (list note) note
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "Schema" text))
+        (should (string-match-p "wine ·" text))       ; schema-name line
+        (should (string-match-p "name" text))          ; the missing field
+        (should-not (string-match-p "notes ·" text)))))) ; no multi summary
+
+(ert-deftest vulpea-ui-test-schema-widget-multi-breakdown ()
+  "File + violated headings render a per-note breakdown with titles."
+  (let ((file (vulpea-ui-test--wnote "f" "Cellar" 1 0 '("wine")
+                                     '(("name" "C") ("colour" "red"))))
+        (h1 (vulpea-ui-test--wnote "h1" "Red" 40 1 '("wine") nil))
+        (h2 (vulpea-ui-test--wnote "h2" "Blue" 80 1 '("wine")
+                                   '(("colour" "blue")))))
+    (vulpea-ui-test--with-schema-widget (list file h1 h2)
+        (vulpea-ui-test--wnote "f" "Cellar" 1 0 '("wine")
+                               '(("name" "C") ("colour" "red")))
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "2 notes · 3 issues" text))
+        (should (string-match-p "Red" text))            ; violated heading title
+        (should (string-match-p "Blue" text))           ; violated heading title
+        (should (string-match-p "1 note healthy" text)) ; the clean file note
+        (should-not (string-match-p "Cellar" text))))))  ; healthy note not expanded
+
+(ert-deftest vulpea-ui-test-schema-widget-all-healthy ()
+  "Several notes, all conformant, collapse to a healthy summary."
+  (let ((file (vulpea-ui-test--wnote "f" "Cellar" 1 0 '("wine")
+                                     '(("name" "C"))))
+        (h1 (vulpea-ui-test--wnote "h1" "Red" 40 1 '("wine")
+                                   '(("name" "R")))))
+    (vulpea-ui-test--with-schema-widget (list file h1)
+        (vulpea-ui-test--wnote "f" "Cellar" 1 0 '("wine") '(("name" "C")))
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "2 notes · healthy" text))
+        (should-not (string-match-p "issue" text))))))
+
+(ert-deftest vulpea-ui-test-schema-widget-hidden-when-no-schema ()
+  "A file with no schema-bearing note renders nothing."
+  (let ((note (vulpea-ui-test--wnote "m" "Misc" 1 0 '("misc"))))
+    (vulpea-ui-test--with-schema-widget (list note) note
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should-not (string-match-p "Schema" text))))))
+
+(ert-deftest vulpea-ui-test-schema-widget-heading-titles-are-buttons ()
+  "Each violated note title is a keyed jump button; violation buttons too."
+  (let ((file (vulpea-ui-test--wnote "f" "Cellar" 1 0 '("wine")
+                                     '(("name" "C") ("colour" "red"))))
+        (h1 (vulpea-ui-test--wnote "h1" "Red" 40 1 '("wine") nil))
+        (h2 (vulpea-ui-test--wnote "h2" "Blue" 80 1 '("wine") nil)))
+    (vulpea-ui-test--with-schema-widget (list file h1 h2)
+        (vulpea-ui-test--wnote "f" "Cellar" 1 0 '("wine")
+                               '(("name" "C") ("colour" "red")))
+      (let ((keys (mapcar (lambda (w) (vui-element-get w :vui-key))
+                          (vui--collect-widgets))))
+        ;; per-note title buttons
+        (should (member (list 'schema-note "h1") keys))
+        (should (member (list 'schema-note "h2") keys))
+        ;; field + fix buttons keyed by note-id / field / type / index
+        (should (member (list 'field "h1" "name" 'missing-required 0) keys))
+        (when (fboundp 'vulpea-schema-fix-violation)
+          (should (member (list 'fix "h1" "name" 'missing-required 0) keys)))
+        ;; every key unique (what a dropped note-id or index would break)
+        (let ((real (delq nil keys)))
+          (should (= (length real) (length (seq-uniq real #'equal)))))))))
+
+(ert-deftest vulpea-ui-test-schema-widget-cursor-survives-refresh ()
+  "Dropping a note above point keeps point on its own fix button.
+Only the note-id in the key keeps point from sliding to a same-labelled
+`fix' button on another note when the rows above it disappear."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation))
+  (vulpea-ui-test--with-wine-schema
+    (let* ((vui-render-delay nil)
+           (bufname "*vulpea-ui schema widget test*")
+           (anchor (vulpea-ui-test--wnote "f" "Cellar" 1 0 '("wine")
+                                          '(("name" "C") ("colour" "red"))))
+           (h1 (vulpea-ui-test--wnote "h1" "Red" 40 1 '("wine") nil))
+           (h2 (vulpea-ui-test--wnote "h2" "Blue" 80 1 '("wine") nil))
+           (current (list anchor h1 h2)))
+      (cl-letf (((symbol-function 'vulpea-db-query-by-file-path)
+                 (lambda (&rest _) current)))
+        (unwind-protect
+            (let ((instance (vui-mount
+                             (vui-component 'vulpea-ui-test--schema-harness
+                                            :note anchor)
+                             bufname)))
+              (with-current-buffer bufname
+                (let ((target (list 'fix "h2" "name" 'missing-required 0)))
+                  ;; park point on h2's fix button
+                  (goto-char (car (vui--widget-bounds
+                                   (seq-find (lambda (w)
+                                               (equal (vui-element-get w :vui-key)
+                                                      target))
+                                             (vui--collect-widgets)))))
+                  ;; h1 vanishes; rows above h2 shrink.  Bump the refresh
+                  ;; generation so the widget's memo recomputes.
+                  (setq current (list anchor h2))
+                  (cl-incf vulpea-ui--refresh-generation)
+                  (vui-update instance (list :note anchor))
+                  ;; point still on h2's fix button, not h1's old slot
+                  (should (equal (vui-key-at) target)))))
+          (when (get-buffer bufname) (kill-buffer bufname)))))))
+
+;; --- note resolution: heading-only files ------------------------------
+
+(ert-deftest vulpea-ui-test-get-note-heading-only-file ()
+  "A file with no file-level ID anchors on its earliest heading note.
+Heading-only files (IDs only on headings) still light up the sidebar."
+  (let ((file (make-temp-file "vulpea-ui-honly-" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "#+title: No File ID\n\n"
+                    "* First :wine:\n:PROPERTIES:\n:ID: h1\n:END:\n"
+                    "* Second :wine:\n:PROPERTIES:\n:ID: h2\n:END:\n"))
+          (let ((buf (find-file-noselect file)))
+            (unwind-protect
+                (cl-letf (((symbol-function 'vulpea-db-query-by-file-path)
+                           ;; return out of order to prove the sort
+                           (lambda (&rest _)
+                             (list (make-vulpea-note :id "h2" :title "Second"
+                                                     :path file :level 1 :pos 60)
+                                   (make-vulpea-note :id "h1" :title "First"
+                                                     :path file :level 1 :pos 20)))))
+                  (let ((note (vulpea-ui--get-note-from-buffer buf)))
+                    (should note)
+                    (should (equal (vulpea-note-id note) "h1")))) ; earliest by pos
+              (kill-buffer buf))))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest vulpea-ui-test-get-note-file-level-unchanged ()
+  "A file WITH a file-level ID still resolves the file note, not a heading.
+The heading-only fallback must not disturb the common case."
+  (let ((file (make-temp-file "vulpea-ui-fid-" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert ":PROPERTIES:\n:ID: file-1\n:END:\n#+title: Has ID\n\n"
+                    "* Head :wine:\n:PROPERTIES:\n:ID: h1\n:END:\n"))
+          (let ((buf (find-file-noselect file))
+                (queried nil))
+            (unwind-protect
+                (cl-letf (((symbol-function 'vulpea-db-get-by-id)
+                           (lambda (id) (make-vulpea-note :id id :title id)))
+                          ((symbol-function 'vulpea-db-query-by-file-path)
+                           (lambda (&rest _) (setq queried t) nil)))
+                  (let ((note (vulpea-ui--get-note-from-buffer buf)))
+                    (should (equal (vulpea-note-id note) "file-1"))
+                    (should-not queried)))  ; fallback never ran
+              (kill-buffer buf))))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest vulpea-ui-test-get-note-file-id-db-miss ()
+  "A file-level ID the DB has not indexed yet resolves to nil, not a heading.
+When a file carries a file-level =:ID:= but the DB lookup misses (a fresh
+or unsynced note), the resolver must return nil - never fall through to
+the heading query and mis-anchor the whole-file widgets on a heading."
+  (let ((file (make-temp-file "vulpea-ui-miss-" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert ":PROPERTIES:\n:ID: file-1\n:END:\n#+title: Fresh\n\n"
+                    "* Head :wine:\n:PROPERTIES:\n:ID: h1\n:END:\n"))
+          (let ((buf (find-file-noselect file))
+                (fell-through nil))
+            (unwind-protect
+                (cl-letf (((symbol-function 'vulpea-db-get-by-id)
+                           (lambda (_id) nil)) ; DB has not caught up
+                          ((symbol-function 'vulpea-db-query-by-file-path)
+                           (lambda (&rest _)
+                             (setq fell-through t)
+                             (list (make-vulpea-note :id "h1" :title "Head"
+                                                     :path file :level 1 :pos 40)))))
+                  (should-not (vulpea-ui--get-note-from-buffer buf))
+                  (should-not fell-through))
+              (kill-buffer buf))))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest vulpea-ui-test-schema-violation-position-multi-value ()
+  "Two disallowed values of one field resolve to their own distinct lines.
+Without value-aware search both rows would jump to the first occurrence."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq))
+        (file (make-temp-file "vulpea-ui-mv-" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert ":PROPERTIES:\n:ID: file-1\n:END:\n#+title: J\n\n"
+                    "* Wine :wine:\n:PROPERTIES:\n:ID: w\n:END:\n"
+                    "- name :: X\n- colour :: blue\n- colour :: green\n"))
+          (vulpea-schema-define 'wine :predicate (lambda (_n) t)
+            :fields '((:key "name" :required t)
+                      (:key "colour" :type symbol :one-of (red white))))
+          (let* ((buf (find-file-noselect file))
+                 (wpos (with-current-buffer buf
+                         (save-excursion (goto-char (point-min))
+                                         (re-search-forward "^\\* Wine")
+                                         (line-beginning-position))))
+                 (note (make-vulpea-note :id "w" :title "Wine" :path file
+                                         :level 1 :pos wpos :tags '("wine")
+                                         :meta '(("name" "X")
+                                                 ("colour" "blue" "green"))))
+                 (viols (seq-filter
+                         (lambda (v) (equal (vulpea-violation-field v) "colour"))
+                         (vulpea-schema-validate note 'wine)))
+                 (val (lambda (v) (format "%s" (vulpea-violation-value v))))
+                 (blue (cl-find "blue" viols :key val :test #'equal))
+                 (green (cl-find "green" viols :key val :test #'equal)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (should (= (length viols) 2))
+                  (should blue) (should green)
+                  (let ((bpos (vulpea-ui--schema-violation-position blue note))
+                        (gpos (vulpea-ui--schema-violation-position green note)))
+                    (should-not (= bpos gpos))
+                    (goto-char bpos) (should (looking-at-p "^- colour :: blue"))
+                    (goto-char gpos) (should (looking-at-p "^- colour :: green"))))
+              (kill-buffer buf))))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest vulpea-ui-test-schema-heading-at-point-max ()
+  "A heading that ends the file: scope runs to `point-max', positions hold."
+  (let ((vulpea-schema--registry (make-hash-table :test 'eq))
+        (file (make-temp-file "vulpea-ui-eof-" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert ":PROPERTIES:\n:ID: file-1\n:END:\n#+title: J\n\n"
+                    "* Wine :wine:\n:PROPERTIES:\n:ID: w\n:END:\n- colour :: blue\n"))
+          (vulpea-schema-define 'wine :predicate (lambda (_n) t)
+            :fields '((:key "name" :required t)
+                      (:key "colour" :type symbol :one-of (red white))))
+          (let* ((buf (find-file-noselect file))
+                 (wpos (with-current-buffer buf
+                         (save-excursion (goto-char (point-min))
+                                         (re-search-forward "^\\* Wine")
+                                         (line-beginning-position))))
+                 (note (make-vulpea-note :id "w" :title "Wine" :path file
+                                         :level 1 :pos wpos :tags '("wine")
+                                         :meta '(("colour" "blue")))))
+            (unwind-protect
+                (with-current-buffer buf
+                  (should (= (vulpea-ui--schema-note-end note) (point-max)))
+                  (goto-char (vulpea-ui--schema-violation-position
+                              (vulpea-ui-test--wine-violation note "colour") note))
+                  (should (looking-at-p "^- colour :: blue"))
+                  (let ((pos (vulpea-ui--schema-violation-position
+                              (vulpea-ui-test--wine-violation note "name") note)))
+                    (should (>= pos wpos))
+                    (should (<= pos (point-max)))))
+              (kill-buffer buf))))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest vulpea-ui-test-schema-widget-duplicate-titles ()
+  "Two headings sharing a title stay distinct: keys are the note id, not title."
+  (let ((h1 (vulpea-ui-test--wnote "id-1" "Red Wine" 40 1 '("wine") nil))
+        (h2 (vulpea-ui-test--wnote "id-2" "Red Wine" 80 1 '("wine") nil)))
+    (vulpea-ui-test--with-schema-widget (list h1 h2)
+        (vulpea-ui-test--wnote "id-1" "Red Wine" 40 1 '("wine") nil)
+      (let ((keys (mapcar (lambda (w) (vui-element-get w :vui-key))
+                          (vui--collect-widgets))))
+        (should (member (list 'schema-note "id-1") keys))
+        (should (member (list 'schema-note "id-2") keys))
+        (let ((real (delq nil keys)))
+          (should (= (length real) (length (seq-uniq real #'equal)))))))))
+
+;;; Schema - real database, end to end (the vulpea#356 shape)
+
+;; The tests above mock the file-path query.  These index a real journal
+;; file with two wine headings into a real temp DB and drive the whole
+;; chain - query, health, render, fix - the way it runs in anger.
+
+(defmacro vulpea-ui-test--with-indexed-wine-file (&rest body)
+  "Index a journal file with two wine headings into a real temp DB.
+Binds FILE (path), FILE-ID, RED-ID, WHITE-ID.  The file-level note is a
+`journal' (matching no schema); `Red Wine' is invalid (missing name, bad
+colour); `White Wine' is valid.  A `wine' schema is registered and the
+DB is live for BODY, then everything is torn down."
+  (declare (indent 0))
+  `(let* ((vulpea-schema--registry (make-hash-table :test 'eq))
+          (temp-db (make-temp-file "vulpea-ui-idb-" nil ".db"))
+          (vulpea-db-location temp-db)
+          (vulpea-db--connection nil)
+          (file (make-temp-file "vulpea-ui-idb-" nil ".org"))
+          (file-id "11111111-1111-1111-1111-111111111111")
+          (red-id "22222222-2222-2222-2222-222222222222")
+          (white-id "33333333-3333-3333-3333-333333333333"))
+     (unwind-protect
+         (progn
+           (vulpea-schema-define 'wine
+             :predicate (lambda (n) (member "wine" (vulpea-note-tags n)))
+             :fields '((:key "name" :required t)
+                       (:key "colour" :type symbol :one-of (red white))))
+           (with-temp-file file
+             (insert (format ":PROPERTIES:\n:ID: %s\n:END:\n" file-id)
+                     "#+title: Journal\n#+filetags: :journal:\n\n"
+                     (format "* Red Wine :wine:\n:PROPERTIES:\n:ID: %s\n:END:\n"
+                             red-id)
+                     "- colour :: blue\n\n"
+                     (format "* White Wine :wine:\n:PROPERTIES:\n:ID: %s\n:END:\n"
+                             white-id)
+                     "- name :: Chablis\n- colour :: white\n"))
+           (vulpea-db)
+           (cl-letf (((symbol-function 'lwarn) #'ignore))
+             (vulpea-db-update-file file))
+           ,@body)
+       (when vulpea-db--connection (vulpea-db-close))
+       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
+       (when (file-exists-p temp-db) (delete-file temp-db))
+       (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest vulpea-ui-test-schema-real-db-indexes-headings ()
+  "The DB indexes the file-level note and both heading-level notes."
+  (vulpea-ui-test--with-indexed-wine-file
+    (let ((notes (vulpea-db-query-by-file-path file)))
+      (should (= (length notes) 3))
+      (should (equal (sort (mapcar #'vulpea-note-level notes) #'<) '(0 1 1))))))
+
+(ert-deftest vulpea-ui-test-schema-real-db-widget-breakdown ()
+  "Anchored on the journal note, the widget surfaces the heading issues.
+The journal file-level note matches no schema, yet the widget - keyed on
+its file, not on that one note - still reports the wine headings.  This
+is the vulpea#356 shape driven through the real widget and DB."
+  (vulpea-ui-test--with-indexed-wine-file
+    (let ((anchor (vulpea-db-get-by-id file-id))
+          (vui-render-delay nil)
+          (bufname "*vulpea-ui schema widget test*"))
+      (should (equal (vulpea-note-tags anchor) '("journal")))
+      (unwind-protect
+          (progn
+            (vui-mount (vui-component 'vulpea-ui-test--schema-harness :note anchor)
+                       bufname)
+            (with-current-buffer bufname
+              (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+                (should (string-match-p "1 note · 2 issues" text))
+                (should (string-match-p "Red Wine" text))
+                (should (string-match-p "1 note healthy" text))
+                (should-not (string-match-p "White Wine" text)))))
+        (when (get-buffer bufname) (kill-buffer bufname))))))
+
+(ert-deftest vulpea-ui-test-schema-real-db-fix-into-heading ()
+  "Fixing from the widget writes the field into the heading's subtree.
+Real DB, real fixer: `- name ::' must land between the two headings."
+  (skip-unless (fboundp 'vulpea-schema-fix-violation))
+  (vulpea-ui-test--with-indexed-wine-file
+    (let* ((red (vulpea-db-get-by-id red-id))
+           (viol (cl-find "name" (vulpea-schema-validate red 'wine)
+                          :key #'vulpea-violation-field :test #'equal)))
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Chateau Real"))
+                ((symbol-function 'vulpea-ui-sidebar-refresh) #'ignore)
+                ((symbol-function 'lwarn) #'ignore))
+        (find-file-noselect file)
+        (vulpea-ui--schema-fix-violation-action red viol))
+      (with-current-buffer (find-file-noselect file)
+        (revert-buffer t t)
+        (let* ((body (buffer-string))
+               (name-at (string-match "^- name :: Chateau Real" body))
+               (red-at (string-match "^\\* Red Wine" body))
+               (white-at (string-match "^\\* White Wine" body)))
+          (should name-at)
+          (should (> name-at red-at))
+          (should (< name-at white-at)))))))
 
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
