@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 * Unreleased
 
+** Added
+
+- The schema health widget now reports on *every* note in the file, not just the one the sidebar is anchored on. A heading with its own =:ID:=, tags and metadata is a note in its own right, so a file often holds several: the file-level note plus one per heading. With a single schema-bearing note the widget reads exactly as before; with several it breaks the file down per note - the file-level note first, then headings in document order - each violated note under its title (a keyed button that jumps to it), with a trailing =✓ N notes healthy= count for the clean ones. Each violation's =fix= button writes back into *that* note (a heading's field lands in the heading's subtree, via vulpea's =bound= argument), and the buttons carry note-scoped keys so point rides its row across a fix even when notes above it clear. The widget hides only when no note in the file bears a schema.
+
+- Support files whose IDs live only on headings. =vulpea-ui--get-note-from-buffer= now falls back to the earliest heading-level note (by position) when a file has no file-level =:ID:=, so heading-only files anchor the sidebar and light up the schema widget instead of showing nothing. Files that do have a file-level ID are unaffected.
+
+- =vulpea-ui-schema-health-note-face= (inherits =bold=) for a note's title in the per-file breakdown.
+
+** Fixed
+
+- The schema health widget and the schema dashboard now jump to the right line for a field that fails =:one-of= on more than one of its values. =vulpea-ui--schema-violation-position= matched on the field name alone, so each disallowed value of a multi-value field jumped to that field's *first* line; it now prefers the line carrying the offending value, falling back to the first occurrence when the value cannot be matched textually.
+
+- The schema health widget was blind to heading-level notes: it always resolved the file-level note and reported only that one's schema, so a violation on an =:execution:= heading inside a schema-less =:journal:= file was invisible in the sidebar (the counterpart, on the authoring side, to [[https://github.com/d12frosted/vulpea/issues/356][vulpea#356]]). It now looks at the whole file, so heading violations surface regardless of where point sits. The lower-level scoping helpers (=vulpea-ui--schema-note-end=, =-meta-position=, =-violation-position=) were already heading-aware but had never been exercised on a heading; they now have coverage.
+
 * v1.2.0 (2026-07-02)
 
 ** Added
