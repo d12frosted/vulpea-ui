@@ -478,16 +478,38 @@ shrank the note window (see vulpea-ui#36)."
   "The vulpea note currently being displayed in the sidebar.")
 
 (defun vulpea-ui--get-note-from-buffer (buffer)
-  "Get the vulpea note from BUFFER, or nil if not a vulpea note."
+  "Get the vulpea note anchoring the sidebar for BUFFER, or nil.
+Prefers the file-level note, regardless of the entry at point, so the
+whole-file widgets (outline, backlinks, stats) stay file-scoped.  When
+the file has no file-level ID - a heading-only file, where only
+headings carry IDs - falls back to the earliest heading-level note by
+position, so the sidebar still anchors on the file and the schema widget
+can report on its headings.  The fallback only runs when there is no
+file-level ID, so files with one behave exactly as before."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (when (derived-mode-p 'org-mode)
-        ;; Always get the file-level ID, not the entry at point
-        (save-excursion
-          (goto-char (point-min))
-          (let ((id (org-entry-get nil "ID")))
-            (when id
-              (vulpea-db-get-by-id id))))))))
+        (let ((file-id (save-excursion
+                         (goto-char (point-min))
+                         (org-entry-get nil "ID"))))
+          (if file-id
+              ;; File has a file-level ID: resolve it, or nil when the DB
+              ;; has not caught up yet.  Never fall through to a heading -
+              ;; that would anchor the whole-file widgets on a heading and
+              ;; break their file scope.  The gate is the ID's presence in
+              ;; the buffer, not whether the DB currently resolves it.
+              (vulpea-db-get-by-id file-id)
+            ;; Heading-only file (IDs only on headings): anchor on the
+            ;; earliest note by position, so the sidebar still lights up.
+            ;; Match vulpea's stored path convention (`expand-file-name',
+            ;; not a truename) so the query finds the file's notes.
+            (when (and buffer-file-name
+                       (fboundp 'vulpea-db-query-by-file-path))
+              (car (sort (vulpea-db-query-by-file-path
+                          (expand-file-name buffer-file-name))
+                         (lambda (a b)
+                           (< (or (vulpea-note-pos a) 0)
+                              (or (vulpea-note-pos b) 0))))))))))))
 
 (defun vulpea-ui--should-update-p (note)
   "Return non-nil if sidebar should update for NOTE."
@@ -2092,15 +2114,53 @@ Set it to a nerd-font or all-the-icons glyph if you prefer."
   "Face for the quick-fix action buttons of schema violations."
   :group 'vulpea-ui)
 
-(defun vulpea-ui--schema-health (note)
-  "Return schema health for NOTE, or nil when no schema is applicable.
-The result is a plist with :schemas (the applicable schema names) and
-:violations (a list of `vulpea-violation' across them).  Returns nil
-when NOTE matches no registered schema, so the widget hides entirely."
+(defface vulpea-ui-schema-health-note-face
+  '((t :inherit bold))
+  "Face for a note's title in the schema widget's per-file breakdown."
+  :group 'vulpea-ui)
+
+(declare-function vulpea-db-query-by-file-path "vulpea-db-query"
+                  (file-path &optional level))
+
+(defun vulpea-ui--schema-note-health (note)
+  "Return schema health for a single NOTE, or nil when no schema applies.
+The result is a plist with :note, :schemas (the applicable schema names)
+and :violations (a list of `vulpea-violation' across them)."
   (when note
     (when-let* ((schemas (vulpea-schema-applicable note)))
-      (list :schemas schemas
+      (list :note note
+            :schemas schemas
             :violations (vulpea-schema-note-violations note)))))
+
+(defun vulpea-ui--schema-file-notes (path)
+  "Return every indexed note in the file at PATH, or nil.
+Includes the file-level note and all heading-level notes, so the schema
+widget can report on the whole file rather than only the note at point."
+  (when (and path (fboundp 'vulpea-db-query-by-file-path))
+    (vulpea-db-query-by-file-path path)))
+
+(defun vulpea-ui--schema-file-health (notes)
+  "Return a schema-health breakdown for NOTES (all notes in one file).
+Keeps only the notes a schema applies to, ordered by buffer position so
+the file-level note comes first and headings follow in document order.
+The result is a plist:
+  :entries       per-note health plists (see `vulpea-ui--schema-note-health')
+  :violated      the entries that carry violations, in the same order
+  :healthy-count number of schema-matching notes with no violations
+  :issue-count   total number of violations across every entry"
+  (let* ((entries (delq nil (mapcar #'vulpea-ui--schema-note-health notes)))
+         (entries (sort entries
+                        (lambda (a b)
+                          (< (or (vulpea-note-pos (plist-get a :note)) 0)
+                             (or (vulpea-note-pos (plist-get b :note)) 0)))))
+         (violated (seq-filter (lambda (e) (plist-get e :violations)) entries))
+         (issue-count (apply #'+ (mapcar (lambda (e)
+                                           (length (plist-get e :violations)))
+                                         entries))))
+    (list :entries entries
+          :violated violated
+          :healthy-count (- (length entries) (length violated))
+          :issue-count issue-count)))
 
 (defun vulpea-ui--schema-violation-severity (type)
   "Return `error' or `warning' for a violation of TYPE.
@@ -2147,12 +2207,25 @@ type - otherwise falls back to the violation's own message."
       (_ (or (vulpea-violation-message violation) "invalid")))))
 
 (defun vulpea-ui--schema-note-end (note)
-  "Return the end of NOTE's scope in the current buffer.
-Assumes the current buffer is NOTE's file."
+  "Return the end of NOTE's own section in the current buffer.
+This bounds where NOTE's metadata and fields can live: the file's zeroth
+section for a file-level note (up to its first heading), or a heading's
+body up to its first child heading otherwise.  It deliberately stops
+before any child heading - meta there belongs to the child note, not to
+NOTE - so a missing-field target never leaks into a sub-heading.  Assumes
+the current buffer is NOTE's file."
   (save-excursion
     (goto-char (vulpea-note-pos note))
     (if (> (vulpea-note-level note) 0)
-        (progn (org-end-of-subtree t t) (point))
+        ;; A heading's own section runs to its first child heading, or to
+        ;; the end of its subtree when it has none.  Every heading inside
+        ;; the subtree is necessarily a child (deeper), so the first one
+        ;; found after the heading line marks the section end.
+        (let ((subtree-end (save-excursion (org-end-of-subtree t t) (point))))
+          (forward-line 1)
+          (if (re-search-forward "^\\*+ " subtree-end t)
+              (line-beginning-position)
+            subtree-end))
       (if (re-search-forward "^\\*+ " nil t)
           (line-beginning-position)
         (point-max)))))
@@ -2184,32 +2257,53 @@ Returns NOTE's own position when its file is not visited."
 
 (defun vulpea-ui--schema-violation-position (violation note)
   "Return a position in NOTE's file to jump to for VIOLATION.
-A value violation goes to the offending field's line; a missing field
-\(which has no line yet) goes to NOTE's metadata block, or to where
-metadata would be inserted."
+A value violation goes to the offending field's line - the line carrying
+the violated value when VIOLATION names one, so distinct occurrences of a
+multi-value field resolve to distinct lines instead of all landing on the
+first.  A missing field (which has no line yet) goes to NOTE's metadata
+block, or to where metadata would be inserted."
   (let* ((path (vulpea-note-path note))
          (buf (and path (find-buffer-visiting path)))
-         (field (vulpea-violation-field violation)))
+         (field (vulpea-violation-field violation))
+         (value (vulpea-violation-value violation)))
     (or
      (when (and buf field
                 (not (eq (vulpea-violation-type violation) 'missing-required)))
        (with-current-buffer buf
          (save-excursion
-           (goto-char (vulpea-note-pos note))
-           (let ((end (vulpea-ui--schema-note-end note)))
-             (when (re-search-forward
-                    (format "^[ \t]*-[ \t]+%s[ \t]+::" (regexp-quote field))
-                    end t)
-               (line-beginning-position))))))
+           (let* ((start (vulpea-note-pos note))
+                  (end (vulpea-ui--schema-note-end note))
+                  (field-re (format "^[ \t]*-[ \t]+%s[ \t]+::"
+                                    (regexp-quote field))))
+             (or
+              ;; Prefer the line carrying the offending value.
+              (when value
+                (goto-char start)
+                (and (re-search-forward
+                      (format "%s[ \t]*%s[ \t]*$" field-re
+                              (regexp-quote (format "%s" value)))
+                      end t)
+                     (line-beginning-position)))
+              ;; Fall back to the first occurrence of the field.
+              (progn
+                (goto-char start)
+                (when (re-search-forward field-re end t)
+                  (line-beginning-position))))))))
      (vulpea-ui--schema-meta-position note))))
 
 (declare-function vulpea-schema-fix-violation "vulpea" (violation &optional bound))
 
 (defun vulpea-ui--schema-fix-violation-action (note violation)
   "Fix VIOLATION on NOTE, persist the change, and refresh the sidebar.
-Prompt for a corrected value, write it to NOTE's file, re-index, and
-re-render.  Do nothing when the prompt is skipped or NOTE's buffer is
-not visiting a file."
+Prompt for a corrected value, write it to NOTE's file (scoped to NOTE's
+heading when it is one), re-index, and re-render.  In the per-file
+breakdown, anchor point on NOTE's title row before refreshing, so when
+the fixed violation clears vui's cursor restoration lands on that note
+\(when it keeps other issues) or the nearest surviving row (when its
+title vanishes with its last issue).  In single-note mode there is no
+title row to anchor; vui's own tree recovery keeps point on a surviving
+row there.  Do nothing when the prompt is skipped or NOTE's buffer is not
+visiting a file."
   (when-let* ((path (vulpea-note-path note))
               (buf (find-buffer-visiting path)))
     (when (with-current-buffer buf
@@ -2219,17 +2313,25 @@ not visiting a file."
                (vulpea-note-pos note))))
       (with-current-buffer buf (save-buffer))
       (vulpea-db-update-file path)
+      (when (fboundp 'vui-goto-key)
+        (vui-goto-key (list 'schema-note (vulpea-note-id note))))
       (vulpea-ui-sidebar-refresh))))
 
-(defun vulpea-ui--render-schema-violation (violation note)
-  "Render one row for VIOLATION on NOTE.
+(defun vulpea-ui--render-schema-violation (violation note index)
+  "Render one row for VIOLATION on NOTE at per-note INDEX.
 The row is a severity bullet, an optional quick-fix button, the field
-name as a button that jumps to the offending field, and a terse reason."
-  (let ((face (if (eq (vulpea-ui--schema-violation-severity
-                       (vulpea-violation-type violation))
-                      'error)
-                  'vulpea-ui-schema-health-error-face
-                'vulpea-ui-schema-health-warning-face)))
+name as a button that jumps to the offending field, and a terse reason.
+NOTE's id, the field, the type and INDEX key the buttons so point keeps
+its identity across a re-render even when several notes - or several
+same-field violations on one note - are listed together."
+  (let* ((face (if (eq (vulpea-ui--schema-violation-severity
+                        (vulpea-violation-type violation))
+                       'error)
+                   'vulpea-ui-schema-health-error-face
+                 'vulpea-ui-schema-health-warning-face))
+         (note-id (vulpea-note-id note))
+         (field (vulpea-violation-field violation))
+         (type (vulpea-violation-type violation)))
     (apply
      #'vui-hstack
      (delq
@@ -2239,12 +2341,14 @@ name as a button that jumps to the offending field, and a terse reason."
        (when (fboundp 'vulpea-schema-fix-violation)
          (vui-button "fix"
            :face 'vulpea-ui-schema-health-action-face
+           :key (list 'fix note-id field type index)
            :on-click (lambda ()
                        (vulpea-ui--schema-fix-violation-action note violation))
            :help-echo "Prompt for a value and fix this violation"))
-       (vui-button (or (vulpea-violation-field violation) "")
+       (vui-button (or field "")
          :face 'vulpea-ui-schema-health-field-face
          :no-decoration t
+         :key (list 'field note-id field type index)
          :help-echo nil
          :on-click (lambda ()
                      (vulpea-ui--jump-to-position
@@ -2253,42 +2357,99 @@ name as a button that jumps to the offending field, and a terse reason."
        (vui-text (vulpea-ui--schema-violation-reason violation note)
          :face 'vulpea-ui-schema-health-message-face))))))
 
+(defun vulpea-ui--render-schema-note-entry (entry show-title)
+  "Render one violated ENTRY (a per-note health plist).
+With SHOW-TITLE, prepend the note's title as a jump button, so the
+per-file breakdown names which note each block belongs to; without it,
+render just the schema line and violation rows (the single-note look).
+The title button is keyed on the note so point can be anchored to it."
+  (let* ((note (plist-get entry :note))
+         (schemas (plist-get entry :schemas))
+         (violations (plist-get entry :violations))
+         (names (mapconcat #'symbol-name schemas ", "))
+         (summary (vui-text
+                   (format "%s %s · %d issue%s"
+                           vulpea-ui-schema-health-issue-glyph names
+                           (length violations)
+                           (if (= (length violations) 1) "" "s"))
+                   :face 'vulpea-ui-schema-health-error-face))
+         (rows (seq-map-indexed
+                (lambda (v i) (vulpea-ui--render-schema-violation v note i))
+                violations))
+         (title (when show-title
+                  (vui-button (or (vulpea-note-title note) "(untitled)")
+                    :face 'vulpea-ui-schema-health-note-face
+                    :no-decoration t
+                    :key (list 'schema-note (vulpea-note-id note))
+                    :help-echo "Jump to this note"
+                    :on-click (lambda () (vulpea-ui-visit-note note))))))
+    (apply #'vui-vstack (delq nil (append (list title summary) rows)))))
+
 (vui-defcomponent vulpea-ui-widget-schema-health ()
-  "Widget flagging schema violations for the current note.
-Renders a healthy status when the note conforms, or the list of
-violations when it does not.  The widget hides entirely when no schema
-applies (see its :predicate at registration)."
+  "Widget reporting schema health for every note in the current file.
+Covers the file-level note and each heading-level note a schema applies
+to.  With a single such note it reads as one status line plus its
+violations; with several it breaks the file down per note - the
+file-level note first, then headings in document order - each under its
+own title, so a violation on a heading is never hidden behind the
+file-level note.  A trailing count summarises any notes that are clean.
+Renders nothing when the file carries no schema-bearing note."
   :render
   (let ((note (use-vulpea-ui-note)))
     (when note
-      (let* ((note-buf (when (vulpea-note-path note)
-                         (find-buffer-visiting (vulpea-note-path note))))
+      (let* ((path (vulpea-note-path note))
+             (note-buf (when path (find-buffer-visiting path)))
              (tick (when note-buf (buffer-modified-tick note-buf)))
-             (health (vui-use-memo (note tick)
-                       (vulpea-ui--schema-health note))))
-        (when health
-          (let* ((schemas (plist-get health :schemas))
-                 (violations (plist-get health :violations))
-                 (names (mapconcat #'symbol-name schemas ", ")))
+             (health (vui-use-memo (note tick vulpea-ui--refresh-generation)
+                       (vulpea-ui--schema-file-health
+                        (vulpea-ui--schema-file-notes path))))
+             (entries (plist-get health :entries)))
+        (when entries
+          (let* ((violated (plist-get health :violated))
+                 (issue-count (plist-get health :issue-count))
+                 (healthy-count (plist-get health :healthy-count))
+                 (multi (> (length entries) 1)))
             (vui-component 'vulpea-ui-widget
               :title "Schema"
-              :count (when violations (length violations))
+              :count (when (> issue-count 0) issue-count)
               :children
               (lambda ()
-                (if violations
-                    (apply #'vui-vstack
-                           (vui-text (format "%s %s · %d issue%s"
-                                             vulpea-ui-schema-health-issue-glyph
-                                             names
-                                             (length violations)
-                                             (if (= (length violations) 1) "" "s"))
-                             :face 'vulpea-ui-schema-health-error-face)
-                           (seq-map (lambda (v)
-                                      (vulpea-ui--render-schema-violation v note))
-                                    violations))
-                  (vui-text (format "%s %s · healthy"
-                                    vulpea-ui-schema-health-ok-glyph names)
-                    :face 'vulpea-ui-schema-health-ok-face))))))))))
+                (cond
+                 ;; Nothing wrong anywhere in the file.
+                 ((null violated)
+                  (vui-text
+                   (if multi
+                       (format "%s %d notes · healthy"
+                               vulpea-ui-schema-health-ok-glyph (length entries))
+                     (format "%s %s · healthy"
+                             vulpea-ui-schema-health-ok-glyph
+                             (mapconcat #'symbol-name
+                                        (plist-get (car entries) :schemas) ", ")))
+                   :face 'vulpea-ui-schema-health-ok-face))
+                 ;; Single schema-bearing note: the classic per-note view.
+                 ((not multi)
+                  (vulpea-ui--render-schema-note-entry (car violated) nil))
+                 ;; Several notes in the file: break it down per note.
+                 (t
+                  (apply
+                   #'vui-vstack
+                   :spacing 1
+                   (vui-text
+                    (format "%s %d note%s · %d issue%s"
+                            vulpea-ui-schema-health-issue-glyph
+                            (length violated) (if (= (length violated) 1) "" "s")
+                            issue-count (if (= issue-count 1) "" "s"))
+                    :face 'vulpea-ui-schema-health-error-face)
+                   (append
+                    (seq-map (lambda (e)
+                               (vulpea-ui--render-schema-note-entry e t))
+                             violated)
+                    (when (> healthy-count 0)
+                      (list (vui-muted
+                             (format "%s %d note%s healthy"
+                                     vulpea-ui-schema-health-ok-glyph
+                                     healthy-count
+                                     (if (= healthy-count 1) "" "s")))))))))))))))))
 
 
 ;;; Built-in widget registration
@@ -2299,10 +2460,15 @@ applies (see its :predicate at registration)."
 
 (vulpea-ui-register-widget 'schema-health
                            :component 'vulpea-ui-widget-schema-health
-                           :predicate (lambda (note)
-                                        (and note
-                                             (fboundp 'vulpea-schema-note-violations)
-                                             (vulpea-schema-applicable note)))
+                           ;; Feature-detect only; the widget itself hides
+                           ;; (renders nothing) when the file has no
+                           ;; schema-bearing note, and it looks at every note
+                           ;; in the file, not just the one anchoring the
+                           ;; sidebar - so an applicable-schema check on that
+                           ;; one note would wrongly hide it for heading-only
+                           ;; schema files.
+                           :predicate (lambda (_note)
+                                        (fboundp 'vulpea-schema-note-violations))
                            :order 150)
 
 (vulpea-ui-register-widget 'outline

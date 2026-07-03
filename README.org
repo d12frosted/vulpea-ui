@@ -94,12 +94,25 @@ To automatically open the sidebar when entering org-mode buffers:
 
 ** Schema health widget
 
-Flags how the current note measures up to the vulpea schema(s) that apply
-to it: nothing unless a schema applies, a green =healthy= line when the
-note conforms, or the list of violations otherwise. Each violation has a
-=fix= button that prompts for a corrected value and writes it back, and
-the field name jumps to it in the note. Needs a vulpea with the schema
-validation engine (the =fix= button needs =vulpea-schema-fix-violation=).
+Flags how the notes in the current file measure up to the vulpea
+schema(s) that apply to them - and that means every note in the file, the
+file-level note *and* each heading-level note, not just whichever one the
+sidebar is anchored on. A file can hold several notes (a heading with its
+own =:ID:=, tags and metadata is a note in its own right), so an
+=:execution:= heading's missing field is no longer hidden behind a
+schema-less =:journal:= file.
+
+With a single schema-bearing note it reads as one status: nothing unless
+a schema applies, a green =healthy= line when it conforms, or its
+violations otherwise. With several it breaks the file down per note - the
+file-level note first, then headings in document order - each violated
+note under its title (click it to jump there), with a trailing count for
+any notes that are clean. Each violation has a =fix= button that prompts
+for a corrected value and writes it back *into that note* (a heading's
+field lands in the heading, not the top of the file), and the field name
+jumps to it. Files whose IDs live only on headings work too. Needs a
+vulpea with the schema validation engine (the =fix= button needs
+=vulpea-schema-fix-violation=).
 
 #+begin_src emacs-lisp
 ;; Glyphs - portable text by default; swap in nerd-font / all-the-icons
@@ -110,9 +123,9 @@ validation engine (the =fix= button needs =vulpea-schema-fix-violation=).
 #+end_src
 
 The faces =vulpea-ui-schema-health-ok-face= / =-error-face= /
-=-warning-face= / =-field-face= / =-message-face= / =-action-face= inherit
-=success= / =error= / =warning= / =bold= / =shadow= / =link=, so they
-follow your theme.
+=-warning-face= / =-field-face= / =-message-face= / =-action-face= /
+=-note-face= inherit =success= / =error= / =warning= / =bold= / =shadow= /
+=link= / =bold=, so they follow your theme.
 
 ** Backlinks widget
 
