@@ -245,21 +245,36 @@ Shows character count, word count, and link count for the current note.
 
 ** Schema health widget
 
+Validates every note in the current file against its vulpea schema(s),
+covering both the file-level note and each heading-level note (a heading
+with its own =:ID:=, tags and metadata is a note in its own right).
+
+A single schema-bearing note reads as one status - a green =healthy= line
+when it conforms, or its violations otherwise, each a severity-coloured
+bullet (red for structural problems, amber for value problems), the field
+and a terse reason:
+
 #+begin_html
 <p align="center">
-  <img width="50%" src="./images/vulpea-ui-widget-schema-health.png" alt="Screenshot">
+  <img width="50%" src="./images/vulpea-ui-widget-schema-health.png" alt="File-level validation">
 </p>
 #+end_html
 
-Flags how the notes in the current file measure up to their vulpea
-schema(s) - every note in the file, the file-level note and each
-heading-level note. A single schema-bearing note shows a green =healthy=
-line or its violations (a severity-coloured bullet - red for structural
-problems, amber for value problems - the field, and a terse reason);
-several are broken down per note, each under its title, so a heading's
-violation is never hidden behind a schema-less =:journal:= file. Each
-violation's =fix= button prompts for a value and writes it back into that
-note. Shown only when some note in the file bears a schema.
+When the file holds several notes it breaks them down per note - the
+file-level note first, then headings in document order - so a violation
+on a heading is never hidden behind a schema-less =:journal:= file:
+
+#+begin_html
+<p align="center">
+  <img width="90%" src="./images/vulpea-ui-widget-schema-health-headings.png" alt="Heading-level validation">
+</p>
+#+end_html
+
+Every violation has a =fix= button that prompts for a value and writes it
+back into that note (a heading's field lands in the heading, not the top
+of the file), and the field name jumps to it. Files whose IDs live only
+on headings work too. Shown only when some note in the file bears a
+schema.
 
 ** Outline widget
 
