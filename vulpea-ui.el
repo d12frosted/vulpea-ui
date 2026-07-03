@@ -2123,7 +2123,7 @@ Set it to a nerd-font or all-the-icons glyph if you prefer."
                   (file-path &optional level))
 
 (defun vulpea-ui--schema-note-health (note)
-  "Return schema health for a single NOTE, or nil when no schema applies.
+  "Return schema health for a single NOTE, or nil when no schema is applicable.
 The result is a plist with :note, :schemas (the applicable schema names)
 and :violations (a list of `vulpea-violation' across them)."
   (when note

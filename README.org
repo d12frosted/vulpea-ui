@@ -251,13 +251,15 @@ Shows character count, word count, and link count for the current note.
 </p>
 #+end_html
 
-Flags how the current note measures up to the vulpea schema(s) that apply
-to it: a green =healthy= line when it conforms, or its violations
-otherwise - a severity-coloured bullet (red for structural problems,
-amber for value problems), the field, and a terse reason. Each violation
-has a =fix= button that prompts for a corrected value and writes it back,
-and the field name jumps to it in the note. Shown only when a schema
-applies.
+Flags how the notes in the current file measure up to their vulpea
+schema(s) - every note in the file, the file-level note and each
+heading-level note. A single schema-bearing note shows a green =healthy=
+line or its violations (a severity-coloured bullet - red for structural
+problems, amber for value problems - the field, and a terse reason);
+several are broken down per note, each under its title, so a heading's
+violation is never hidden behind a schema-less =:journal:= file. Each
+violation's =fix= button prompts for a value and writes it back into that
+note. Shown only when some note in the file bears a schema.
 
 ** Outline widget
 
