@@ -3414,6 +3414,38 @@ single-note edits apply without asking."
         (vulpea-ui-collection--on-displayed nil)
         (should (= refreshed 1))))))
 
+(ert-deftest vulpea-ui-collection-test-save-captures-user-widths ()
+  "Saving a view pins hand-resized widths, auto widths stay fluid."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title tags)))
+    (setq tabulated-list-entries
+          (vulpea-ui-collection--entries
+           notes '(title tags) vulpea-ui-collection--marked nil))
+    (vulpea-ui-collection--update-format '(title tags))
+    (should (equal (vulpea-ui-collection--columns-with-current-widths)
+                   '(title tags)))
+    (let ((auto (nth 1 (aref tabulated-list-format 1))))
+      (setf (nth 1 (aref tabulated-list-format 1)) (+ auto 7))
+      (should (equal (vulpea-ui-collection--columns-with-current-widths)
+                     (list (list 'title :width (+ auto 7)) 'tags))))))
+
+(ert-deftest vulpea-ui-collection-test-rename-and-delete-view ()
+  "Saved views can be renamed and deleted."
+  (let ((vulpea-ui-collection-views
+         (list (cons "wines" '(:filter (:tags-all ("wine")))))))
+    (cl-letf (((symbol-function 'vulpea-ui-collection--persist-views)
+               #'ignore))
+      (vulpea-ui-collection-rename-view "wines" "cellar")
+      (should-not (assoc "wines" vulpea-ui-collection-views))
+      (should (equal (plist-get (cdr (assoc "cellar"
+                                            vulpea-ui-collection-views))
+                                :filter)
+                     '(:tags-all ("wine"))))
+      (vulpea-ui-collection-delete-view "cellar")
+      (should-not vulpea-ui-collection-views))))
+
 (ert-deftest vulpea-ui-collection-test-bookmark ()
   "Bookmarks capture the view (minus the predicate) and restore it."
   (vulpea-ui-test--with-collection-buffer
