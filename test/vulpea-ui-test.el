@@ -3588,6 +3588,32 @@ single-note edits apply without asking."
       (should (string-match-p "wines" description))
       (should (string-match-p "#wine" description)))))
 
+(ert-deftest vulpea-ui-collection-test-grouping ()
+  "Rows group by a column's value, with counts; none ungroups."
+  (skip-unless (boundp 'tabulated-list-groups))
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :tags '("wine"))
+            (vulpea-ui-test--collection-note
+             :id "n2" :title "Two" :tags '("beer"))
+            (vulpea-ui-test--collection-note :id "n3" :title "Three"))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title tags)))
+    (cl-letf (((symbol-function 'vulpea-ui-collection--query)
+               (lambda (_filter) notes)))
+      (vulpea-ui-collection-group-by "Tags")
+      (should (equal (mapcar #'car tabulated-list-groups)
+                     '("(none) (1)" "beer (1)" "wine (1)")))
+      (should (string-match-p "beer (1)" (buffer-string)))
+      ;; marks still work on grouped rows
+      (goto-char (point-min))
+      (forward-line 1)
+      (when (tabulated-list-get-id)
+        (vulpea-ui-collection-mark)
+        (should (= 1 (hash-table-count vulpea-ui-collection--marked))))
+      (vulpea-ui-collection-group-by "none")
+      (should-not tabulated-list-groups))))
+
 (ert-deftest vulpea-ui-collection-test-stale-refresh ()
   "Hidden collection buffers go stale on DB changes and refresh on display."
   (vulpea-ui-test--with-collection-buffer

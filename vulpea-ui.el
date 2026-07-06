@@ -3198,6 +3198,7 @@ the note id."
     (define-key map (kbd "y") #'vulpea-ui-collection-copy-links)
     (define-key map (kbd "Y") #'vulpea-ui-collection-export)
     (define-key map (kbd "Z") #'vulpea-ui-collection-undo)
+    (define-key map (kbd "G") #'vulpea-ui-collection-group-by)
     (define-key map (kbd "w") #'vulpea-ui-collection-save-view)
     (define-key map (kbd "g") #'vulpea-ui-collection-refresh)
     (define-key map (kbd "/") vulpea-ui-collection-filter-map)
@@ -3320,6 +3321,64 @@ width is kept for as long as the column stays."
     (setq tabulated-list-format computed)
     (tabulated-list-init-header)))
 
+(defun vulpea-ui-collection--group-entries (entries group-by)
+  "Group ENTRIES by the GROUP-BY column's value of their notes.
+Returns the `tabulated-list-groups' format: a list of
+\(NAME ENTRY...) with groups sorted by name and counts in the name.
+Rows with an empty value land in \"(none)\"."
+  (let ((col (vulpea-ui-collection--normalize-column group-by))
+        (groups (make-hash-table :test 'equal))
+        names)
+    (dolist (entry entries)
+      (let* ((note (gethash (car entry) vulpea-ui-collection--note-table))
+             (value (if note
+                        (vulpea-ui-collection--column-raw-value
+                         note col vulpea-ui-collection--ctx)
+                      ""))
+             (name (if (string-empty-p value) "(none)" value)))
+        (unless (gethash name groups) (push name names))
+        (puthash name (cons entry (gethash name groups)) groups)))
+    (mapcar (lambda (name)
+              (let ((group (nreverse (gethash name groups))))
+                (cons (format "%s (%d)" name (length group)) group)))
+            (sort names #'string<))))
+
+(defun vulpea-ui-collection-group-by (column)
+  "Group the view's rows by COLUMN; \"none\" ungroups.
+COLUMN is a column name (interactively, with completion over the
+view's columns) or a column descriptor from Lisp.  Grouping needs the
+tabulated-list support that arrived in Emacs 30."
+  (interactive
+   (list (progn
+           (unless (boundp 'tabulated-list-groups)
+             (user-error "Grouping needs Emacs 30 or newer"))
+           (completing-read
+            "Group by (none to ungroup): "
+            (cons "none"
+                  (mapcar (lambda (col)
+                            (plist-get
+                             (vulpea-ui-collection--normalize-column col)
+                             :name))
+                          (vulpea-ui-collection--view-columns)))
+            nil t))))
+  (unless (boundp 'tabulated-list-groups)
+    (user-error "Grouping needs Emacs 30 or newer"))
+  (let ((descriptor
+         (cond ((and (stringp column) (equal column "none")) nil)
+               ((stringp column)
+                (seq-find (lambda (col)
+                            (equal (plist-get
+                                    (vulpea-ui-collection--normalize-column
+                                     col)
+                                    :name)
+                                   column))
+                          (vulpea-ui-collection--view-columns)))
+               (t column))))
+    (setq vulpea-ui-collection--view
+          (plist-put (copy-sequence vulpea-ui-collection--view)
+                     :group-by descriptor))
+    (vulpea-ui-collection-refresh)))
+
 (defun vulpea-ui-collection-refresh ()
   "Re-query the view and re-render, keeping the marked set and point."
   (interactive)
@@ -3338,6 +3397,12 @@ width is kept for as long as the column stays."
           (vulpea-ui-collection--entries
            notes columns vulpea-ui-collection--marked ctx))
     (vulpea-ui-collection--update-format columns)
+    (when (boundp 'tabulated-list-groups)
+      (setq tabulated-list-groups
+            (when-let* ((group-by (plist-get vulpea-ui-collection--view
+                                             :group-by)))
+              (vulpea-ui-collection--group-entries
+               tabulated-list-entries group-by))))
     (tabulated-list-print t)
     (when (null tabulated-list-entries)
       (let ((inhibit-read-only t))
@@ -4206,7 +4271,9 @@ persisted via Customize."
     (user-error "Not in a collection buffer"))
   (let ((spec (list :filter (plist-get vulpea-ui-collection--view :filter)
                     :columns (vulpea-ui-collection--columns-with-current-widths)
-                    :sort tabulated-list-sort-key)))
+                    :sort tabulated-list-sort-key
+                    :group-by (plist-get vulpea-ui-collection--view
+                                         :group-by))))
     (setf (alist-get name vulpea-ui-collection-views nil nil #'equal) spec)
     (vulpea-ui-collection--persist-views)
     (message "Saved view %s" name)))
@@ -4252,7 +4319,9 @@ bookmark file; the current sort order and columns are captured."
                               (vulpea-ui-collection--current-filter)
                               :predicate nil)
                      :columns (vulpea-ui-collection--view-columns)
-                     :sort tabulated-list-sort-key))
+                     :sort tabulated-list-sort-key
+                     :group-by (plist-get vulpea-ui-collection--view
+                                          :group-by)))
       (handler . vulpea-ui-collection-bookmark-handler))))
 
 ;;;###autoload
@@ -4310,6 +4379,7 @@ bookmark file; the current sort order and columns are captured."
     ("RET" "visit note" vulpea-ui-collection-visit)
     ("o" "visit other window" vulpea-ui-collection-visit-other-window)
     ("C-o" "preview" vulpea-ui-collection-preview :transient t)
+    ("G" "group by column" vulpea-ui-collection-group-by :transient t)
     ("g" "refresh" vulpea-ui-collection-refresh)
     ("w" "save view" vulpea-ui-collection-save-view)
     ("v" "switch view" vulpea-ui-collection)
