@@ -3163,6 +3163,7 @@ the note id."
     (define-key map (kbd "x") #'vulpea-ui-collection-apply)
     (define-key map (kbd "y") #'vulpea-ui-collection-copy-links)
     (define-key map (kbd "Y") #'vulpea-ui-collection-export)
+    (define-key map (kbd "Z") #'vulpea-ui-collection-undo)
     (define-key map (kbd "w") #'vulpea-ui-collection-save-view)
     (define-key map (kbd "g") #'vulpea-ui-collection-refresh)
     (define-key map (kbd "/") vulpea-ui-collection-filter-map)
@@ -3675,6 +3676,42 @@ the notes in the view; free input is treated as a meta key."
 
 ;;;; Actions
 
+(defvar-local vulpea-ui-collection--undo nil
+  "One-level undo record for the last batch edit in this buffer.
+A plist with :description and :thunk; the thunk replays the inverse
+operation.  Deleting files clears it - that cannot be undone.")
+
+(defun vulpea-ui-collection--record-undo (description thunk)
+  "Remember THUNK as the inverse of the batch edit DESCRIPTION."
+  (setq vulpea-ui-collection--undo
+        (list :description description :thunk thunk)))
+
+(defun vulpea-ui-collection-undo ()
+  "Undo the last batch edit made from this buffer (one level)."
+  (interactive)
+  (let ((record vulpea-ui-collection--undo))
+    (unless record (user-error "Nothing to undo"))
+    (setq vulpea-ui-collection--undo nil)
+    (funcall (plist-get record :thunk))
+    (message "Undone: %s" (plist-get record :description))
+    (vulpea-ui-collection-refresh)))
+
+(defun vulpea-ui-collection--meta-restore-thunk (notes key)
+  "Return a thunk restoring KEY's current values on NOTES.
+Captured before a batch edit; calling the thunk writes the old
+values back, removing the key where it was absent."
+  (let ((old (mapcar (lambda (note)
+                       (cons note (vulpea-note-meta-get-list note key)))
+                     notes)))
+    (lambda ()
+      (dolist (item old)
+        (let ((note (car item))
+              (values (cdr item)))
+          (if values
+              (vulpea-meta-set note key
+                               (if (cdr values) values (car values)))
+            (vulpea-meta-remove note key)))))))
+
 (defun vulpea-ui-collection--require (fn)
   "Signal a user error unless FN is available in this vulpea."
   (unless (fboundp fn)
@@ -3721,7 +3758,14 @@ surprise; a single-note edit applies without asking."
     (let ((tag (vulpea-ui-collection--read-tag "Add tag: ")))
       (when (vulpea-ui-collection--confirm
              (format "Add tag %s to" tag) notes)
-        (vulpea-tags-batch-add notes tag)
+        (let ((affected (seq-remove
+                         (lambda (note) (member tag (vulpea-note-tags note)))
+                         notes)))
+          (vulpea-tags-batch-add notes tag)
+          (vulpea-ui-collection--record-undo
+           (format "add tag %s" tag)
+           (lambda ()
+             (when affected (vulpea-tags-batch-remove affected tag)))))
         (message "Added tag %s to %d note(s)" tag (length notes))
         (vulpea-ui-collection-refresh)))))
 
@@ -3738,7 +3782,14 @@ surprise; a single-note edit applies without asking."
                                   notes)))))
       (when (vulpea-ui-collection--confirm
              (format "Remove tag %s from" tag) notes)
-        (vulpea-tags-batch-remove notes tag)
+        (let ((affected (seq-filter
+                         (lambda (note) (member tag (vulpea-note-tags note)))
+                         notes)))
+          (vulpea-tags-batch-remove notes tag)
+          (vulpea-ui-collection--record-undo
+           (format "remove tag %s" tag)
+           (lambda ()
+             (when affected (vulpea-tags-batch-add affected tag)))))
         (message "Removed tag %s from %d note(s)" tag (length notes))
         (vulpea-ui-collection-refresh)))))
 
@@ -3752,7 +3803,10 @@ surprise; a single-note edit applies without asking."
            (value (read-string (format "Value for %s: " key))))
       (when (vulpea-ui-collection--confirm
              (format "Set %s to %s on" key value) notes)
-        (vulpea-meta-batch-set notes key value)
+        (let ((undo (vulpea-ui-collection--meta-restore-thunk notes key)))
+          (vulpea-meta-batch-set notes key value)
+          (vulpea-ui-collection--record-undo
+           (format "set %s" key) undo))
         (message "Set %s on %d note(s)" key (length notes))
         (vulpea-ui-collection-refresh)))))
 
@@ -3776,7 +3830,11 @@ Uses the column name that `tabulated-list-mode' stamps on every cell."
                    (ignore-errors (vulpea-db-query-tags)))
                  nil nil
                  (string-join (vulpea-note-tags note) ","))))
-      (apply #'vulpea-tags-set note tags)
+      (let ((old (vulpea-note-tags note)))
+        (apply #'vulpea-tags-set note tags)
+        (vulpea-ui-collection--record-undo
+         (format "tags of %s" (vulpea-note-title note))
+         (lambda () (apply #'vulpea-tags-set note old))))
       (message "Set tags of %s" (vulpea-note-title note))
       (vulpea-ui-collection-refresh))))
 
@@ -3792,7 +3850,10 @@ The prompt is prefilled from the note at point."
                     (vulpea-note-meta-get note key)))))
       (when (vulpea-ui-collection--confirm
              (format "Set %s to %s on" key value) notes)
-        (vulpea-meta-batch-set notes key value)
+        (let ((undo (vulpea-ui-collection--meta-restore-thunk notes key)))
+          (vulpea-meta-batch-set notes key value)
+          (vulpea-ui-collection--record-undo
+           (format "set %s" key) undo))
         (message "Set %s on %d note(s)" key (length notes))
         (vulpea-ui-collection-refresh)))))
 
@@ -3818,7 +3879,10 @@ Anywhere else, fall back to `vulpea-ui-collection-set-meta'."
     (let ((key (vulpea-ui-collection--read-meta-key "Remove meta key: ")))
       (when (vulpea-ui-collection--confirm
              (format "Remove %s from" key) notes)
-        (vulpea-meta-batch-remove notes key)
+        (let ((undo (vulpea-ui-collection--meta-restore-thunk notes key)))
+          (vulpea-meta-batch-remove notes key)
+          (vulpea-ui-collection--record-undo
+           (format "remove %s" key) undo))
         (message "Removed %s from %d note(s)" key (length notes))
         (vulpea-ui-collection-refresh)))))
 
@@ -3847,6 +3911,7 @@ up on its own."
           (when (fboundp 'vulpea-db-sync--handle-removed-file)
             (vulpea-db-sync--handle-removed-file path))
           (remhash (vulpea-note-id note) vulpea-ui-collection--marked)))
+      (setq vulpea-ui-collection--undo nil)
       (when (> skipped 0)
         (message "Skipped %d heading-level note(s)" skipped))
       (vulpea-ui-collection-refresh))))
@@ -4125,7 +4190,8 @@ bookmark file; the current sort order and columns are captured."
     ("D" "delete" vulpea-ui-collection-delete)
     ("x" "apply function" vulpea-ui-collection-apply)
     ("y" "copy as links" vulpea-ui-collection-copy-links)
-    ("Y" "export to org buffer" vulpea-ui-collection-export)]
+    ("Y" "export to org buffer" vulpea-ui-collection-export)
+    ("Z" "undo last edit" vulpea-ui-collection-undo)]
    ["View"
     ("RET" "visit note" vulpea-ui-collection-visit)
     ("o" "visit other window" vulpea-ui-collection-visit-other-window)
