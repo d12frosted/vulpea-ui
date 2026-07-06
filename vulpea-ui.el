@@ -3049,9 +3049,12 @@ the faces from `vulpea-ui-collection--column-faces'."
   (let ((value (vulpea-ui-collection--column-raw-value note col ctx))
         (face (alist-get (plist-get col :id)
                          vulpea-ui-collection--column-faces)))
-    (if (and face (not (string-empty-p value)))
-        (propertize value 'face face)
-      value)))
+    (if (string-empty-p value)
+        value
+      ;; the full value survives truncation as a tooltip
+      (apply #'propertize value
+             'help-echo (substring-no-properties value)
+             (when face (list 'face face))))))
 
 (defun vulpea-ui-collection--column-raw-value (note col ctx)
   "Return the unfaced display string for NOTE in normalized column COL.
@@ -3196,6 +3199,7 @@ the note id."
     (define-key map (kbd "RET") #'vulpea-ui-collection-visit)
     (define-key map (kbd "o") #'vulpea-ui-collection-visit-other-window)
     (define-key map (kbd "C-o") #'vulpea-ui-collection-preview)
+    (define-key map (kbd "SPC") #'vulpea-ui-collection-show-row)
     (define-key map (kbd "m") #'vulpea-ui-collection-mark)
     (define-key map (kbd "u") #'vulpea-ui-collection-unmark)
     (define-key map (kbd "U") #'vulpea-ui-collection-unmark-all)
@@ -4247,6 +4251,22 @@ The marked notes, or the whole view when nothing is marked."
              (fboundp 'org-fold-show-context))
     (org-fold-show-context)))
 
+(defun vulpea-ui-collection-show-row ()
+  "Show every column's full, untruncated value for the note at point."
+  (interactive)
+  (let ((note (vulpea-ui-collection--note-at-point)))
+    (unless note (user-error "No note at point"))
+    (message "%s"
+             (mapconcat
+              (lambda (col)
+                (format "%s: %s"
+                        (plist-get col :name)
+                        (vulpea-ui-collection--column-raw-value
+                         note col vulpea-ui-collection--ctx)))
+              (mapcar #'vulpea-ui-collection--normalize-column
+                      (vulpea-ui-collection--view-columns))
+              "\n"))))
+
 (defun vulpea-ui-collection-visit ()
   "Visit the note at point."
   (interactive)
@@ -4499,6 +4519,7 @@ bookmark file; the current sort order and columns are captured."
     ("RET" "visit note" vulpea-ui-collection-visit)
     ("o" "visit other window" vulpea-ui-collection-visit-other-window)
     ("C-o" "preview" vulpea-ui-collection-preview :transient t)
+    ("SPC" "show full row" vulpea-ui-collection-show-row)
     ("G" "group by column" vulpea-ui-collection-group-by :transient t)
     ("g" "refresh" vulpea-ui-collection-refresh)
     ("w" "save view" vulpea-ui-collection-save-view)
