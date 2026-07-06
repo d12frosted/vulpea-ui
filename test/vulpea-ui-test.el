@@ -3132,6 +3132,24 @@ MODIFIED-AT map to the corresponding `vulpea-note' slots."
     (should (string-match-p "1 marked"
                             (vulpea-ui-collection--mode-line-info)))))
 
+(ert-deftest vulpea-ui-collection-test-menu ()
+  "The menu is a transient prefix reachable on ?."
+  (should (fboundp 'vulpea-ui-collection-menu))
+  (should (eq (lookup-key vulpea-ui-collection-mode-map (kbd "?"))
+              #'vulpea-ui-collection-menu)))
+
+(ert-deftest vulpea-ui-collection-test-menu-description ()
+  "The menu headline names the view and describes the filter."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (should (string-match-p "none (all notes)"
+                            (vulpea-ui-collection--menu-description)))
+    (setq vulpea-ui-collection--view
+          '(:name "wines" :columns (title) :filter (:tags-all ("wine"))))
+    (let ((description (vulpea-ui-collection--menu-description)))
+      (should (string-match-p "wines" description))
+      (should (string-match-p "#wine" description)))))
+
 (ert-deftest vulpea-ui-collection-test-format-time ()
   "Time formatting handles nil, time values, and strings."
   (should (equal (vulpea-ui-collection--format-time nil) ""))

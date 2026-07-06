@@ -54,6 +54,7 @@
 (require 'map)
 (require 'subr-x)
 (require 'org-element)
+(require 'transient)
 (require 'vulpea)
 (require 'vui)
 (require 'vui-components)
@@ -3044,6 +3045,7 @@ the note id."
     (define-key map (kbd "g") #'vulpea-ui-collection-refresh)
     (define-key map (kbd "/") vulpea-ui-collection-filter-map)
     (define-key map (kbd "c") vulpea-ui-collection-column-map)
+    (define-key map (kbd "?") #'vulpea-ui-collection-menu)
     map)
   "Keymap for `vulpea-ui-collection-mode'.")
 
@@ -3532,6 +3534,49 @@ The filter, columns and current sort order are stored in
         (customize-save-variable 'vulpea-ui-collection-views
                                  vulpea-ui-collection-views)
       (error (message "View %s saved for this session only" name)))))
+
+(defun vulpea-ui-collection--menu-description ()
+  "Return the headline of the collection menu."
+  (let ((filter (vulpea-ui-collection--filter-description
+                 (plist-get vulpea-ui-collection--view :filter))))
+    (format "%s - %d notes - filter: %s"
+            (or (plist-get vulpea-ui-collection--view :name) "collection")
+            (length tabulated-list-entries)
+            (if (string-empty-p filter) "none (all notes)" filter))))
+
+(transient-define-prefix vulpea-ui-collection-menu ()
+  "Every collection view command in one place."
+  [:description vulpea-ui-collection--menu-description
+   ["Filter"
+    ("t" "require tag" vulpea-ui-collection-filter-by-tag :transient t)
+    ("T" "exclude tag" vulpea-ui-collection-filter-exclude-tag
+     :transient t)
+    ("s" "title regexp" vulpea-ui-collection-filter-by-title :transient t)
+    ("d" "directory" vulpea-ui-collection-filter-by-directory
+     :transient t)
+    ("M" "meta field" vulpea-ui-collection-filter-by-meta :transient t)
+    ("l" "level" vulpea-ui-collection-filter-by-level :transient t)
+    ("C" "clear" vulpea-ui-collection-filter-clear :transient t)]
+   ["Columns"
+    ("a" "add" vulpea-ui-collection-add-column :transient t)
+    ("k" "remove" vulpea-ui-collection-remove-column :transient t)]
+   ["Marks"
+    ("m" "mark" vulpea-ui-collection-mark :transient t)
+    ("u" "unmark" vulpea-ui-collection-unmark :transient t)
+    ("U" "unmark all" vulpea-ui-collection-unmark-all :transient t)
+    ("i" "invert" vulpea-ui-collection-toggle-marks :transient t)]]
+  [["Act on selection"
+    ("+" "add tag" vulpea-ui-collection-add-tag)
+    ("-" "remove tag" vulpea-ui-collection-remove-tag)
+    ("e" "set meta" vulpea-ui-collection-set-meta)
+    ("E" "remove meta" vulpea-ui-collection-remove-meta)
+    ("D" "delete" vulpea-ui-collection-delete)
+    ("x" "apply function" vulpea-ui-collection-apply)]
+   ["View"
+    ("RET" "visit note" vulpea-ui-collection-visit)
+    ("g" "refresh" vulpea-ui-collection-refresh)
+    ("w" "save view" vulpea-ui-collection-save-view)
+    ("v" "switch view" vulpea-ui-collection)]])
 
 ;;;###autoload
 (defun vulpea-ui-collection-open (view)
