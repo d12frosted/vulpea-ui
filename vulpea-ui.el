@@ -37,6 +37,8 @@
 ;; - Default widgets: outline, backlinks, unlinked mentions, forward
 ;;   links, stats
 ;; - Easy API for creating custom widgets
+;; - Standalone views: schema dashboard, collection view (a sortable
+;;   table over a filtered set of notes with marks and bulk actions)
 ;;
 ;; Usage:
 ;;   (require 'vulpea-ui)
@@ -2776,6 +2778,545 @@ Press \\<vulpea-ui-schema-dashboard-mode-map>\\[vulpea-ui-schema-dashboard-refre
         (vulpea-ui-schema-dashboard-mode)))
     (switch-to-buffer buf)
     (vulpea-ui-schema-dashboard--render)))
+
+;;; Collection view
+
+(defcustom vulpea-ui-collection-views nil
+  "Alist of saved collection views.
+Each element is (NAME . SPEC) where NAME is a string and SPEC is a
+plist with the keys:
+
+  :filter   - filter plist, see `vulpea-ui-collection--note-matches-p'
+  :columns  - list of column descriptors, see
+              `vulpea-ui-collection--normalize-column'
+  :sort     - initial `tabulated-list-sort-key', e.g. (\"Title\" . nil)"
+  :type '(alist :key-type string :value-type plist)
+  :group 'vulpea-ui)
+
+(defcustom vulpea-ui-collection-default-columns '(title tags modified)
+  "Columns used by collection views that do not specify their own."
+  :type '(repeat sexp)
+  :group 'vulpea-ui)
+
+(defvar-local vulpea-ui-collection--view nil
+  "The view spec rendered in this collection buffer.")
+
+(defvar-local vulpea-ui-collection--marked nil
+  "Hash table of marked note ids in this collection buffer.
+Marks are keyed by note id, so they survive sorting and re-querying.")
+
+(defvar-local vulpea-ui-collection--note-table nil
+  "Hash table mapping note id to `vulpea-note' for the current entries.")
+
+;;;; Filtering and querying
+
+(defun vulpea-ui-collection--note-matches-p (note filter)
+  "Return non-nil when NOTE satisfies FILTER.
+FILTER is a plist; every present condition must hold:
+
+  :tags-all   - list of tags NOTE must all have
+  :tags-any   - list of tags of which NOTE must have at least one
+  :tags-none  - list of tags NOTE must not have
+  :level      - heading level NOTE must have (0 for file-level)
+  :directory  - absolute directory prefix, or a relative directory
+                that must appear as a component of the note's path
+  :title      - regexp the note title must match
+  :meta       - alist of (KEY . VALUE) conditions; VALUE t means the
+                key must merely be present
+  :predicate  - function called with NOTE, must return non-nil"
+  (let ((tags (vulpea-note-tags note))
+        (path (vulpea-note-path note)))
+    (and (let ((all (plist-get filter :tags-all)))
+           (seq-every-p (lambda (tag) (member tag tags)) all))
+         (let ((any (plist-get filter :tags-any)))
+           (or (null any)
+               (seq-some (lambda (tag) (member tag tags)) any)))
+         (let ((none (plist-get filter :tags-none)))
+           (not (seq-some (lambda (tag) (member tag tags)) none)))
+         (let ((level (plist-get filter :level)))
+           (or (null level) (= level (vulpea-note-level note))))
+         (let ((dir (plist-get filter :directory)))
+           (or (null dir)
+               (if (file-name-absolute-p dir)
+                   (string-prefix-p (file-name-as-directory
+                                     (expand-file-name dir))
+                                    path)
+                 (string-match-p
+                  (concat "/" (regexp-quote (directory-file-name dir)) "/")
+                  path))))
+         (let ((re (plist-get filter :title)))
+           (or (null re) (string-match-p re (vulpea-note-title note))))
+         (seq-every-p
+          (lambda (condition)
+            (let ((values (cdr (assoc (car condition)
+                                      (vulpea-note-meta note)))))
+              (if (eq (cdr condition) t)
+                  values
+                (member (cdr condition) values))))
+          (plist-get filter :meta))
+         (let ((pred (plist-get filter :predicate)))
+           (or (null pred) (funcall pred note))))))
+
+(defun vulpea-ui-collection--query (filter)
+  "Return all notes matching FILTER.
+The cheapest applicable database entry point narrows the candidate
+set, then `vulpea-ui-collection--note-matches-p' applies the full
+FILTER in memory."
+  (let ((notes (cond
+                ((plist-get filter :tags-all)
+                 (vulpea-db-query-by-tags-every
+                  (plist-get filter :tags-all)))
+                ((plist-get filter :tags-any)
+                 (vulpea-db-query-by-tags-some
+                  (plist-get filter :tags-any)))
+                ((and (plist-get filter :directory)
+                      (fboundp 'vulpea-db-query-by-directory))
+                 (vulpea-db-query-by-directory
+                  (plist-get filter :directory)))
+                (t (vulpea-db-query)))))
+    (seq-filter (lambda (note)
+                  (vulpea-ui-collection--note-matches-p note filter))
+                notes)))
+
+;;;; Columns
+
+(defconst vulpea-ui-collection--columns
+  '((title "Title" 48)
+    (tags "Tags" 24)
+    (meta nil 14)
+    (created "Created" 10)
+    (modified "Modified" 10)
+    (links "Links" 6)
+    (backlinks "Backlinks" 9)
+    (file "File" 20))
+  "Column defaults: (ID NAME WIDTH) per column type.
+A nil NAME means the column is named after its key (meta columns).")
+
+(defun vulpea-ui-collection--normalize-column (col)
+  "Normalize column descriptor COL into a plist.
+COL is a symbol from `vulpea-ui-collection--columns', or a list
+\(SYMBOL [KEY] [KEYWORD VALUE]...) where KEY names the meta field for
+meta columns and the keywords :name and :width override the defaults.
+The result is a plist with :id, :key, :name and :width."
+  (let* ((col (if (listp col) col (list col)))
+         (id (car col))
+         (key (when (and (cdr col) (not (keywordp (cadr col))))
+                (cadr col)))
+         (overrides (if key (cddr col) (cdr col)))
+         (defaults (alist-get id vulpea-ui-collection--columns))
+         (name (or (plist-get overrides :name)
+                   (car defaults)
+                   key
+                   (capitalize (symbol-name id))))
+         (width (or (plist-get overrides :width) (cadr defaults) 12)))
+    (list :id id :key key :name name :width width)))
+
+(defun vulpea-ui-collection--format-time (value)
+  "Format timestamp VALUE as an ISO date string.
+VALUE may be nil (empty string), a string (its date part) or a time
+value (formatted as %Y-%m-%d)."
+  (cond ((null value) "")
+        ((stringp value) (substring value 0 (min 10 (length value))))
+        (t (format-time-string "%Y-%m-%d" value))))
+
+(defun vulpea-ui-collection--column-value (note col &optional ctx)
+  "Return the display string for NOTE in normalized column COL.
+CTX is a plist with per-refresh data; :backlinks carries the hash
+table of backlink counts keyed by note id."
+  (pcase (plist-get col :id)
+    ('title (or (vulpea-note-title note) ""))
+    ('tags (string-join (vulpea-note-tags note) " "))
+    ('meta (string-join (cdr (assoc (plist-get col :key)
+                                    (vulpea-note-meta note)))
+                        ", "))
+    ('created (vulpea-ui-collection--format-time
+               (vulpea-note-created-at note)))
+    ('modified (vulpea-ui-collection--format-time
+                (vulpea-note-modified-at note)))
+    ('links (number-to-string (length (vulpea-note-links note))))
+    ('backlinks (if-let* ((counts (plist-get ctx :backlinks)))
+                    (number-to-string
+                     (gethash (vulpea-note-id note) counts 0))
+                  ""))
+    ('file (file-name-nondirectory (vulpea-note-path note)))
+    (_ "")))
+
+(defun vulpea-ui-collection--numeric-sorter (index)
+  "Return a sort predicate comparing entry column INDEX numerically."
+  (lambda (a b)
+    (< (string-to-number (aref (cadr a) index))
+       (string-to-number (aref (cadr b) index)))))
+
+(defun vulpea-ui-collection--format (columns)
+  "Build `tabulated-list-format' for COLUMNS.
+A one-character mark column is prepended; count columns sort
+numerically, everything else as strings."
+  (apply #'vector
+         '("" 1 nil)
+         (seq-map-indexed
+          (lambda (col idx)
+            (let ((col (vulpea-ui-collection--normalize-column col)))
+              (list (plist-get col :name)
+                    (plist-get col :width)
+                    (if (memq (plist-get col :id) '(links backlinks))
+                        (vulpea-ui-collection--numeric-sorter (1+ idx))
+                      t))))
+          columns)))
+
+(defun vulpea-ui-collection--entries (notes columns marked ctx)
+  "Build tabulated-list entries for NOTES with COLUMNS.
+MARKED is the hash table of marked note ids; CTX carries per-refresh
+data for `vulpea-ui-collection--column-value'.  Each entry is keyed by
+the note id."
+  (let ((cols (mapcar #'vulpea-ui-collection--normalize-column columns)))
+    (mapcar
+     (lambda (note)
+       (let ((id (vulpea-note-id note)))
+         (list id
+               (apply #'vector
+                      (if (gethash id marked) "*" " ")
+                      (mapcar (lambda (col)
+                                (vulpea-ui-collection--column-value
+                                 note col ctx))
+                              cols)))))
+     notes)))
+
+;;;; Mode
+
+(defvar vulpea-ui-collection-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'vulpea-ui-collection-visit)
+    (define-key map (kbd "m") #'vulpea-ui-collection-mark)
+    (define-key map (kbd "u") #'vulpea-ui-collection-unmark)
+    (define-key map (kbd "U") #'vulpea-ui-collection-unmark-all)
+    (define-key map (kbd "t") #'vulpea-ui-collection-toggle-marks)
+    (define-key map (kbd "+") #'vulpea-ui-collection-add-tag)
+    (define-key map (kbd "-") #'vulpea-ui-collection-remove-tag)
+    (define-key map (kbd "e") #'vulpea-ui-collection-set-meta)
+    (define-key map (kbd "E") #'vulpea-ui-collection-remove-meta)
+    (define-key map (kbd "D") #'vulpea-ui-collection-delete)
+    (define-key map (kbd "x") #'vulpea-ui-collection-apply)
+    (define-key map (kbd "w") #'vulpea-ui-collection-save-view)
+    (define-key map (kbd "g") #'vulpea-ui-collection-refresh)
+    map)
+  "Keymap for `vulpea-ui-collection-mode'.")
+
+(define-derived-mode vulpea-ui-collection-mode tabulated-list-mode
+  "vulpea-collection"
+  "Major mode for vulpea collection views.
+An Airtable-like table over a filtered set of notes: sortable columns,
+dired-style marks and bulk actions on the selection.
+\\{vulpea-ui-collection-mode-map}"
+  :group 'vulpea-ui
+  (setq-local vulpea-ui-collection--marked (make-hash-table :test 'equal))
+  (setq-local vulpea-ui-collection--note-table
+              (make-hash-table :test 'equal))
+  (setq-local revert-buffer-function
+              (lambda (&rest _) (vulpea-ui-collection-refresh)))
+  (when (boundp 'vulpea-db-worker-done-functions)
+    (add-hook 'vulpea-db-worker-done-functions
+              #'vulpea-ui-collection--on-worker-done)))
+
+(defun vulpea-ui-collection--context (columns)
+  "Compute per-refresh context data needed by COLUMNS.
+Backlink counts are fetched with a single grouped query only when a
+backlinks column is present."
+  (when (and (seq-some (lambda (col)
+                         (eq (plist-get
+                              (vulpea-ui-collection--normalize-column col)
+                              :id)
+                             'backlinks))
+                       columns)
+             (fboundp 'vulpea-db-query-backlink-counts))
+    (list :backlinks (vulpea-db-query-backlink-counts "id"))))
+
+(defun vulpea-ui-collection--view-columns ()
+  "Return the column descriptors of the current view."
+  (or (plist-get vulpea-ui-collection--view :columns)
+      vulpea-ui-collection-default-columns))
+
+(defun vulpea-ui-collection-refresh ()
+  "Re-query the view and re-render, keeping marks and point."
+  (interactive)
+  (let* ((columns (vulpea-ui-collection--view-columns))
+         (notes (vulpea-ui-collection--query
+                 (plist-get vulpea-ui-collection--view :filter)))
+         (ctx (vulpea-ui-collection--context columns)))
+    (clrhash vulpea-ui-collection--note-table)
+    (dolist (note notes)
+      (puthash (vulpea-note-id note) note
+               vulpea-ui-collection--note-table))
+    (setq tabulated-list-entries
+          (vulpea-ui-collection--entries
+           notes columns vulpea-ui-collection--marked ctx))
+    (tabulated-list-print t)))
+
+(defvar vulpea-ui-collection--worker-refresh-pending nil
+  "Non-nil when background extraction changed data during a busy burst.")
+
+(defun vulpea-ui-collection--on-worker-done (_path status _count)
+  "Refresh live collection buffers when background extraction lands.
+Mirrors `vulpea-ui--on-worker-done': STATUS `applied' and `missing'
+mark the database dirty; the refresh is deferred while the worker is
+busy (bulk syncs) and flushed once when the burst drains."
+  (when (memq status '(applied missing))
+    (setq vulpea-ui-collection--worker-refresh-pending t))
+  (when (and vulpea-ui-collection--worker-refresh-pending
+             (or (not (fboundp 'vulpea-db-worker-busy-p))
+                 (not (vulpea-db-worker-busy-p))))
+    (setq vulpea-ui-collection--worker-refresh-pending nil)
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (when (derived-mode-p 'vulpea-ui-collection-mode)
+          (vulpea-ui-collection-refresh))))))
+
+;;;; Marks
+
+(defun vulpea-ui-collection--sync-marks ()
+  "Sync mark cells with the marked set and re-print changed rows.
+Mark cells are replaced with fresh vectors so the update pass of
+`tabulated-list-print' re-prints exactly the rows that changed."
+  (dolist (entry tabulated-list-entries)
+    (let* ((id (car entry))
+           (vec (cadr entry))
+           (mark (if (gethash id vulpea-ui-collection--marked) "*" " ")))
+      (unless (equal (aref vec 0) mark)
+        (let ((new (copy-sequence vec)))
+          (aset new 0 mark)
+          (setcar (cdr entry) new)))))
+  (tabulated-list-print t t))
+
+(defun vulpea-ui-collection-mark ()
+  "Mark the note at point and move to the next line."
+  (interactive)
+  (when-let* ((id (tabulated-list-get-id)))
+    (puthash id t vulpea-ui-collection--marked)
+    (vulpea-ui-collection--sync-marks)
+    (forward-line 1)))
+
+(defun vulpea-ui-collection-unmark ()
+  "Unmark the note at point and move to the next line."
+  (interactive)
+  (when-let* ((id (tabulated-list-get-id)))
+    (remhash id vulpea-ui-collection--marked)
+    (vulpea-ui-collection--sync-marks)
+    (forward-line 1)))
+
+(defun vulpea-ui-collection-unmark-all ()
+  "Unmark all notes."
+  (interactive)
+  (clrhash vulpea-ui-collection--marked)
+  (vulpea-ui-collection--sync-marks))
+
+(defun vulpea-ui-collection-toggle-marks ()
+  "Invert the marks of the notes currently in the view."
+  (interactive)
+  (dolist (entry tabulated-list-entries)
+    (let ((id (car entry)))
+      (if (gethash id vulpea-ui-collection--marked)
+          (remhash id vulpea-ui-collection--marked)
+        (puthash id t vulpea-ui-collection--marked))))
+  (vulpea-ui-collection--sync-marks))
+
+(defun vulpea-ui-collection--notes-for-action ()
+  "Return the notes an action applies to.
+The marked notes when any are marked, otherwise the note at point."
+  (let (notes)
+    (maphash (lambda (id _)
+               (when-let* ((note (gethash id
+                                          vulpea-ui-collection--note-table)))
+                 (push note notes)))
+             vulpea-ui-collection--marked)
+    (or notes
+        (when-let* ((id (tabulated-list-get-id))
+                    (note (gethash id vulpea-ui-collection--note-table)))
+          (list note)))))
+
+;;;; Actions
+
+(defun vulpea-ui-collection--require (fn)
+  "Signal a user error unless FN is available in this vulpea."
+  (unless (fboundp fn)
+    (user-error "This vulpea has no `%s' (need a newer vulpea)" fn)))
+
+(defun vulpea-ui-collection--read-tag (prompt)
+  "Read a tag with PROMPT, completing over known tags when possible."
+  (let ((tags (when (fboundp 'vulpea-db-query-tags)
+                (ignore-errors (vulpea-db-query-tags)))))
+    (completing-read prompt tags)))
+
+(defun vulpea-ui-collection--read-meta-key (prompt)
+  "Read a meta key with PROMPT, completing over the selection's keys."
+  (let ((keys (seq-uniq
+               (mapcan (lambda (note)
+                         (mapcar #'car (vulpea-note-meta note)))
+                       (vulpea-ui-collection--notes-for-action)))))
+    (completing-read prompt keys)))
+
+(defun vulpea-ui-collection--read-function (prompt)
+  "Read the name of an existing function with PROMPT."
+  (intern (completing-read prompt obarray #'fboundp t)))
+
+(defun vulpea-ui-collection-add-tag ()
+  "Add a tag to the marked notes (or the note at point)."
+  (interactive)
+  (vulpea-ui-collection--require 'vulpea-tags-batch-add)
+  (let ((notes (vulpea-ui-collection--notes-for-action)))
+    (unless notes (user-error "No notes selected"))
+    (let ((tag (vulpea-ui-collection--read-tag "Add tag: ")))
+      (vulpea-tags-batch-add notes tag)
+      (message "Added tag %s to %d note(s)" tag (length notes))
+      (vulpea-ui-collection-refresh))))
+
+(defun vulpea-ui-collection-remove-tag ()
+  "Remove a tag from the marked notes (or the note at point)."
+  (interactive)
+  (vulpea-ui-collection--require 'vulpea-tags-batch-remove)
+  (let ((notes (vulpea-ui-collection--notes-for-action)))
+    (unless notes (user-error "No notes selected"))
+    (let ((tag (completing-read
+                "Remove tag: "
+                (seq-uniq (mapcan (lambda (note)
+                                    (copy-sequence (vulpea-note-tags note)))
+                                  notes)))))
+      (vulpea-tags-batch-remove notes tag)
+      (message "Removed tag %s from %d note(s)" tag (length notes))
+      (vulpea-ui-collection-refresh))))
+
+(defun vulpea-ui-collection-set-meta ()
+  "Set a metadata field on the marked notes (or the note at point)."
+  (interactive)
+  (vulpea-ui-collection--require 'vulpea-meta-batch-set)
+  (let ((notes (vulpea-ui-collection--notes-for-action)))
+    (unless notes (user-error "No notes selected"))
+    (let* ((key (vulpea-ui-collection--read-meta-key "Set meta key: "))
+           (value (read-string (format "Value for %s: " key))))
+      (vulpea-meta-batch-set notes key value)
+      (message "Set %s on %d note(s)" key (length notes))
+      (vulpea-ui-collection-refresh))))
+
+(defun vulpea-ui-collection-remove-meta ()
+  "Remove a metadata field from the marked notes (or the note at point)."
+  (interactive)
+  (vulpea-ui-collection--require 'vulpea-meta-batch-remove)
+  (let ((notes (vulpea-ui-collection--notes-for-action)))
+    (unless notes (user-error "No notes selected"))
+    (let ((key (vulpea-ui-collection--read-meta-key "Remove meta key: ")))
+      (vulpea-meta-batch-remove notes key)
+      (message "Removed %s from %d note(s)" key (length notes))
+      (vulpea-ui-collection-refresh))))
+
+(defun vulpea-ui-collection-delete ()
+  "Delete the files of the marked file-level notes, with confirmation.
+Heading-level notes are skipped; deleting a heading in place is not
+supported yet.  The database is updated immediately when vulpea's sync
+machinery is available, otherwise the file watcher picks the removal
+up on its own."
+  (interactive)
+  (let* ((notes (vulpea-ui-collection--notes-for-action))
+         (files (seq-filter (lambda (note)
+                              (= 0 (vulpea-note-level note)))
+                            notes))
+         (skipped (- (length notes) (length files))))
+    (unless files (user-error "No file-level notes selected"))
+    (when (yes-or-no-p
+           (format "Delete %d note file(s) (%s)? "
+                   (length files)
+                   (string-join
+                    (seq-take (mapcar #'vulpea-note-title files) 5)
+                    ", ")))
+      (dolist (note files)
+        (let ((path (vulpea-note-path note)))
+          (delete-file path)
+          (when (fboundp 'vulpea-db-sync--handle-removed-file)
+            (vulpea-db-sync--handle-removed-file path))
+          (remhash (vulpea-note-id note) vulpea-ui-collection--marked)))
+      (when (> skipped 0)
+        (message "Skipped %d heading-level note(s)" skipped))
+      (vulpea-ui-collection-refresh))))
+
+(defun vulpea-ui-collection-apply ()
+  "Apply a function to the marked notes (or the note at point).
+The function is called once with the list of selected notes."
+  (interactive)
+  (let ((notes (vulpea-ui-collection--notes-for-action)))
+    (unless notes (user-error "No notes selected"))
+    (let ((fn (vulpea-ui-collection--read-function "Apply function: ")))
+      (funcall fn notes)
+      (vulpea-ui-collection-refresh))))
+
+(defun vulpea-ui-collection-visit ()
+  "Visit the note at point."
+  (interactive)
+  (when-let* ((id (tabulated-list-get-id))
+              (note (gethash id vulpea-ui-collection--note-table)))
+    (find-file (vulpea-note-path note))
+    (widen)
+    (goto-char (vulpea-note-pos note))))
+
+;;;; Views
+
+(defun vulpea-ui-collection--resolve-view (input)
+  "Resolve INPUT into a view spec.
+INPUT is the name of a saved view from `vulpea-ui-collection-views',
+or a comma-separated list of tags for an ad-hoc view over notes
+carrying all of them."
+  (if-let* ((spec (cdr (assoc input vulpea-ui-collection-views))))
+      (append (list :name input) spec)
+    (list :name input
+          :filter (list :tags-all (split-string input "[, ]+" t)))))
+
+(defun vulpea-ui-collection-save-view (name)
+  "Save the current view configuration under NAME.
+The filter, columns and current sort order are stored in
+`vulpea-ui-collection-views' and persisted via Customize."
+  (interactive
+   (list (read-string "Save view as: "
+                      (plist-get vulpea-ui-collection--view :name))))
+  (unless (derived-mode-p 'vulpea-ui-collection-mode)
+    (user-error "Not in a collection buffer"))
+  (let ((spec (list :filter (plist-get vulpea-ui-collection--view :filter)
+                    :columns (vulpea-ui-collection--view-columns)
+                    :sort tabulated-list-sort-key)))
+    (setf (alist-get name vulpea-ui-collection-views nil nil #'equal) spec)
+    (condition-case nil
+        (customize-save-variable 'vulpea-ui-collection-views
+                                 vulpea-ui-collection-views)
+      (error (message "View %s saved for this session only" name)))))
+
+;;;###autoload
+(defun vulpea-ui-collection-open (view)
+  "Open a collection buffer for the VIEW spec.
+VIEW is a plist with :name, :filter, :columns and :sort, see
+`vulpea-ui-collection-views' for the format."
+  (let* ((name (or (plist-get view :name) "collection"))
+         (buf (get-buffer-create (format "*vulpea-collection: %s*" name))))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'vulpea-ui-collection-mode)
+        (vulpea-ui-collection-mode))
+      (setq vulpea-ui-collection--view view)
+      (setq tabulated-list-format
+            (vulpea-ui-collection--format
+             (vulpea-ui-collection--view-columns)))
+      (setq tabulated-list-sort-key (plist-get view :sort))
+      (tabulated-list-init-header)
+      (vulpea-ui-collection-refresh))
+    (switch-to-buffer buf)))
+
+;;;###autoload
+(defun vulpea-ui-collection (view)
+  "Open a collection view over vulpea notes.
+Interactively, VIEW is read with completion over the saved views in
+`vulpea-ui-collection-views'; free input is treated as a
+comma-separated list of tags.  From Lisp, VIEW may also be a view
+spec plist, which is passed to `vulpea-ui-collection-open'."
+  (interactive
+   (list (completing-read "Collection view (name or tags): "
+                          (mapcar #'car vulpea-ui-collection-views))))
+  (vulpea-ui-collection-open
+   (if (stringp view)
+       (vulpea-ui-collection--resolve-view view)
+     view)))
 
 (provide 'vulpea-ui)
 ;;; vulpea-ui.el ends here

@@ -2650,5 +2650,338 @@ extraction."
         (should-not (memq #'vulpea-ui--on-worker-done
                           vulpea-db-worker-done-functions))))))
 
+;;; Collection view tests
+
+(cl-defun vulpea-ui-test--collection-note
+    (&key (id "n1") (title "Note") (path "/notes/n1.org") (level 0)
+          (pos 1) tags meta links created-at modified-at)
+  "Create a mock note for collection tests.
+ID, TITLE, PATH, LEVEL, POS, TAGS, META, LINKS, CREATED-AT and
+MODIFIED-AT map to the corresponding `vulpea-note' slots."
+  (make-vulpea-note
+   :id id :title title :primary-title title :path path :level level
+   :pos pos :tags tags :meta meta :links links
+   :created-at created-at :modified-at modified-at))
+
+(ert-deftest vulpea-ui-collection-test-matches-empty-filter ()
+  "An empty filter matches any note."
+  (should (vulpea-ui-collection--note-matches-p
+           (vulpea-ui-test--collection-note) nil)))
+
+(ert-deftest vulpea-ui-collection-test-matches-tags ()
+  "Tags conditions: all, any, none."
+  (let ((note (vulpea-ui-test--collection-note :tags '("wine" "france"))))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:tags-all ("wine"))))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:tags-all ("wine" "france"))))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:tags-all ("wine" "italy"))))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:tags-any ("beer" "wine"))))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:tags-any ("beer"))))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:tags-none ("beer"))))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:tags-none ("wine"))))))
+
+(ert-deftest vulpea-ui-collection-test-matches-level ()
+  "Level condition distinguishes file and heading notes."
+  (let ((file-note (vulpea-ui-test--collection-note :level 0))
+        (head-note (vulpea-ui-test--collection-note :level 2)))
+    (should (vulpea-ui-collection--note-matches-p file-note '(:level 0)))
+    (should-not (vulpea-ui-collection--note-matches-p head-note '(:level 0)))
+    (should (vulpea-ui-collection--note-matches-p head-note '(:level 2)))))
+
+(ert-deftest vulpea-ui-collection-test-matches-directory ()
+  "Directory condition: absolute prefix and relative component."
+  (let ((note (vulpea-ui-test--collection-note :path "/notes/wine/a.org")))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:directory "/notes/wine")))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:directory "/notes/beer")))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:directory "wine")))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:directory "beer")))))
+
+(ert-deftest vulpea-ui-collection-test-matches-meta ()
+  "Meta conditions: value equality and key presence."
+  (let ((note (vulpea-ui-test--collection-note
+               :meta '(("country" "France") ("grapes" "Syrah" "Viognier")))))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:meta (("country" . "France")))))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:meta (("grapes" . "Syrah")))))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:meta (("country" . "Italy")))))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:meta (("country" . t)))))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:meta (("region" . t)))))))
+
+(ert-deftest vulpea-ui-collection-test-matches-title-and-predicate ()
+  "Title regexp and custom predicate conditions."
+  (let ((note (vulpea-ui-test--collection-note :title "Chateauneuf")))
+    (should (vulpea-ui-collection--note-matches-p note '(:title "^Chateau")))
+    (should-not (vulpea-ui-collection--note-matches-p note '(:title "^Bord")))
+    (should (vulpea-ui-collection--note-matches-p
+             note (list :predicate (lambda (n)
+                                     (string-prefix-p "Ch" (vulpea-note-title n))))))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note (list :predicate #'ignore)))))
+
+(ert-deftest vulpea-ui-collection-test-query-dispatch ()
+  "The query uses the cheapest DB entry point, then filters in memory."
+  (let ((wine (vulpea-ui-test--collection-note
+               :id "w" :tags '("wine" "rated")))
+        (beer (vulpea-ui-test--collection-note
+               :id "b" :tags '("beer"))))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-tags-every)
+               (lambda (_tags) (list wine beer))))
+      (should (equal (list wine)
+                     (vulpea-ui-collection--query
+                      '(:tags-all ("wine") :tags-none ("beer"))))))
+    (cl-letf (((symbol-function 'vulpea-db-query)
+               (lambda (&optional _pred) (list wine beer))))
+      (should (equal (list wine beer)
+                     (vulpea-ui-collection--query nil))))))
+
+(ert-deftest vulpea-ui-collection-test-normalize-column ()
+  "Column descriptors normalize to plists with name and width."
+  (let ((col (vulpea-ui-collection--normalize-column 'title)))
+    (should (eq (plist-get col :id) 'title))
+    (should (equal (plist-get col :name) "Title"))
+    (should (numberp (plist-get col :width))))
+  (let ((col (vulpea-ui-collection--normalize-column '(meta "country"))))
+    (should (eq (plist-get col :id) 'meta))
+    (should (equal (plist-get col :key) "country"))
+    (should (equal (plist-get col :name) "country")))
+  (let ((col (vulpea-ui-collection--normalize-column
+              '(title :name "T" :width 60))))
+    (should (equal (plist-get col :name) "T"))
+    (should (= (plist-get col :width) 60))))
+
+(ert-deftest vulpea-ui-collection-test-column-value ()
+  "Column values render note slots as strings."
+  (let ((note (vulpea-ui-test--collection-note
+               :title "Note" :tags '("a" "b")
+               :meta '(("country" "France" "Italy"))
+               :links '((:dest "x" :type "id") (:dest "y" :type "id"))
+               :created-at (encode-time 0 0 12 15 3 2025)
+               :path "/notes/wine/n1.org")))
+    (cl-flet ((value (col &optional ctx)
+                (vulpea-ui-collection--column-value
+                 note (vulpea-ui-collection--normalize-column col) ctx)))
+      (should (equal (value 'title) "Note"))
+      (should (equal (value 'tags) "a b"))
+      (should (equal (value '(meta "country")) "France, Italy"))
+      (should (equal (value '(meta "region")) ""))
+      (should (equal (value 'links) "2"))
+      (should (equal (value 'created) "2025-03-15"))
+      (should (equal (value 'modified) ""))
+      (should (equal (value 'file) "n1.org"))
+      (let ((counts (make-hash-table :test 'equal)))
+        (puthash "n1" 3 counts)
+        (should (equal (value 'backlinks (list :backlinks counts)) "3"))
+        (should (equal (value 'backlinks (list :backlinks (make-hash-table :test 'equal)))
+                       "0"))))))
+
+(ert-deftest vulpea-ui-collection-test-format ()
+  "The tabulated-list format has a mark column plus one per descriptor."
+  (let ((format (vulpea-ui-collection--format '(title tags))))
+    (should (= (length format) 3))
+    (should (equal (aref format 0) '("" 1 nil)))
+    (should (equal (car (aref format 1)) "Title"))
+    (should (equal (car (aref format 2)) "Tags"))))
+
+(ert-deftest vulpea-ui-collection-test-entries ()
+  "Entries are keyed by note id and reflect the marked set."
+  (let* ((n1 (vulpea-ui-test--collection-note :id "n1" :title "One"))
+         (n2 (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+         (marked (make-hash-table :test 'equal)))
+    (puthash "n2" t marked)
+    (let ((entries (vulpea-ui-collection--entries
+                    (list n1 n2) '(title) marked nil)))
+      (should (equal (mapcar #'car entries) '("n1" "n2")))
+      (should (equal (aref (cadr (car entries)) 0) " "))
+      (should (equal (aref (cadr (cadr entries)) 0) "*"))
+      (should (equal (aref (cadr (car entries)) 1) "One")))))
+
+(ert-deftest vulpea-ui-collection-test-resolve-view ()
+  "View resolution prefers saved views, falls back to a tags query."
+  (let ((vulpea-ui-collection-views
+         '(("wines" . (:filter (:tags-all ("wine"))
+                       :columns (title tags))))))
+    (let ((view (vulpea-ui-collection--resolve-view "wines")))
+      (should (equal (plist-get view :name) "wines"))
+      (should (equal (plist-get view :filter) '(:tags-all ("wine")))))
+    (let ((view (vulpea-ui-collection--resolve-view "beer, ale")))
+      (should (equal (plist-get (plist-get view :filter) :tags-all)
+                     '("beer" "ale"))))))
+
+(defmacro vulpea-ui-test--with-collection-buffer (notes &rest body)
+  "Run BODY in a collection buffer populated with NOTES, no DB access."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (let ((notes ,notes))
+       (vulpea-ui-collection-mode)
+       (setq-local vulpea-ui-collection--view '(:name "test" :columns (title)))
+       (dolist (n notes)
+         (puthash (vulpea-note-id n) n vulpea-ui-collection--note-table))
+       (setq tabulated-list-format (vulpea-ui-collection--format '(title)))
+       (setq tabulated-list-entries
+             (vulpea-ui-collection--entries
+              notes '(title) vulpea-ui-collection--marked nil))
+       (tabulated-list-init-header)
+       (tabulated-list-print)
+       (goto-char (point-min))
+       ,@body)))
+
+(ert-deftest vulpea-ui-collection-test-mark-unmark ()
+  "Marking updates the marked set and the mark cell; unmark-all clears."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (vulpea-ui-collection-mark)
+    (should (gethash "n1" vulpea-ui-collection--marked))
+    ;; mark moves to the next line
+    (should (equal (tabulated-list-get-id) "n2"))
+    (goto-char (point-min))
+    (should (equal (aref (tabulated-list-get-entry) 0) "*"))
+    (vulpea-ui-collection-unmark)
+    (should-not (gethash "n1" vulpea-ui-collection--marked))
+    (goto-char (point-min))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-unmark-all)
+    (should (= 0 (hash-table-count vulpea-ui-collection--marked)))))
+
+(ert-deftest vulpea-ui-collection-test-toggle-marks ()
+  "Inverting marks flips every row."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-toggle-marks)
+    (should-not (gethash "n1" vulpea-ui-collection--marked))
+    (should (gethash "n2" vulpea-ui-collection--marked))))
+
+(ert-deftest vulpea-ui-collection-test-notes-for-action ()
+  "Actions target marked notes, falling back to the note at point."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (should (equal (mapcar #'vulpea-note-id
+                           (vulpea-ui-collection--notes-for-action))
+                   '("n1")))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-mark)
+    (should (equal (sort (mapcar #'vulpea-note-id
+                                 (vulpea-ui-collection--notes-for-action))
+                         #'string<)
+                   '("n1" "n2")))))
+
+(ert-deftest vulpea-ui-collection-test-add-tag-action ()
+  "Adding a tag batches over the selection and refreshes."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-mark)
+    (let (batched)
+      (cl-letf (((symbol-function 'vulpea-tags-batch-add)
+                 (lambda (notes tag) (setq batched (cons tag notes))))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'vulpea-ui-collection--read-tag)
+                 (lambda (_prompt) "rated")))
+        (vulpea-ui-collection-add-tag)
+        (should (equal (car batched) "rated"))
+        (should (= (length (cdr batched)) 2))))))
+
+(ert-deftest vulpea-ui-collection-test-delete-action ()
+  "Delete removes files of file-level notes after confirmation."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :path "/notes/one.org" :level 0)
+            (vulpea-ui-test--collection-note
+             :id "n2" :title "Two" :path "/notes/two.org" :level 2))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-mark)
+    (let (deleted)
+      (cl-letf (((symbol-function 'delete-file)
+                 (lambda (path &optional _trash) (push path deleted)))
+                ((symbol-function 'yes-or-no-p) (lambda (_) t))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'vulpea-db-sync--handle-removed-file) #'ignore))
+        (vulpea-ui-collection-delete)
+        ;; only the file-level note is deleted; heading notes are skipped
+        (should (equal deleted '("/notes/one.org")))))))
+
+(ert-deftest vulpea-ui-collection-test-delete-aborts ()
+  "Delete does nothing when the user does not confirm."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :path "/notes/one.org"))
+    (let (deleted)
+      (cl-letf (((symbol-function 'delete-file)
+                 (lambda (path &optional _trash) (push path deleted)))
+                ((symbol-function 'yes-or-no-p) (lambda (_) nil)))
+        (vulpea-ui-collection-delete)
+        (should-not deleted)))))
+
+(ert-deftest vulpea-ui-collection-test-set-meta-action ()
+  "Setting meta batches key and value over the selection."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (let (batched)
+      (cl-letf (((symbol-function 'vulpea-meta-batch-set)
+                 (lambda (notes key value) (setq batched (list notes key value))))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'vulpea-ui-collection--read-meta-key)
+                 (lambda (_prompt) "country"))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _) "France")))
+        (vulpea-ui-collection-set-meta)
+        (should (equal (nth 1 batched) "country"))
+        (should (equal (nth 2 batched) "France"))
+        (should (= (length (nth 0 batched)) 1))))))
+
+(ert-deftest vulpea-ui-collection-test-apply-action ()
+  "The custom action calls the chosen function with the selection."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (let (captured)
+      (cl-letf (((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'vulpea-ui-collection--read-function)
+                 (lambda (_prompt) (lambda (notes) (setq captured notes)))))
+        (vulpea-ui-collection-apply)
+        (should (= (length captured) 1))))))
+
+(ert-deftest vulpea-ui-collection-test-marks-survive-sort ()
+  "Marks live in entry vectors, so re-printing keeps them."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "B")
+            (vulpea-ui-test--collection-note :id "n2" :title "A"))
+    (vulpea-ui-collection-mark)
+    (setq tabulated-list-sort-key '("Title" . nil))
+    (tabulated-list-print)
+    (goto-char (point-min))
+    ;; sorted by title: "A" (n2) first, unmarked; "B" (n1) second, marked
+    (should (equal (tabulated-list-get-id) "n2"))
+    (should (equal (aref (tabulated-list-get-entry) 0) " "))
+    (forward-line 1)
+    (should (equal (tabulated-list-get-id) "n1"))
+    (should (equal (aref (tabulated-list-get-entry) 0) "*"))))
+
+(ert-deftest vulpea-ui-collection-test-format-time ()
+  "Time formatting handles nil, time values, and strings."
+  (should (equal (vulpea-ui-collection--format-time nil) ""))
+  (should (equal (vulpea-ui-collection--format-time
+                  (encode-time 0 0 12 15 3 2025))
+                 "2025-03-15"))
+  (should (equal (vulpea-ui-collection--format-time "2025-01-02T10:00:00")
+                 "2025-01-02")))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
