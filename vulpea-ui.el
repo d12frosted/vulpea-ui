@@ -4061,11 +4061,56 @@ The marked notes, or the whole view when nothing is marked."
 
 ;;;; Views
 
+(defun vulpea-ui-collection--parse-query (input)
+  "Parse INPUT into a filter plist.
+The syntax mirrors `vulpea-ui-collection--filter-description', so the
+filter summary shown in the mode line is itself a valid query:
+
+  wine       - require the tag (a leading # is optional)
+  #red?      - any-of tag
+  -beer      - exclude the tag (-#beer works too)
+  level:0    - heading level (0 for file-level)
+  dir:PATH   - directory scope
+  title:RE   - title regexp
+  KEY:VALUE  - metadata equality
+  KEY:*      - metadata key presence
+
+Tokens are separated by spaces or commas.  A :predicate condition is
+not expressible in this syntax."
+  (let (all any none level dir title meta)
+    (dolist (token (split-string input "[, ]+" t))
+      (cond
+       ((string-match "\\`level:\\([0-9]+\\)\\'" token)
+        (setq level (string-to-number (match-string 1 token))))
+       ((string-match "\\`dir:\\(.+\\)\\'" token)
+        (setq dir (match-string 1 token)))
+       ((string-match "\\`title:\\(.+\\)\\'" token)
+        (setq title (match-string 1 token)))
+       ((string-match "\\`-#?\\(.+\\)\\'" token)
+        (push (match-string 1 token) none))
+       ((string-match "\\`#?\\([^?]+\\)\\?\\'" token)
+        (push (match-string 1 token) any))
+       ((string-match "\\`\\([^:#][^:]*\\):\\*\\'" token)
+        (push (cons (match-string 1 token) t) meta))
+       ((string-match "\\`\\([^:#][^:]*\\):\\(.+\\)\\'" token)
+        (push (cons (match-string 1 token) (match-string 2 token)) meta))
+       ((string-match "\\`#?\\(.+\\)\\'" token)
+        (push (match-string 1 token) all))))
+    (append
+     (when all (list :tags-all (nreverse all)))
+     (when any (list :tags-any (nreverse any)))
+     (when none (list :tags-none (nreverse none)))
+     (when level (list :level level))
+     (when dir (list :directory dir))
+     (when title (list :title title))
+     (when meta (list :meta (nreverse meta))))))
+
 (defun vulpea-ui-collection--resolve-view (input)
   "Resolve INPUT into a view spec.
 INPUT is the name of a saved view from `vulpea-ui-collection-views',
-a comma-separated list of tags for an ad-hoc view over notes carrying
-all of them, or empty for a view over the whole collection."
+a query in the syntax of `vulpea-ui-collection--parse-query' (so
+=wine -beer country:France= works straight from the prompt), or
+empty for a view over the whole collection."
   (let ((input (string-trim input)))
     (cond
      ((string-empty-p input)
@@ -4075,7 +4120,7 @@ all of them, or empty for a view over the whole collection."
               (cdr (assoc input vulpea-ui-collection-views))))
      (t
       (list :name input
-            :filter (list :tags-all (split-string input "[, ]+" t)))))))
+            :filter (vulpea-ui-collection--parse-query input))))))
 
 (defun vulpea-ui-collection--column-with-width (col width)
   "Return descriptor COL with :width WIDTH pinned into it."
@@ -4266,7 +4311,7 @@ comma-separated list of tags.  From Lisp, VIEW may also be a view
 spec plist, which is passed to `vulpea-ui-collection-open'."
   (interactive
    (list (completing-read
-          "Collection (saved view, tags, or empty for all notes): "
+          "Collection (saved view, query, or empty for all notes): "
           (mapcar #'car vulpea-ui-collection-views))))
   (vulpea-ui-collection-open
    (if (stringp view)
