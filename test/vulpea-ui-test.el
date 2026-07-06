@@ -3393,6 +3393,27 @@ single-note edits apply without asking."
       (should (string-match-p "wines" description))
       (should (string-match-p "#wine" description)))))
 
+(ert-deftest vulpea-ui-collection-test-stale-refresh ()
+  "Hidden collection buffers go stale on DB changes and refresh on display."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (let ((refreshed 0)
+          (vulpea-ui-collection--worker-refresh-pending nil))
+      (cl-letf (((symbol-function 'vulpea-ui-collection-refresh)
+                 (lambda () (cl-incf refreshed)))
+                ((symbol-function 'vulpea-db-worker-busy-p) #'ignore))
+        ;; the temp buffer is not displayed: no refresh, marked stale
+        (vulpea-ui-collection--on-worker-done "/tmp/a.org" 'applied 1)
+        (should (= refreshed 0))
+        (should vulpea-ui-collection--stale)
+        ;; displaying it flushes the pending refresh
+        (vulpea-ui-collection--on-displayed nil)
+        (should (= refreshed 1))
+        (should-not vulpea-ui-collection--stale)
+        ;; a second display does nothing
+        (vulpea-ui-collection--on-displayed nil)
+        (should (= refreshed 1))))))
+
 (ert-deftest vulpea-ui-collection-test-format-time ()
   "Time formatting handles nil, time values, and strings."
   (should (equal (vulpea-ui-collection--format-time nil) ""))
