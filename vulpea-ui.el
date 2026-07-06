@@ -3107,9 +3107,10 @@ busy (bulk syncs) and flushed once when the burst drains."
 ;;;; Marks
 
 (defun vulpea-ui-collection--sync-marks ()
-  "Sync mark cells with the marked set and re-print changed rows.
-Mark cells are replaced with fresh vectors so the update pass of
-`tabulated-list-print' re-prints exactly the rows that changed."
+  "Sync all mark cells with the marked set and re-print the table.
+Used by whole-table operations; a single mark goes through
+`vulpea-ui-collection--set-mark-at-point' instead, which touches only
+its own row."
   (dolist (entry tabulated-list-entries)
     (let* ((id (car entry))
            (vec (cadr entry))
@@ -3118,23 +3119,42 @@ Mark cells are replaced with fresh vectors so the update pass of
         (let ((new (copy-sequence vec)))
           (aset new 0 mark)
           (setcar (cdr entry) new)))))
-  (tabulated-list-print t t))
+  (tabulated-list-print t))
+
+(defun vulpea-ui-collection--set-mark-at-point (on)
+  "Set the mark of the row at point to ON, re-printing only that row.
+Re-printing the whole table on every mark is unusable on large
+collections, so the entry vector is swapped (marks still survive
+sorting) and the buffer line is rewritten in place."
+  (when-let* ((id (tabulated-list-get-id))
+              (entry (assoc id tabulated-list-entries)))
+    (if on
+        (puthash id t vulpea-ui-collection--marked)
+      (remhash id vulpea-ui-collection--marked))
+    (let ((vec (cadr entry))
+          (mark (if on "*" " ")))
+      (unless (equal (aref vec 0) mark)
+        (let ((new (copy-sequence vec))
+              (inhibit-read-only t)
+              (pos (line-beginning-position)))
+          (aset new 0 mark)
+          (setcar (cdr entry) new)
+          (delete-region pos (min (point-max) (1+ (line-end-position))))
+          (goto-char pos)
+          (tabulated-list-print-entry id new)
+          (goto-char pos))))))
 
 (defun vulpea-ui-collection-mark ()
   "Mark the note at point and move to the next line."
   (interactive)
-  (when-let* ((id (tabulated-list-get-id)))
-    (puthash id t vulpea-ui-collection--marked)
-    (vulpea-ui-collection--sync-marks)
-    (forward-line 1)))
+  (vulpea-ui-collection--set-mark-at-point t)
+  (forward-line 1))
 
 (defun vulpea-ui-collection-unmark ()
   "Unmark the note at point and move to the next line."
   (interactive)
-  (when-let* ((id (tabulated-list-get-id)))
-    (remhash id vulpea-ui-collection--marked)
-    (vulpea-ui-collection--sync-marks)
-    (forward-line 1)))
+  (vulpea-ui-collection--set-mark-at-point nil)
+  (forward-line 1))
 
 (defun vulpea-ui-collection-unmark-all ()
   "Unmark all notes."
