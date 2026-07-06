@@ -3673,6 +3673,20 @@ the notes in the view; free input is treated as a meta key."
   "Read the name of an existing function with PROMPT."
   (intern (completing-read prompt obarray #'fboundp t)))
 
+(defun vulpea-ui-collection--confirm (action notes)
+  "Ask before applying ACTION to NOTES; return non-nil to proceed.
+ACTION is the leading part of the question, e.g. \"Add tag x to\".
+The prompt lists the affected notes so a bulk edit is never a
+surprise; a single-note edit applies without asking."
+  (or (null (cdr notes))
+      (yes-or-no-p
+       (format "%s %d note(s) (%s%s)? "
+               action
+               (length notes)
+               (string-join
+                (seq-take (mapcar #'vulpea-note-title notes) 5) ", ")
+               (if (> (length notes) 5) ", ..." "")))))
+
 (defun vulpea-ui-collection-add-tag ()
   "Add a tag to the marked notes (or the note at point)."
   (interactive)
@@ -3680,9 +3694,11 @@ the notes in the view; free input is treated as a meta key."
   (let ((notes (vulpea-ui-collection--notes-for-action)))
     (unless notes (user-error "No notes selected"))
     (let ((tag (vulpea-ui-collection--read-tag "Add tag: ")))
-      (vulpea-tags-batch-add notes tag)
-      (message "Added tag %s to %d note(s)" tag (length notes))
-      (vulpea-ui-collection-refresh))))
+      (when (vulpea-ui-collection--confirm
+             (format "Add tag %s to" tag) notes)
+        (vulpea-tags-batch-add notes tag)
+        (message "Added tag %s to %d note(s)" tag (length notes))
+        (vulpea-ui-collection-refresh)))))
 
 (defun vulpea-ui-collection-remove-tag ()
   "Remove a tag from the marked notes (or the note at point)."
@@ -3695,9 +3711,11 @@ the notes in the view; free input is treated as a meta key."
                 (seq-uniq (mapcan (lambda (note)
                                     (copy-sequence (vulpea-note-tags note)))
                                   notes)))))
-      (vulpea-tags-batch-remove notes tag)
-      (message "Removed tag %s from %d note(s)" tag (length notes))
-      (vulpea-ui-collection-refresh))))
+      (when (vulpea-ui-collection--confirm
+             (format "Remove tag %s from" tag) notes)
+        (vulpea-tags-batch-remove notes tag)
+        (message "Removed tag %s from %d note(s)" tag (length notes))
+        (vulpea-ui-collection-refresh)))))
 
 (defun vulpea-ui-collection-set-meta ()
   "Set a metadata field on the marked notes (or the note at point)."
@@ -3707,9 +3725,11 @@ the notes in the view; free input is treated as a meta key."
     (unless notes (user-error "No notes selected"))
     (let* ((key (vulpea-ui-collection--read-meta-key "Set meta key: "))
            (value (read-string (format "Value for %s: " key))))
-      (vulpea-meta-batch-set notes key value)
-      (message "Set %s on %d note(s)" key (length notes))
-      (vulpea-ui-collection-refresh))))
+      (when (vulpea-ui-collection--confirm
+             (format "Set %s to %s on" key value) notes)
+        (vulpea-meta-batch-set notes key value)
+        (message "Set %s on %d note(s)" key (length notes))
+        (vulpea-ui-collection-refresh)))))
 
 (defun vulpea-ui-collection-remove-meta ()
   "Remove a metadata field from the marked notes (or the note at point)."
@@ -3718,9 +3738,11 @@ the notes in the view; free input is treated as a meta key."
   (let ((notes (vulpea-ui-collection--notes-for-action)))
     (unless notes (user-error "No notes selected"))
     (let ((key (vulpea-ui-collection--read-meta-key "Remove meta key: ")))
-      (vulpea-meta-batch-remove notes key)
-      (message "Removed %s from %d note(s)" key (length notes))
-      (vulpea-ui-collection-refresh))))
+      (when (vulpea-ui-collection--confirm
+             (format "Remove %s from" key) notes)
+        (vulpea-meta-batch-remove notes key)
+        (message "Removed %s from %d note(s)" key (length notes))
+        (vulpea-ui-collection-refresh)))))
 
 (defun vulpea-ui-collection-delete ()
   "Delete the files of the marked file-level notes, with confirmation.
