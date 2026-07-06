@@ -3196,8 +3196,39 @@ dired-style marks and bulk actions on the selection.
     (add-hook 'vulpea-db-worker-done-functions
               #'vulpea-ui-collection--on-worker-done)))
 
+(defvar-local vulpea-ui-collection--aggregates nil
+  "Cached aggregate summary for the current entries, or nil.
+Computed once per refresh so the mode line does not recompute it on
+every redisplay.")
+
+(defun vulpea-ui-collection--aggregates (notes columns)
+  "Return a summary of numeric meta columns over NOTES, or nil.
+For every meta column of COLUMNS whose non-empty values all parse as
+numbers, the average is reported - the summary row for e.g. a rating
+column."
+  (let (parts)
+    (dolist (col (mapcar #'vulpea-ui-collection--normalize-column columns))
+      (when (eq (plist-get col :id) 'meta)
+        (let* ((key (plist-get col :key))
+               (values (delq nil
+                             (mapcar (lambda (note)
+                                       (vulpea-note-meta-get note key))
+                                     notes)))
+               (numbers (mapcar (lambda (value)
+                                  (and (string-match-p
+                                        "\\`-?[0-9]+\\(\\.[0-9]+\\)?\\'"
+                                        value)
+                                       (string-to-number value)))
+                                values)))
+          (when (and numbers (not (memq nil numbers)))
+            (push (format "%s avg %.1f" key
+                          (/ (apply #'+ numbers)
+                             (float (length numbers))))
+                  parts)))))
+    (when parts (string-join (nreverse parts) ", "))))
+
 (defun vulpea-ui-collection--mode-line-info ()
-  "Return the mode line suffix: note count, marked count, filter."
+  "Return the mode line suffix: counts, filter and aggregates."
   (let ((notes (length tabulated-list-entries))
         (marked (hash-table-count vulpea-ui-collection--marked))
         (filter (vulpea-ui-collection--filter-description
@@ -3206,7 +3237,9 @@ dired-style marks and bulk actions on the selection.
             (when (> marked 0) (format " (%d marked)" marked))
             (unless (string-empty-p filter)
               (concat " [" (truncate-string-to-width filter 40 nil nil "...")
-                      "]")))))
+                      "]"))
+            (when vulpea-ui-collection--aggregates
+              (concat " {" vulpea-ui-collection--aggregates "}")))))
 
 (defun vulpea-ui-collection--context (columns)
   "Compute per-refresh context data needed by COLUMNS.
@@ -3261,6 +3294,8 @@ width is kept for as long as the column stays."
                  (plist-get vulpea-ui-collection--view :filter)))
          (ctx (vulpea-ui-collection--context columns)))
     (setq vulpea-ui-collection--ctx ctx)
+    (setq vulpea-ui-collection--aggregates
+          (vulpea-ui-collection--aggregates notes columns))
     (clrhash vulpea-ui-collection--note-table)
     (dolist (note notes)
       (puthash (vulpea-note-id note) note

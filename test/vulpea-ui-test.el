@@ -3533,6 +3533,28 @@ single-note edits apply without asking."
       ;; the sort key pointed at the removed column
       (should-not tabulated-list-sort-key))))
 
+(ert-deftest vulpea-ui-collection-test-aggregates ()
+  "Numeric meta columns are averaged; non-numeric ones are skipped."
+  (let ((notes (list (vulpea-ui-test--collection-note
+                      :id "n1" :meta '(("rating" "8") ("country" "France")))
+                     (vulpea-ui-test--collection-note
+                      :id "n2" :meta '(("rating" "9.5") ("country" "Italy")))
+                     (vulpea-ui-test--collection-note :id "n3"))))
+    (should (equal (vulpea-ui-collection--aggregates
+                    notes '(title (meta "rating") (meta "country")))
+                   "rating avg 8.8"))
+    (should-not (vulpea-ui-collection--aggregates
+                 notes '(title (meta "country"))))
+    (should-not (vulpea-ui-collection--aggregates notes '(title tags)))))
+
+(ert-deftest vulpea-ui-collection-test-mode-line-shows-aggregates ()
+  "The mode line carries the cached aggregate summary."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--aggregates "rating avg 8.8")
+    (should (string-match-p "rating avg 8.8"
+                            (vulpea-ui-collection--mode-line-info)))))
+
 (ert-deftest vulpea-ui-collection-test-mode-line-info ()
   "The mode line shows note count, marked count and the filter."
   (vulpea-ui-test--with-collection-buffer
