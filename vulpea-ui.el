@@ -573,6 +573,11 @@ risking deletion of a main or sole window."
     (when (and buf (not (vulpea-ui--sidebar-visible-p frame)))
       (vulpea-ui--create-sidebar-window buf))))
 
+(defvar vulpea-ui--worker-refresh-pending nil
+  "Non-nil when background extraction changed data during a busy burst.
+Flushed into a single refresh when the worker goes idle, so a bulk
+sync produces one refresh instead of thousands.")
+
 (defun vulpea-ui--setup-hooks ()
   "Set up hooks for sidebar content tracking."
   (add-hook 'window-buffer-change-functions #'vulpea-ui--on-buffer-change)
@@ -580,6 +585,11 @@ risking deletion of a main or sole window."
   ;; Auto-refresh hooks
   (when vulpea-ui-auto-refresh
     (add-hook 'after-save-hook #'vulpea-ui--on-save)
+    ;; Async extraction (vulpea 2.6+): refresh when background
+    ;; results actually land in the database
+    (when (boundp 'vulpea-db-worker-done-functions)
+      (add-hook 'vulpea-db-worker-done-functions
+                #'vulpea-ui--on-worker-done))
     (vulpea-ui--start-idle-timer)))
 
 (defun vulpea-ui--teardown-hooks ()
@@ -588,6 +598,10 @@ risking deletion of a main or sole window."
   (remove-hook 'window-selection-change-functions #'vulpea-ui--on-buffer-change)
   ;; Auto-refresh hooks
   (remove-hook 'after-save-hook #'vulpea-ui--on-save)
+  (when (boundp 'vulpea-db-worker-done-functions)
+    (remove-hook 'vulpea-db-worker-done-functions
+                 #'vulpea-ui--on-worker-done))
+  (setq vulpea-ui--worker-refresh-pending nil)
   (vulpea-ui--stop-idle-timer))
 
 (defun vulpea-ui--start-idle-timer ()
@@ -608,6 +622,24 @@ risking deletion of a main or sole window."
   (when (and (vulpea-ui--sidebar-visible-p)
              (vulpea-ui--get-note-from-buffer (current-buffer)))
     (vulpea-ui-sidebar-refresh)))
+
+(defun vulpea-ui--on-worker-done (_path status _count)
+  "Refresh the sidebar when background extraction lands data.
+
+With vulpea's async extraction, the database changes when the worker
+applies results - not when a file is saved - so the save-triggered
+refresh shows data from before the save.  This handler runs on
+vulpea's worker done hook: STATUS `applied' and `missing' mean the
+database changed; the refresh is deferred while the worker is busy
+\(bulk syncs) and flushed once when the burst drains."
+  (when (memq status '(applied missing))
+    (setq vulpea-ui--worker-refresh-pending t))
+  (when (and vulpea-ui--worker-refresh-pending
+             (or (not (fboundp 'vulpea-db-worker-busy-p))
+                 (not (vulpea-db-worker-busy-p))))
+    (setq vulpea-ui--worker-refresh-pending nil)
+    (when (vulpea-ui--sidebar-visible-p)
+      (vulpea-ui-sidebar-refresh))))
 
 (defun vulpea-ui--on-idle ()
   "Handle idle timeout - soft refresh preserving memos.
