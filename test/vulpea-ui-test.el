@@ -2817,6 +2817,38 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
       (should (equal (value heading 'deadline) "2026-08-01"))
       (should (equal (value heading 'aliases) "bg tasks")))))
 
+(ert-deftest vulpea-ui-collection-test-column-faces ()
+  "Secondary columns carry muted faces; the title stays plain."
+  (cl-flet ((value (note col)
+              (vulpea-ui-collection--column-value
+               note (vulpea-ui-collection--normalize-column col) nil)))
+    (let ((note (vulpea-ui-test--collection-note
+                 :tags '("wine") :todo "TODO"
+                 :modified-at (encode-time 0 0 12 15 3 2025))))
+      (should (eq (get-text-property 0 'face (value note 'tags))
+                  'vulpea-ui-collection-tags-face))
+      (should (eq (get-text-property 0 'face (value note 'modified))
+                  'vulpea-ui-collection-date-face))
+      (should (eq (get-text-property 0 'face (value note 'todo))
+                  'vulpea-ui-collection-todo-face))
+      (should-not (get-text-property 0 'face (value note 'title))))))
+
+(ert-deftest vulpea-ui-collection-test-marked-row-face ()
+  "Marking adds the marked face to every cell of the row; unmarking removes it."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (vulpea-ui-collection-mark)
+    (goto-char (point-min))
+    (let ((title-cell (aref (tabulated-list-get-entry) 1)))
+      (should (memq 'vulpea-ui-collection-marked-face
+                    (ensure-list (get-text-property 0 'face title-cell)))))
+    (vulpea-ui-collection-unmark)
+    (goto-char (point-min))
+    (let ((title-cell (aref (tabulated-list-get-entry) 1)))
+      (should-not (memq 'vulpea-ui-collection-marked-face
+                        (ensure-list
+                         (get-text-property 0 'face title-cell)))))))
+
 (ert-deftest vulpea-ui-collection-test-format ()
   "The tabulated-list format has a mark column plus one per descriptor."
   (let ((format (vulpea-ui-collection--format '(title tags))))

@@ -2799,6 +2799,31 @@ plist with the keys:
   :type '(repeat sexp)
   :group 'vulpea-ui)
 
+(defface vulpea-ui-collection-tags-face
+  '((t :inherit shadow))
+  "Face for the tags column in collection views."
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-collection-date-face
+  '((t :inherit shadow))
+  "Face for date columns in collection views."
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-collection-context-face
+  '((t :inherit shadow))
+  "Face for the context, file and aliases columns in collection views."
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-collection-todo-face
+  '((t :inherit org-todo))
+  "Face for the todo and priority columns in collection views."
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-collection-marked-face
+  '((t :inherit warning))
+  "Face layered over every cell of a marked row in collection views."
+  :group 'vulpea-ui)
+
 (defvar-local vulpea-ui-collection--view nil
   "The view spec rendered in this collection buffer.")
 
@@ -2808,6 +2833,9 @@ Marks are keyed by note id, so they survive sorting and re-querying.")
 
 (defvar-local vulpea-ui-collection--note-table nil
   "Hash table mapping note id to `vulpea-note' for the current entries.")
+
+(defvar-local vulpea-ui-collection--ctx nil
+  "Per-refresh context data (e.g. backlink counts) for cell rendering.")
 
 ;;;; Filtering and querying
 
@@ -2954,10 +2982,34 @@ timestamp brackets stripped) or a time value (formatted as
            (substring s 0 (min 10 (length s)))))
         (t (format-time-string "%Y-%m-%d" value))))
 
+(defconst vulpea-ui-collection--column-faces
+  '((tags . vulpea-ui-collection-tags-face)
+    (context . vulpea-ui-collection-context-face)
+    (file . vulpea-ui-collection-context-face)
+    (aliases . vulpea-ui-collection-context-face)
+    (todo . vulpea-ui-collection-todo-face)
+    (priority . vulpea-ui-collection-todo-face)
+    (scheduled . vulpea-ui-collection-date-face)
+    (deadline . vulpea-ui-collection-date-face)
+    (created . vulpea-ui-collection-date-face)
+    (modified . vulpea-ui-collection-date-face))
+  "Face per column id for collection cells.")
+
 (defun vulpea-ui-collection--column-value (note col &optional ctx)
   "Return the display string for NOTE in normalized column COL.
 CTX is a plist with per-refresh data; :backlinks carries the hash
-table of backlink counts keyed by note id."
+table of backlink counts keyed by note id.  Secondary columns carry
+the faces from `vulpea-ui-collection--column-faces'."
+  (let ((value (vulpea-ui-collection--column-raw-value note col ctx))
+        (face (alist-get (plist-get col :id)
+                         vulpea-ui-collection--column-faces)))
+    (if (and face (not (string-empty-p value)))
+        (propertize value 'face face)
+      value)))
+
+(defun vulpea-ui-collection--column-raw-value (note col ctx)
+  "Return the unfaced display string for NOTE in normalized column COL.
+CTX is the per-refresh data plist."
   (pcase (plist-get col :id)
     ('title (or (vulpea-note-title note) ""))
     ('tags (string-join (vulpea-note-tags note) " "))
@@ -3014,23 +3066,37 @@ numerically, everything else as strings."
                       t))))
           columns)))
 
+(defun vulpea-ui-collection--entry (note cols marked ctx)
+  "Build the tabulated-list entry for NOTE.
+COLS are normalized columns, MARKED the hash table of marked note
+ids, CTX the per-refresh data plist.  Every cell of a marked row is
+layered with `vulpea-ui-collection-marked-face'."
+  (let* ((id (vulpea-note-id note))
+         (marked-p (gethash id marked))
+         (vec (apply #'vector
+                     (if marked-p "*" " ")
+                     (mapcar (lambda (col)
+                               (vulpea-ui-collection--column-value
+                                note col ctx))
+                             cols))))
+    (when marked-p
+      (dotimes (i (length vec))
+        (let ((cell (copy-sequence (aref vec i))))
+          (add-face-text-property 0 (length cell)
+                                  'vulpea-ui-collection-marked-face
+                                  t cell)
+          (aset vec i cell))))
+    (list id vec)))
+
 (defun vulpea-ui-collection--entries (notes columns marked ctx)
   "Build tabulated-list entries for NOTES with COLUMNS.
 MARKED is the hash table of marked note ids; CTX carries per-refresh
 data for `vulpea-ui-collection--column-value'.  Each entry is keyed by
 the note id."
   (let ((cols (mapcar #'vulpea-ui-collection--normalize-column columns)))
-    (mapcar
-     (lambda (note)
-       (let ((id (vulpea-note-id note)))
-         (list id
-               (apply #'vector
-                      (if (gethash id marked) "*" " ")
-                      (mapcar (lambda (col)
-                                (vulpea-ui-collection--column-value
-                                 note col ctx))
-                              cols)))))
-     notes)))
+    (mapcar (lambda (note)
+              (vulpea-ui-collection--entry note cols marked ctx))
+            notes)))
 
 ;;;; Mode
 
@@ -3086,6 +3152,7 @@ dired-style marks and bulk actions on the selection.
               (make-hash-table :test 'equal))
   (setq-local mode-line-process
               '((:eval (vulpea-ui-collection--mode-line-info))))
+  (hl-line-mode 1)
   (setq-local revert-buffer-function
               (lambda (&rest _) (vulpea-ui-collection-refresh)))
   (when (boundp 'vulpea-db-worker-done-functions)
@@ -3129,6 +3196,7 @@ backlinks column is present."
          (notes (vulpea-ui-collection--query
                  (plist-get vulpea-ui-collection--view :filter)))
          (ctx (vulpea-ui-collection--context columns)))
+    (setq vulpea-ui-collection--ctx ctx)
     (clrhash vulpea-ui-collection--note-table)
     (dolist (note notes)
       (puthash (vulpea-note-id note) note
@@ -3159,19 +3227,29 @@ busy (bulk syncs) and flushed once when the burst drains."
 
 ;;;; Marks
 
+(defun vulpea-ui-collection--rebuilt-row (id fallback)
+  "Return a fresh entry vector for note ID, FALLBACK when it is unknown.
+The row is rebuilt from the note so the marked face covers (or leaves)
+every cell; FALLBACK only gets its mark cell fixed."
+  (if-let* ((note (gethash id vulpea-ui-collection--note-table)))
+      (cadr (vulpea-ui-collection--entry
+             note
+             (mapcar #'vulpea-ui-collection--normalize-column
+                     (vulpea-ui-collection--view-columns))
+             vulpea-ui-collection--marked
+             vulpea-ui-collection--ctx))
+    (let ((vec (copy-sequence fallback)))
+      (aset vec 0 (if (gethash id vulpea-ui-collection--marked) "*" " "))
+      vec)))
+
 (defun vulpea-ui-collection--sync-marks ()
-  "Sync all mark cells with the marked set and re-print the table.
+  "Sync all rows with the marked set and re-print the table.
 Used by whole-table operations; a single mark goes through
 `vulpea-ui-collection--set-mark-at-point' instead, which touches only
 its own row."
   (dolist (entry tabulated-list-entries)
-    (let* ((id (car entry))
-           (vec (cadr entry))
-           (mark (if (gethash id vulpea-ui-collection--marked) "*" " ")))
-      (unless (equal (aref vec 0) mark)
-        (let ((new (copy-sequence vec)))
-          (aset new 0 mark)
-          (setcar (cdr entry) new)))))
+    (setcar (cdr entry)
+            (vulpea-ui-collection--rebuilt-row (car entry) (cadr entry))))
   (tabulated-list-print t))
 
 (defun vulpea-ui-collection--set-mark-at-point (on)
@@ -3184,18 +3262,14 @@ sorting) and the buffer line is rewritten in place."
     (if on
         (puthash id t vulpea-ui-collection--marked)
       (remhash id vulpea-ui-collection--marked))
-    (let ((vec (cadr entry))
-          (mark (if on "*" " ")))
-      (unless (equal (aref vec 0) mark)
-        (let ((new (copy-sequence vec))
-              (inhibit-read-only t)
-              (pos (line-beginning-position)))
-          (aset new 0 mark)
-          (setcar (cdr entry) new)
-          (delete-region pos (min (point-max) (1+ (line-end-position))))
-          (goto-char pos)
-          (tabulated-list-print-entry id new)
-          (goto-char pos))))))
+    (let ((new (vulpea-ui-collection--rebuilt-row id (cadr entry)))
+          (inhibit-read-only t)
+          (pos (line-beginning-position)))
+      (setcar (cdr entry) new)
+      (delete-region pos (min (point-max) (1+ (line-end-position))))
+      (goto-char pos)
+      (tabulated-list-print-entry id new)
+      (goto-char pos))))
 
 (defun vulpea-ui-collection-mark ()
   "Mark the note at point and move to the next line."
