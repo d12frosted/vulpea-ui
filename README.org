@@ -271,32 +271,44 @@ relative path component), =:title= (regexp), =:meta= (alist of
 =:predicate= (any function on the note). The cheapest condition is
 pushed down to the database, the rest is applied in memory.
 
-Columns: =title=, =tags=, =(meta KEY)=, =created=, =modified=, =links=
-(outgoing link count), =backlinks= (incoming link count, one grouped
-query for the whole table) and =file=. Any column takes =:name= and
-=:width= overrides, e.g. =(title :width 60)=.
+Columns: =title=, =context= (file title and outline path of a heading
+note - tells apart a dozen rows all called "Tasks"), =tags=,
+=(meta KEY)=, =todo=, =priority=, =scheduled=, =deadline=, =created=,
+=modified=, =links= (outgoing link count), =backlinks= (incoming link
+count, one grouped query for the whole table), =aliases= and =file=.
+Any column takes =:name= and =:width= overrides, e.g.
+=(title :width 60)=. Widths fit the content by default (the defaults
+act as caps); a column you resize by hand keeps its width and is
+pinned into the view when you save it.
 
 Keybindings:
 
 | Key   | Action                                            |
 |-------+---------------------------------------------------|
 | =RET= | Visit the note                                    |
-| =m=   | Mark the note at point                            |
-| =u=   | Unmark the note at point                          |
+| =o=   | Visit the note in another window                  |
+| =C-o= | Preview the note without leaving the table        |
+| =m=   | Mark the note at point (or the region's rows)     |
+| =u=   | Unmark the note at point (or the region's rows)   |
 | =U=   | Unmark all                                        |
 | =t=   | Invert marks                                      |
+| =% m= | Mark notes whose title matches a regexp           |
+| =% t= | Mark notes carrying a tag                         |
 | =+=   | Add a tag to the selection                        |
 | =-=   | Remove a tag from the selection                   |
 | =e=   | Set a metadata field on the selection             |
 | =E=   | Remove a metadata field from the selection        |
 | =D=   | Delete the selected notes (with confirmation)     |
 | =x=   | Apply a function to the selection                 |
+| =y=   | Copy the selection as an org list of links        |
+| =Y=   | Export the selection to an org buffer             |
 | =/ t= | Require a tag                                     |
 | =/ T= | Exclude a tag                                     |
 | =/ s= | Filter titles by regexp                           |
 | =/ d= | Scope to a directory                              |
 | =/ m= | Condition on a metadata field                     |
 | =/ l= | Filter by level                                   |
+| =/ k= | Remove a single filter condition                  |
 | =/ /= | Clear the filter                                  |
 | =c a= | Add a column                                      |
 | =c k= | Remove a column                                   |
@@ -306,15 +318,23 @@ Keybindings:
 | =?=   | Menu with all of the above                        |
 
 Actions apply to the marked notes, or to the note at point when
-nothing is marked. Marks are keyed by note id, so they survive
-sorting and re-querying. Bulk tag and metadata edits go through
-vulpea's batch operations (=vulpea-tags-batch-add= and friends), so
-they need a vulpea recent enough to provide them. Deleting removes
-the files of file-level notes; heading-level notes are skipped.
+nothing is marked (=y= and =Y= fall back to the whole view instead).
+Marks are keyed by note id, so they survive sorting and re-querying.
+Edits touching more than one note ask first and list the notes they
+are about to change. Bulk tag and metadata edits go through vulpea's
+batch operations (=vulpea-tags-batch-add= and friends), so they need
+a vulpea recent enough to provide them. Deleting removes the files of
+file-level notes; heading-level notes are skipped.
+
+Collection buffers are bookmarkable: =C-x r m= records the view and
+jumping to the bookmark re-opens it. Saved views are managed with
+=vulpea-ui-collection-rename-view= and
+=vulpea-ui-collection-delete-view= (also in the =?= menu).
 
 Like the sidebar, the view refreshes itself when vulpea's background
 extraction lands changes in the database (vulpea 2.6+), coalescing
-bulk syncs into a single refresh.
+bulk syncs into a single refresh. Only visible buffers re-query
+immediately; hidden ones wait until they are shown again.
 
 * Default widgets
 
