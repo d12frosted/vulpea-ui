@@ -3244,13 +3244,21 @@ column."
                   parts)))))
     (when parts (string-join (nreverse parts) ", "))))
 
+(defvar-local vulpea-ui-collection--total nil
+  "Total number of notes in the collection, captured at refresh.")
+
 (defun vulpea-ui-collection--mode-line-info ()
-  "Return the mode line suffix: counts, filter and aggregates."
+  "Return the mode line suffix: counts, filter and aggregates.
+The total appears only when the filter actually narrows, so an
+unfiltered view reads :4231, a narrowed one :142/4231."
   (let ((notes (length tabulated-list-entries))
         (marked (hash-table-count vulpea-ui-collection--marked))
         (filter (vulpea-ui-collection--filter-description
                  (plist-get vulpea-ui-collection--view :filter))))
-    (concat (format ":%d" notes)
+    (concat (if (and vulpea-ui-collection--total
+                     (/= vulpea-ui-collection--total notes))
+                (format ":%d/%d" notes vulpea-ui-collection--total)
+              (format ":%d" notes))
             (when (> marked 0) (format " (%d marked)" marked))
             (unless (string-empty-p filter)
               (concat " [" (truncate-string-to-width filter 40 nil nil "...")
@@ -3404,6 +3412,9 @@ tabulated-list support that arrived in Emacs 30."
                     (vulpea-ui-collection--view-columns)))
          (ctx (vulpea-ui-collection--context columns)))
     (setq vulpea-ui-collection--ctx ctx)
+    (setq vulpea-ui-collection--total
+          (and (fboundp 'vulpea-db-count-notes)
+               (ignore-errors (vulpea-db-count-notes))))
     (setq vulpea-ui-collection--aggregates
           (vulpea-ui-collection--aggregates notes columns))
     (clrhash vulpea-ui-collection--note-table)
