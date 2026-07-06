@@ -242,7 +242,16 @@ columns and familiar navigation for free.
 
 =M-x vulpea-ui-collection= completes over your saved views; free input
 is treated as a comma-separated list of tags, so typing =wine, rated=
-opens an ad-hoc view of notes carrying both tags.
+opens an ad-hoc view of notes carrying both tags. Empty input opens
+the whole collection. Press =?= inside the view for a menu of
+everything it can do; the mode line shows the note count, how many
+are marked, and the active filter.
+
+Filters are refined without leaving the buffer (=/= prefix) and
+columns are added and removed on the fly (=c= prefix), so a typical
+session is: open everything, narrow by a tag or two, add the meta
+columns you care about, mark, act, and save the result as a named
+view with =w=.
 
 Views are plists. Save them in =vulpea-ui-collection-views= (or press
 =w= in a collection buffer to save the current one):
@@ -282,9 +291,19 @@ Keybindings:
 | =E=   | Remove a metadata field from the selection        |
 | =D=   | Delete the selected notes (with confirmation)     |
 | =x=   | Apply a function to the selection                 |
+| =/ t= | Require a tag                                     |
+| =/ T= | Exclude a tag                                     |
+| =/ s= | Filter titles by regexp                           |
+| =/ d= | Scope to a directory                              |
+| =/ m= | Condition on a metadata field                     |
+| =/ l= | Filter by level                                   |
+| =/ /= | Clear the filter                                  |
+| =c a= | Add a column                                      |
+| =c k= | Remove a column                                   |
 | =w=   | Save the current view                             |
 | =g=   | Re-query and refresh                              |
 | =S=   | Sort by column at point (=tabulated-list-mode=)   |
+| =?=   | Menu with all of the above                        |
 
 Actions apply to the marked notes, or to the note at point when
 nothing is marked. Marks are keyed by note id, so they survive
