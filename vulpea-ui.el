@@ -2969,7 +2969,8 @@ The result is a plist with :id, :key, :name and :width."
                    key
                    (capitalize (symbol-name id))))
          (width (or (plist-get overrides :width) (cadr defaults) 12)))
-    (list :id id :key key :name name :width width)))
+    (list :id id :key key :name name :width width
+          :explicit-width (and (plist-member overrides :width) t))))
 
 (defun vulpea-ui-collection--format-time (value)
   "Format timestamp VALUE as an ISO date string.
@@ -3050,17 +3051,35 @@ CTX is the per-refresh data plist."
     (< (string-to-number (aref (cadr a) index))
        (string-to-number (aref (cadr b) index)))))
 
-(defun vulpea-ui-collection--format (columns)
+(defun vulpea-ui-collection--column-width (col index entries)
+  "Return the width for normalized COL, the column at ENTRIES' INDEX.
+Without ENTRIES, or when COL carries an explicit width, the declared
+width is used as-is; otherwise the column is fitted to its longest
+cell, with the declared width acting as a cap and the header always
+fitting."
+  (let ((width (plist-get col :width)))
+    (if (or (plist-get col :explicit-width) (null entries))
+        width
+      (let ((longest 0))
+        (dolist (entry entries)
+          (setq longest (max longest
+                             (string-width (aref (cadr entry) index)))))
+        (min width
+             (max (+ (string-width (plist-get col :name)) 2)
+                  (1+ longest)))))))
+
+(defun vulpea-ui-collection--format (columns &optional entries)
   "Build `tabulated-list-format' for COLUMNS.
 A one-character mark column is prepended; count columns sort
-numerically, everything else as strings."
+numerically, everything else as strings.  With ENTRIES, columns
+without an explicit width are fitted to their content."
   (apply #'vector
-         '("" 1 nil)
+         (list "" 1 nil)
          (seq-map-indexed
           (lambda (col idx)
             (let ((col (vulpea-ui-collection--normalize-column col)))
               (list (plist-get col :name)
-                    (plist-get col :width)
+                    (vulpea-ui-collection--column-width col (1+ idx) entries)
                     (if (memq (plist-get col :id) '(links backlinks))
                         (vulpea-ui-collection--numeric-sorter (1+ idx))
                       t))))
@@ -3189,6 +3208,33 @@ backlinks column is present."
   (or (plist-get vulpea-ui-collection--view :columns)
       vulpea-ui-collection-default-columns))
 
+(defvar-local vulpea-ui-collection--computed-widths nil
+  "Alist of column name to last computed (auto-fitted) width.
+Lets a refresh tell a hand-resized column apart from an auto-sized
+one, so user adjustments survive.")
+
+(defun vulpea-ui-collection--update-format (columns)
+  "Install the fitted format for COLUMNS, keeping user width tweaks.
+A column whose current width differs from the last computed one was
+resized by hand (e.g. `tabulated-list-widen-current-column'); that
+width is kept for as long as the column stays."
+  (let* ((computed (vulpea-ui-collection--format
+                    columns tabulated-list-entries))
+         (fresh (mapcar (lambda (col) (cons (car col) (nth 1 col)))
+                        (append computed nil))))
+    (dolist (col (append computed nil))
+      (when-let* ((current (seq-find (lambda (old)
+                                       (equal (car old) (car col)))
+                                     (append tabulated-list-format nil)))
+                  (last-width (cdr (assoc (car col)
+                                          vulpea-ui-collection--computed-widths))))
+        (when (and (numberp (nth 1 current))
+                   (/= (nth 1 current) last-width))
+          (setf (nth 1 col) (nth 1 current)))))
+    (setq vulpea-ui-collection--computed-widths fresh)
+    (setq tabulated-list-format computed)
+    (tabulated-list-init-header)))
+
 (defun vulpea-ui-collection-refresh ()
   "Re-query the view and re-render, keeping the marked set and point."
   (interactive)
@@ -3204,7 +3250,18 @@ backlinks column is present."
     (setq tabulated-list-entries
           (vulpea-ui-collection--entries
            notes columns vulpea-ui-collection--marked ctx))
-    (tabulated-list-print t)))
+    (vulpea-ui-collection--update-format columns)
+    (tabulated-list-print t)
+    (when (null tabulated-list-entries)
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-max))
+          (insert (propertize
+                   (substitute-command-keys
+                    (concat "No notes match this filter.  "
+                            "\\[vulpea-ui-collection-filter-clear] clears it, "
+                            "\\[vulpea-ui-collection-menu] lists every command."))
+                   'face 'shadow)))))))
 
 (defvar vulpea-ui-collection--worker-refresh-pending nil
   "Non-nil when background extraction changed data during a busy burst.")
