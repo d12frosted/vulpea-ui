@@ -2857,6 +2857,36 @@ MODIFIED-AT map to the corresponding `vulpea-note' slots."
     (vulpea-ui-collection-unmark-all)
     (should (= 0 (hash-table-count vulpea-ui-collection--marked)))))
 
+(ert-deftest vulpea-ui-collection-test-mark-updates-single-row ()
+  "Marking rewrites only the row at point, leaving other lines alone."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (let ((second-line (save-excursion
+                         (goto-char (point-min))
+                         (forward-line 1)
+                         (buffer-substring (point) (line-end-position)))))
+      (vulpea-ui-collection-mark)
+      (goto-char (point-min))
+      (should (string-prefix-p "*" (buffer-substring
+                                    (point) (line-end-position))))
+      (forward-line 1)
+      (should (equal (buffer-substring (point) (line-end-position))
+                     second-line)))))
+
+(ert-deftest vulpea-ui-collection-test-mark-no-full-reprint ()
+  "A single mark must not re-print the whole table."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (cl-letf (((symbol-function 'tabulated-list-print)
+               (lambda (&rest _) (error "Full re-print on mark"))))
+      (vulpea-ui-collection-mark)
+      (goto-char (point-min))
+      (vulpea-ui-collection-unmark))
+    (goto-char (point-min))
+    (should (equal (aref (tabulated-list-get-entry) 0) " "))))
+
 (ert-deftest vulpea-ui-collection-test-toggle-marks ()
   "Inverting marks flips every row."
   (vulpea-ui-test--with-collection-buffer
