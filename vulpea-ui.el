@@ -3323,9 +3323,9 @@ width is kept for as long as the column stays."
 
 (defun vulpea-ui-collection--group-entries (entries group-by)
   "Group ENTRIES by the GROUP-BY column's value of their notes.
-Returns the `tabulated-list-groups' format: a list of
-\(NAME ENTRY...) with groups sorted by name and counts in the name.
-Rows with an empty value land in \"(none)\"."
+Returns the format of the variable `tabulated-list-groups': a list
+of (NAME ENTRY...) with groups sorted by name and counts in the
+name.  Rows with an empty value land in \"(none)\"."
   (let ((col (vulpea-ui-collection--normalize-column group-by))
         (groups (make-hash-table :test 'equal))
         names)
@@ -4449,7 +4449,7 @@ PARAMS supports:
 
 Example:
 
-  #+BEGIN: vulpea-collection :query \"wine rating:*\" :columns (title (meta \"rating\"))
+  #+BEGIN: vulpea-collection :query \"wine rating:*\"
   #+END:"
   (let* ((view (cond ((plist-get params :view)
                       (vulpea-ui-collection--resolve-view
@@ -4486,10 +4486,10 @@ Example:
   (org-create-dblock (list :name "vulpea-collection" :query ""))
   (org-update-dblock))
 
-(with-eval-after-load 'org
-  (when (fboundp 'org-dynamic-block-define)
-    (org-dynamic-block-define "vulpea-collection"
-                              #'vulpea-ui-collection-insert-dblock)))
+;; org is a hard dependency (via vulpea), so it is already loaded here
+(when (fboundp 'org-dynamic-block-define)
+  (org-dynamic-block-define "vulpea-collection"
+                            #'vulpea-ui-collection-insert-dblock))
 
 ;;;; Collections sidebar widget
 
