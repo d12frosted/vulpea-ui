@@ -3141,6 +3141,8 @@ the note id."
 (defvar vulpea-ui-collection-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'vulpea-ui-collection-visit)
+    (define-key map (kbd "o") #'vulpea-ui-collection-visit-other-window)
+    (define-key map (kbd "C-o") #'vulpea-ui-collection-preview)
     (define-key map (kbd "m") #'vulpea-ui-collection-mark)
     (define-key map (kbd "u") #'vulpea-ui-collection-unmark)
     (define-key map (kbd "U") #'vulpea-ui-collection-unmark-all)
@@ -3647,14 +3649,44 @@ The function is called once with the list of selected notes."
       (funcall fn notes)
       (vulpea-ui-collection-refresh))))
 
+(defun vulpea-ui-collection--note-at-point ()
+  "Return the note of the row at point, if any."
+  (when-let* ((id (tabulated-list-get-id)))
+    (gethash id vulpea-ui-collection--note-table)))
+
+(defun vulpea-ui-collection--goto-note (note)
+  "Move point to NOTE's position in the current buffer and reveal it."
+  (widen)
+  (goto-char (vulpea-note-pos note))
+  (when (and (derived-mode-p 'org-mode)
+             (fboundp 'org-fold-show-context))
+    (org-fold-show-context)))
+
 (defun vulpea-ui-collection-visit ()
   "Visit the note at point."
   (interactive)
-  (when-let* ((id (tabulated-list-get-id))
-              (note (gethash id vulpea-ui-collection--note-table)))
+  (when-let* ((note (vulpea-ui-collection--note-at-point)))
     (find-file (vulpea-note-path note))
-    (widen)
-    (goto-char (vulpea-note-pos note))))
+    (vulpea-ui-collection--goto-note note)))
+
+(defun vulpea-ui-collection-visit-other-window ()
+  "Visit the note at point in another window."
+  (interactive)
+  (when-let* ((note (vulpea-ui-collection--note-at-point)))
+    (find-file-other-window (vulpea-note-path note))
+    (vulpea-ui-collection--goto-note note)))
+
+(defun vulpea-ui-collection-preview ()
+  "Display the note at point in another window without leaving the table."
+  (interactive)
+  (when-let* ((note (vulpea-ui-collection--note-at-point)))
+    (let* ((buffer (find-file-noselect (vulpea-note-path note)))
+           (window (display-buffer buffer
+                                   '(nil (inhibit-same-window . t)))))
+      (when (window-live-p window)
+        (with-selected-window window
+          (vulpea-ui-collection--goto-note note)
+          (recenter))))))
 
 ;;;; Views
 
@@ -3731,6 +3763,8 @@ The filter, columns and current sort order are stored in
     ("x" "apply function" vulpea-ui-collection-apply)]
    ["View"
     ("RET" "visit note" vulpea-ui-collection-visit)
+    ("o" "visit other window" vulpea-ui-collection-visit-other-window)
+    ("C-o" "preview" vulpea-ui-collection-preview :transient t)
     ("g" "refresh" vulpea-ui-collection-refresh)
     ("w" "save view" vulpea-ui-collection-save-view)
     ("v" "switch view" vulpea-ui-collection)]])

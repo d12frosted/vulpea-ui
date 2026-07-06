@@ -3109,6 +3109,26 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
         (vulpea-ui-collection-apply)
         (should (= (length captured) 1))))))
 
+(ert-deftest vulpea-ui-collection-test-preview ()
+  "Preview displays the note's buffer without selecting its window."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :path "/notes/one.org" :pos 5))
+    (let (displayed (table-buffer (current-buffer)))
+      (cl-letf (((symbol-function 'find-file-noselect)
+                 (lambda (path &rest _)
+                   (setq displayed path)
+                   (generate-new-buffer " *stub-note*")))
+                ((symbol-function 'display-buffer)
+                 (lambda (buffer &rest _) (get-buffer-window buffer t))))
+        (unwind-protect
+            (progn
+              (vulpea-ui-collection-preview)
+              (should (equal displayed "/notes/one.org"))
+              (should (eq (current-buffer) table-buffer)))
+          (when-let* ((buf (get-buffer " *stub-note*")))
+            (kill-buffer buf)))))))
+
 (ert-deftest vulpea-ui-collection-test-marks-survive-sort ()
   "Marks live in entry vectors, so re-printing keeps them."
   (vulpea-ui-test--with-collection-buffer
