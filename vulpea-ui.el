@@ -4424,6 +4424,73 @@ VIEW is a plist with :name, :filter, :columns and :sort, see
       (vulpea-ui-collection-refresh))
     (switch-to-buffer buf)))
 
+;;;; Org dynamic block
+
+(defun vulpea-ui-collection--dblock-cell (note col ctx)
+  "Return NOTE's value for normalized column COL as an org table cell.
+CTX is the per-refresh data plist.  Titles become id links; pipes are
+escaped so a value cannot break the table."
+  (let ((value (if (eq (plist-get col :id) 'title)
+                   (vulpea-ui-collection--link-string note)
+                 (substring-no-properties
+                  (vulpea-ui-collection--column-raw-value note col ctx)))))
+    (replace-regexp-in-string "|" "\\\\vert{}" value)))
+
+;;;###autoload
+(defun org-dblock-write:vulpea-collection (params)
+  "Write an org table for a collection view into a dynamic block.
+PARAMS supports:
+
+  :view NAME     - a saved view from `vulpea-ui-collection-views'
+  :query STRING  - a query in the syntax of
+                   `vulpea-ui-collection--parse-query'
+  :columns LIST  - column descriptors, defaulting to the view's or
+                   `vulpea-ui-collection-default-columns'
+
+Example:
+
+  #+BEGIN: vulpea-collection :query \"wine rating:*\" :columns (title (meta \"rating\"))
+  #+END:"
+  (let* ((view (cond ((plist-get params :view)
+                      (vulpea-ui-collection--resolve-view
+                       (plist-get params :view)))
+                     ((plist-get params :query)
+                      (list :name (plist-get params :query)
+                            :filter (vulpea-ui-collection--parse-query
+                                     (plist-get params :query))))
+                     (t (list :name "all"))))
+         (columns (or (plist-get params :columns)
+                      (plist-get view :columns)
+                      vulpea-ui-collection-default-columns))
+         (cols (mapcar #'vulpea-ui-collection--normalize-column columns))
+         (ctx (vulpea-ui-collection--context columns))
+         (notes (vulpea-ui-collection--query (plist-get view :filter)))
+         (start (point)))
+    (insert "| "
+            (mapconcat (lambda (col) (plist-get col :name)) cols " | ")
+            " |\n|-\n")
+    (dolist (note notes)
+      (insert "| "
+              (mapconcat (lambda (col)
+                           (vulpea-ui-collection--dblock-cell note col ctx))
+                         cols " | ")
+              " |\n"))
+    (delete-char -1)
+    (goto-char start)
+    (org-table-align)))
+
+;;;###autoload
+(defun vulpea-ui-collection-insert-dblock ()
+  "Insert a vulpea-collection dynamic block at point."
+  (interactive)
+  (org-create-dblock (list :name "vulpea-collection" :query ""))
+  (org-update-dblock))
+
+(with-eval-after-load 'org
+  (when (fboundp 'org-dynamic-block-define)
+    (org-dynamic-block-define "vulpea-collection"
+                              #'vulpea-ui-collection-insert-dblock)))
+
 ;;;; Collections sidebar widget
 
 (vui-defcomponent vulpea-ui-widget-collections ()
