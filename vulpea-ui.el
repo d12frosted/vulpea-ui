@@ -3596,16 +3596,33 @@ The marked notes when any are marked, otherwise the note at point."
     :tags-none (vulpea-ui-collection--read-tag "Exclude tag: "))))
 
 (defun vulpea-ui-collection-filter-by-title ()
-  "Narrow the view to notes whose title matches a regexp.
-Empty input drops the title condition."
+  "Narrow the view to notes whose title matches a regexp, live.
+The table updates as you type; quitting the minibuffer restores the
+previous filter.  Empty input drops the title condition."
   (interactive)
-  (let ((re (read-string "Title regexp: "
-                         (plist-get (vulpea-ui-collection--current-filter)
-                                    :title))))
-    (vulpea-ui-collection--set-filter
-     (vulpea-ui-collection--filter-put
-      (vulpea-ui-collection--current-filter)
-      :title (unless (string-empty-p re) re)))))
+  (let* ((buffer (current-buffer))
+         (original (vulpea-ui-collection--current-filter))
+         (apply-input
+          (lambda (input)
+            (with-current-buffer buffer
+              (vulpea-ui-collection--set-filter
+               (vulpea-ui-collection--filter-put
+                original :title (unless (string-empty-p input) input))))))
+         (update
+          (lambda (&rest _)
+            (when (minibufferp)
+              ;; a half-typed regexp like "[" must not kill the session
+              (condition-case nil
+                  (funcall apply-input (minibuffer-contents-no-properties))
+                (error nil))))))
+    (condition-case nil
+        (funcall apply-input
+                 (minibuffer-with-setup-hook
+                     (lambda ()
+                       (add-hook 'after-change-functions update nil t))
+                   (read-string "Narrow titles (live): "
+                                (plist-get original :title))))
+      (quit (funcall apply-input (or (plist-get original :title) ""))))))
 
 (defun vulpea-ui-collection-filter-by-directory ()
   "Narrow the view to notes under a directory.
