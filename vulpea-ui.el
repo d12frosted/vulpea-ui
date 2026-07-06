@@ -3119,6 +3119,13 @@ the note id."
 
 ;;;; Mode
 
+(defvar vulpea-ui-collection-mark-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "m") #'vulpea-ui-collection-mark-regexp)
+    (define-key map (kbd "t") #'vulpea-ui-collection-mark-by-tag)
+    map)
+  "Keymap for bulk marking in `vulpea-ui-collection-mode'.")
+
 (defvar vulpea-ui-collection-column-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "a") #'vulpea-ui-collection-add-column)
@@ -3157,6 +3164,7 @@ the note id."
     (define-key map (kbd "g") #'vulpea-ui-collection-refresh)
     (define-key map (kbd "/") vulpea-ui-collection-filter-map)
     (define-key map (kbd "c") vulpea-ui-collection-column-map)
+    (define-key map (kbd "%") vulpea-ui-collection-mark-map)
     (define-key map (kbd "?") #'vulpea-ui-collection-menu)
     map)
   "Keymap for `vulpea-ui-collection-mode'.")
@@ -3330,17 +3338,65 @@ sorting) and the buffer line is rewritten in place."
       (tabulated-list-print-entry id new)
       (goto-char pos))))
 
+(defun vulpea-ui-collection--mark-region (on)
+  "Set the mark of every row the region touches to ON."
+  (let ((beg (region-beginning))
+        (end (region-end)))
+    (deactivate-mark)
+    (save-excursion
+      (goto-char beg)
+      (while (< (point) end)
+        (when-let* ((id (tabulated-list-get-id)))
+          (if on
+              (puthash id t vulpea-ui-collection--marked)
+            (remhash id vulpea-ui-collection--marked)))
+        (forward-line 1))))
+  (vulpea-ui-collection--sync-marks))
+
 (defun vulpea-ui-collection-mark ()
-  "Mark the note at point and move to the next line."
+  "Mark the note at point and move to the next line.
+With an active region, mark every row the region touches instead."
   (interactive)
-  (vulpea-ui-collection--set-mark-at-point t)
-  (forward-line 1))
+  (if (use-region-p)
+      (vulpea-ui-collection--mark-region t)
+    (vulpea-ui-collection--set-mark-at-point t)
+    (forward-line 1)))
 
 (defun vulpea-ui-collection-unmark ()
-  "Unmark the note at point and move to the next line."
+  "Unmark the note at point and move to the next line.
+With an active region, unmark every row the region touches instead."
   (interactive)
-  (vulpea-ui-collection--set-mark-at-point nil)
-  (forward-line 1))
+  (if (use-region-p)
+      (vulpea-ui-collection--mark-region nil)
+    (vulpea-ui-collection--set-mark-at-point nil)
+    (forward-line 1)))
+
+(defun vulpea-ui-collection-mark-regexp (regexp)
+  "Mark every note in the view whose title matches REGEXP."
+  (interactive (list (read-regexp "Mark titles matching: ")))
+  (let ((count 0))
+    (dolist (entry tabulated-list-entries)
+      (when-let* ((note (gethash (car entry)
+                                 vulpea-ui-collection--note-table)))
+        (when (string-match-p regexp (or (vulpea-note-title note) ""))
+          (puthash (car entry) t vulpea-ui-collection--marked)
+          (setq count (1+ count)))))
+    (vulpea-ui-collection--sync-marks)
+    (message "Marked %d note(s)" count)))
+
+(defun vulpea-ui-collection-mark-by-tag (tag)
+  "Mark every note in the view carrying TAG."
+  (interactive
+   (list (vulpea-ui-collection--read-tag "Mark notes tagged: ")))
+  (let ((count 0))
+    (dolist (entry tabulated-list-entries)
+      (when-let* ((note (gethash (car entry)
+                                 vulpea-ui-collection--note-table)))
+        (when (member tag (vulpea-note-tags note))
+          (puthash (car entry) t vulpea-ui-collection--marked)
+          (setq count (1+ count)))))
+    (vulpea-ui-collection--sync-marks)
+    (message "Marked %d note(s)" count)))
 
 (defun vulpea-ui-collection-unmark-all ()
   "Unmark all notes."
@@ -3753,7 +3809,10 @@ The filter, columns and current sort order are stored in
     ("m" "mark" vulpea-ui-collection-mark :transient t)
     ("u" "unmark" vulpea-ui-collection-unmark :transient t)
     ("U" "unmark all" vulpea-ui-collection-unmark-all :transient t)
-    ("i" "invert" vulpea-ui-collection-toggle-marks :transient t)]]
+    ("i" "invert" vulpea-ui-collection-toggle-marks :transient t)
+    ("r" "mark by title regexp" vulpea-ui-collection-mark-regexp
+     :transient t)
+    ("#" "mark by tag" vulpea-ui-collection-mark-by-tag :transient t)]]
   [["Act on selection"
     ("+" "add tag" vulpea-ui-collection-add-tag)
     ("-" "remove tag" vulpea-ui-collection-remove-tag)
