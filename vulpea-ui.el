@@ -3925,23 +3925,86 @@ all of them, or empty for a view over the whole collection."
       (list :name input
             :filter (list :tags-all (split-string input "[, ]+" t)))))))
 
+(defun vulpea-ui-collection--column-with-width (col width)
+  "Return descriptor COL with :width WIDTH pinned into it."
+  (let* ((col (if (listp col) col (list col)))
+         (key-p (and (cdr col) (not (keywordp (cadr col)))))
+         (head (if key-p (list (car col) (cadr col)) (list (car col))))
+         (overrides (copy-sequence (if key-p (cddr col) (cdr col)))))
+    (append head (plist-put overrides :width width))))
+
+(defun vulpea-ui-collection--columns-with-current-widths ()
+  "Return the view's columns, hand-resized widths pinned in.
+A column whose current width matches the last computed one stays
+fluid (auto-fitted on every refresh); one the user resized keeps its
+width as an explicit :width override."
+  (let ((format (append tabulated-list-format nil)))
+    (seq-map-indexed
+     (lambda (col idx)
+       (let* ((name (plist-get
+                     (vulpea-ui-collection--normalize-column col)
+                     :name))
+              (current (nth (1+ idx) format))
+              (computed (cdr (assoc name
+                                    vulpea-ui-collection--computed-widths))))
+         (if (and current computed
+                  (numberp (nth 1 current))
+                  (/= (nth 1 current) computed))
+             (vulpea-ui-collection--column-with-width
+              col (nth 1 current))
+           col)))
+     (vulpea-ui-collection--view-columns))))
+
+(defun vulpea-ui-collection--persist-views ()
+  "Persist `vulpea-ui-collection-views' via Customize when possible."
+  (condition-case nil
+      (customize-save-variable 'vulpea-ui-collection-views
+                               vulpea-ui-collection-views)
+    (error (message "Saved views changed for this session only"))))
+
 (defun vulpea-ui-collection-save-view (name)
   "Save the current view configuration under NAME.
-The filter, columns and current sort order are stored in
-`vulpea-ui-collection-views' and persisted via Customize."
+The filter, columns (with any hand-resized widths pinned in) and
+current sort order are stored in `vulpea-ui-collection-views' and
+persisted via Customize."
   (interactive
    (list (read-string "Save view as: "
                       (plist-get vulpea-ui-collection--view :name))))
   (unless (derived-mode-p 'vulpea-ui-collection-mode)
     (user-error "Not in a collection buffer"))
   (let ((spec (list :filter (plist-get vulpea-ui-collection--view :filter)
-                    :columns (vulpea-ui-collection--view-columns)
+                    :columns (vulpea-ui-collection--columns-with-current-widths)
                     :sort tabulated-list-sort-key)))
     (setf (alist-get name vulpea-ui-collection-views nil nil #'equal) spec)
-    (condition-case nil
-        (customize-save-variable 'vulpea-ui-collection-views
-                                 vulpea-ui-collection-views)
-      (error (message "View %s saved for this session only" name)))))
+    (vulpea-ui-collection--persist-views)
+    (message "Saved view %s" name)))
+
+(defun vulpea-ui-collection-rename-view (name new-name)
+  "Rename the saved view NAME to NEW-NAME."
+  (interactive
+   (let ((name (completing-read "Rename view: "
+                                (mapcar #'car vulpea-ui-collection-views)
+                                nil t)))
+     (list name (read-string (format "Rename %s to: " name) name))))
+  (let ((spec (cdr (assoc name vulpea-ui-collection-views))))
+    (unless spec (user-error "No saved view named %s" name))
+    (setq vulpea-ui-collection-views
+          (assoc-delete-all name vulpea-ui-collection-views))
+    (setf (alist-get new-name vulpea-ui-collection-views nil nil #'equal)
+          spec)
+    (vulpea-ui-collection--persist-views)
+    (message "Renamed view %s to %s" name new-name)))
+
+(defun vulpea-ui-collection-delete-view (name)
+  "Delete the saved view NAME."
+  (interactive
+   (list (completing-read "Delete view: "
+                          (mapcar #'car vulpea-ui-collection-views)
+                          nil t)))
+  (setq vulpea-ui-collection-views
+        (assoc-delete-all name vulpea-ui-collection-views))
+  (vulpea-ui-collection--persist-views)
+  (message "Deleted view %s" name))
 
 (declare-function bookmark-prop-get "bookmark" (bookmark prop))
 
@@ -4016,7 +4079,11 @@ bookmark file; the current sort order and columns are captured."
     ("C-o" "preview" vulpea-ui-collection-preview :transient t)
     ("g" "refresh" vulpea-ui-collection-refresh)
     ("w" "save view" vulpea-ui-collection-save-view)
-    ("v" "switch view" vulpea-ui-collection)]])
+    ("v" "switch view" vulpea-ui-collection)
+    ("R" "rename saved view" vulpea-ui-collection-rename-view
+     :transient t)
+    ("X" "delete saved view" vulpea-ui-collection-delete-view
+     :transient t)]])
 
 ;;;###autoload
 (defun vulpea-ui-collection-open (view)
