@@ -3473,6 +3473,40 @@ single-note edits apply without asking."
                                 :todo)
                      "TODO")))))
 
+(ert-deftest vulpea-ui-collection-test-set-todo ()
+  "Setting a state hits heading notes, skips file notes, and undoes."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "h1" :title "Task" :level 2 :todo "TODO")
+            (vulpea-ui-test--collection-note
+             :id "f1" :title "File" :level 0))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-mark)
+    (let (applied)
+      (cl-letf (((symbol-function 'vulpea-ui-collection--note-set-todo)
+                 (lambda (note state)
+                   (push (cons (vulpea-note-id note) state) applied)
+                   t))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'yes-or-no-p) (lambda (_) t))
+                ((symbol-function 'completing-read)
+                 (lambda (&rest _) "DONE")))
+        (vulpea-ui-collection-set-todo)
+        (should (equal applied '(("h1" . "DONE"))))
+        (setq applied nil)
+        (vulpea-ui-collection-undo)
+        (should (equal applied '(("h1" . "TODO"))))))))
+
+(ert-deftest vulpea-ui-collection-test-todo-sorter ()
+  "The todo column sorts in org keyword order, empty cells last."
+  (let ((org-todo-keywords-1 '("TODO" "WAIT" "DONE"))
+        (sorter (vulpea-ui-collection--todo-sorter 1)))
+    (cl-flet ((entry (state) (list "id" (vector " " state))))
+      (should (funcall sorter (entry "TODO") (entry "DONE")))
+      (should-not (funcall sorter (entry "DONE") (entry "TODO")))
+      (should (funcall sorter (entry "WAIT") (entry "DONE")))
+      (should (funcall sorter (entry "DONE") (entry ""))))))
+
 (ert-deftest vulpea-ui-collection-test-copy-links ()
   "Copying links puts an org list of the selection on the kill ring."
   (vulpea-ui-test--with-collection-buffer
