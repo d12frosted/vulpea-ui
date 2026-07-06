@@ -2908,6 +2908,31 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
                         (ensure-list
                          (get-text-property 0 'face title-cell)))))))
 
+(ert-deftest vulpea-ui-collection-test-cell-help-echo ()
+  "Every non-empty cell carries its full value as help-echo."
+  (let ((note (vulpea-ui-test--collection-note :tags '("wine" "rated"))))
+    (should (equal (get-text-property
+                    0 'help-echo
+                    (vulpea-ui-collection--column-value
+                     note
+                     (vulpea-ui-collection--normalize-column 'tags)
+                     nil))
+                   "wine rated"))))
+
+(ert-deftest vulpea-ui-collection-test-show-row ()
+  "SPC shows the full row as column: value lines."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :tags '("wine")))
+    (vulpea-ui-test--collection-set-columns notes '(title tags))
+    (let (shown)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (setq shown (apply #'format fmt args)))))
+        (vulpea-ui-collection-show-row))
+      (should (string-match-p "Title: One" shown))
+      (should (string-match-p "Tags: wine" shown)))))
+
 (ert-deftest vulpea-ui-collection-test-format ()
   "The tabulated-list format has a mark column plus one per descriptor."
   (let ((format (vulpea-ui-collection--format '(title tags))))
