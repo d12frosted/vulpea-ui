@@ -4390,6 +4390,32 @@ VIEW is a plist with :name, :filter, :columns and :sort, see
       (vulpea-ui-collection-refresh))
     (switch-to-buffer buf)))
 
+;;;; Collections sidebar widget
+
+(vui-defcomponent vulpea-ui-widget-collections ()
+  "Widget listing saved collection views as quick links."
+  :render
+  (when vulpea-ui-collection-views
+    (vui-component 'vulpea-ui-widget
+      :title "Collections"
+      :children
+      (lambda ()
+        (vui-vstack
+         :spacing 0
+         (seq-map (lambda (entry)
+                    (let ((name (car entry)))
+                      (vui-button name
+                                  :key name
+                                  :on-click (lambda ()
+                                              (vulpea-ui-collection name)))))
+                  vulpea-ui-collection-views))))))
+
+(vulpea-ui-register-widget 'collections
+                           :component 'vulpea-ui-widget-collections
+                           :predicate (lambda (_note)
+                                        vulpea-ui-collection-views)
+                           :order 500)
+
 ;;;###autoload
 (defun vulpea-ui-collection (view)
   "Open a collection view over vulpea notes.
