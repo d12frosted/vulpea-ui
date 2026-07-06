@@ -3157,7 +3157,7 @@ the note id."
     (define-key map (kbd "t") #'vulpea-ui-collection-toggle-marks)
     (define-key map (kbd "+") #'vulpea-ui-collection-add-tag)
     (define-key map (kbd "-") #'vulpea-ui-collection-remove-tag)
-    (define-key map (kbd "e") #'vulpea-ui-collection-set-meta)
+    (define-key map (kbd "e") #'vulpea-ui-collection-quick-edit)
     (define-key map (kbd "E") #'vulpea-ui-collection-remove-meta)
     (define-key map (kbd "D") #'vulpea-ui-collection-delete)
     (define-key map (kbd "x") #'vulpea-ui-collection-apply)
@@ -3756,6 +3756,59 @@ surprise; a single-note edit applies without asking."
         (message "Set %s on %d note(s)" key (length notes))
         (vulpea-ui-collection-refresh)))))
 
+(defun vulpea-ui-collection--column-at-point ()
+  "Return the normalized descriptor of the view column at point, if any.
+Uses the column name that `tabulated-list-mode' stamps on every cell."
+  (when-let* ((name (get-text-property (point)
+                                       'tabulated-list-column-name)))
+    (seq-find (lambda (col) (equal (plist-get col :name) name))
+              (mapcar #'vulpea-ui-collection--normalize-column
+                      (vulpea-ui-collection--view-columns)))))
+
+(defun vulpea-ui-collection--edit-tags-at-point ()
+  "Rewrite the tags of the note at point, prefilled with the current ones."
+  (vulpea-ui-collection--require 'vulpea-tags-set)
+  (let ((note (vulpea-ui-collection--note-at-point)))
+    (unless note (user-error "No note at point"))
+    (let ((tags (completing-read-multiple
+                 "Tags: "
+                 (when (fboundp 'vulpea-db-query-tags)
+                   (ignore-errors (vulpea-db-query-tags)))
+                 nil nil
+                 (string-join (vulpea-note-tags note) ","))))
+      (apply #'vulpea-tags-set note tags)
+      (message "Set tags of %s" (vulpea-note-title note))
+      (vulpea-ui-collection-refresh))))
+
+(defun vulpea-ui-collection--edit-meta (key)
+  "Read a value for meta KEY and set it on the selection.
+The prompt is prefilled from the note at point."
+  (vulpea-ui-collection--require 'vulpea-meta-batch-set)
+  (let ((notes (vulpea-ui-collection--notes-for-action)))
+    (unless notes (user-error "No notes selected"))
+    (let ((value (read-string
+                  (format "Value for %s: " key)
+                  (when-let* ((note (vulpea-ui-collection--note-at-point)))
+                    (vulpea-note-meta-get note key)))))
+      (when (vulpea-ui-collection--confirm
+             (format "Set %s to %s on" key value) notes)
+        (vulpea-meta-batch-set notes key value)
+        (message "Set %s on %d note(s)" key (length notes))
+        (vulpea-ui-collection-refresh)))))
+
+(defun vulpea-ui-collection-quick-edit ()
+  "Edit the field of the column at point.
+On the tags column, rewrite the tags of the note at point with
+completion, prefilled.  On a meta column, read a value for that key -
+prefilled from the note at point - and set it on the selection.
+Anywhere else, fall back to `vulpea-ui-collection-set-meta'."
+  (interactive)
+  (let ((col (vulpea-ui-collection--column-at-point)))
+    (pcase (plist-get col :id)
+      ('tags (vulpea-ui-collection--edit-tags-at-point))
+      ('meta (vulpea-ui-collection--edit-meta (plist-get col :key)))
+      (_ (vulpea-ui-collection-set-meta)))))
+
 (defun vulpea-ui-collection-remove-meta ()
   "Remove a metadata field from the marked notes (or the note at point)."
   (interactive)
@@ -4067,7 +4120,7 @@ bookmark file; the current sort order and columns are captured."
   [["Act on selection"
     ("+" "add tag" vulpea-ui-collection-add-tag)
     ("-" "remove tag" vulpea-ui-collection-remove-tag)
-    ("e" "set meta" vulpea-ui-collection-set-meta)
+    ("e" "edit field at point" vulpea-ui-collection-quick-edit)
     ("E" "remove meta" vulpea-ui-collection-remove-meta)
     ("D" "delete" vulpea-ui-collection-delete)
     ("x" "apply function" vulpea-ui-collection-apply)

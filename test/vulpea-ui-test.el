@@ -3151,6 +3151,93 @@ single-note edits apply without asking."
         (should (equal (nth 2 batched) "France"))
         (should (= (length (nth 0 batched)) 1))))))
 
+(ert-deftest vulpea-ui-collection-test-column-at-point ()
+  "The column under point resolves to its view descriptor."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :meta '(("country" "France"))))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title (meta "country"))))
+    (setq tabulated-list-entries
+          (vulpea-ui-collection--entries
+           notes '(title (meta "country"))
+           vulpea-ui-collection--marked nil))
+    (setq tabulated-list-format
+          (vulpea-ui-collection--format '(title (meta "country"))
+                                        tabulated-list-entries))
+    (tabulated-list-init-header)
+    (tabulated-list-print)
+    (goto-char (point-min))
+    (search-forward "One")
+    (goto-char (match-beginning 0))
+    (should (eq (plist-get (vulpea-ui-collection--column-at-point) :id)
+                'title))
+    (search-forward "France")
+    (goto-char (match-beginning 0))
+    (let ((col (vulpea-ui-collection--column-at-point)))
+      (should (eq (plist-get col :id) 'meta))
+      (should (equal (plist-get col :key) "country")))))
+
+(ert-deftest vulpea-ui-collection-test-quick-edit-meta ()
+  "e on a meta column edits that key, prefilled from the note at point."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :meta '(("country" "France"))))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title (meta "country"))))
+    (setq tabulated-list-entries
+          (vulpea-ui-collection--entries
+           notes '(title (meta "country"))
+           vulpea-ui-collection--marked nil))
+    (setq tabulated-list-format
+          (vulpea-ui-collection--format '(title (meta "country"))
+                                        tabulated-list-entries))
+    (tabulated-list-init-header)
+    (tabulated-list-print)
+    (goto-char (point-min))
+    (search-forward "France")
+    (goto-char (match-beginning 0))
+    (let (batched initial)
+      (cl-letf (((symbol-function 'vulpea-meta-batch-set)
+                 (lambda (notes key value)
+                   (setq batched (list notes key value))))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'read-string)
+                 (lambda (_prompt &optional init &rest _)
+                   (setq initial init)
+                   "Italy")))
+        (vulpea-ui-collection-quick-edit)
+        (should (equal initial "France"))
+        (should (equal (nth 1 batched) "country"))
+        (should (equal (nth 2 batched) "Italy"))))))
+
+(ert-deftest vulpea-ui-collection-test-quick-edit-tags ()
+  "e on the tags column rewrites the tags of the note at point."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :tags '("wine")))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title tags)))
+    (setq tabulated-list-entries
+          (vulpea-ui-collection--entries
+           notes '(title tags) vulpea-ui-collection--marked nil))
+    (setq tabulated-list-format
+          (vulpea-ui-collection--format '(title tags)
+                                        tabulated-list-entries))
+    (tabulated-list-init-header)
+    (tabulated-list-print)
+    (goto-char (point-min))
+    (search-forward "wine")
+    (goto-char (match-beginning 0))
+    (let (set-args)
+      (cl-letf (((symbol-function 'vulpea-tags-set)
+                 (lambda (note &rest tags) (setq set-args (cons note tags))))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'completing-read-multiple)
+                 (lambda (&rest _) '("wine" "rated"))))
+        (vulpea-ui-collection-quick-edit)
+        (should (equal (cdr set-args) '("wine" "rated")))))))
+
 (ert-deftest vulpea-ui-collection-test-copy-links ()
   "Copying links puts an org list of the selection on the kill ring."
   (vulpea-ui-test--with-collection-buffer
