@@ -3161,6 +3161,8 @@ the note id."
     (define-key map (kbd "E") #'vulpea-ui-collection-remove-meta)
     (define-key map (kbd "D") #'vulpea-ui-collection-delete)
     (define-key map (kbd "x") #'vulpea-ui-collection-apply)
+    (define-key map (kbd "y") #'vulpea-ui-collection-copy-links)
+    (define-key map (kbd "Y") #'vulpea-ui-collection-export)
     (define-key map (kbd "w") #'vulpea-ui-collection-save-view)
     (define-key map (kbd "g") #'vulpea-ui-collection-refresh)
     (define-key map (kbd "/") vulpea-ui-collection-filter-map)
@@ -3759,6 +3761,66 @@ The function is called once with the list of selected notes."
       (funcall fn notes)
       (vulpea-ui-collection-refresh))))
 
+(defun vulpea-ui-collection--notes-for-export ()
+  "Return the notes to copy or export.
+The marked notes when any are marked, otherwise every note in the
+view, in display order."
+  (let ((marked (delq nil
+                      (mapcar (lambda (entry)
+                                (when (gethash (car entry)
+                                               vulpea-ui-collection--marked)
+                                  (gethash (car entry)
+                                           vulpea-ui-collection--note-table)))
+                              tabulated-list-entries))))
+    (or marked
+        (delq nil
+              (mapcar (lambda (entry)
+                        (gethash (car entry)
+                                 vulpea-ui-collection--note-table))
+                      tabulated-list-entries)))))
+
+(defun vulpea-ui-collection--link-string (note)
+  "Return an org link to NOTE."
+  (if (fboundp 'vulpea-utils-link-make-string)
+      (vulpea-utils-link-make-string note)
+    (format "[[id:%s][%s]]"
+            (vulpea-note-id note)
+            (vulpea-note-title note))))
+
+(defun vulpea-ui-collection--links-list (notes)
+  "Return NOTES as an org list of links, one per line."
+  (mapconcat (lambda (note)
+               (concat "- " (vulpea-ui-collection--link-string note)))
+             notes
+             "\n"))
+
+(defun vulpea-ui-collection-copy-links ()
+  "Copy the selection to the kill ring as an org list of links.
+The marked notes, or the whole view when nothing is marked."
+  (interactive)
+  (let ((notes (vulpea-ui-collection--notes-for-export)))
+    (unless notes (user-error "Nothing to copy"))
+    (kill-new (vulpea-ui-collection--links-list notes))
+    (message "Copied %d link(s)" (length notes))))
+
+(defun vulpea-ui-collection-export ()
+  "Export the selection to an org buffer as a list of links.
+The marked notes, or the whole view when nothing is marked."
+  (interactive)
+  (let ((notes (vulpea-ui-collection--notes-for-export))
+        (name (or (plist-get vulpea-ui-collection--view :name)
+                  "collection")))
+    (unless notes (user-error "Nothing to export"))
+    (let ((buffer (generate-new-buffer
+                   (format "*vulpea-collection-export: %s*" name))))
+      (with-current-buffer buffer
+        (org-mode)
+        (insert "#+title: " name "\n\n"
+                (vulpea-ui-collection--links-list notes)
+                "\n"))
+      (pop-to-buffer buffer)
+      (message "Exported %d note(s)" (length notes)))))
+
 (defun vulpea-ui-collection--note-at-point ()
   "Return the note of the row at point, if any."
   (when-let* ((id (tabulated-list-get-id)))
@@ -3875,7 +3937,9 @@ The filter, columns and current sort order are stored in
     ("e" "set meta" vulpea-ui-collection-set-meta)
     ("E" "remove meta" vulpea-ui-collection-remove-meta)
     ("D" "delete" vulpea-ui-collection-delete)
-    ("x" "apply function" vulpea-ui-collection-apply)]
+    ("x" "apply function" vulpea-ui-collection-apply)
+    ("y" "copy as links" vulpea-ui-collection-copy-links)
+    ("Y" "export to org buffer" vulpea-ui-collection-export)]
    ["View"
     ("RET" "visit note" vulpea-ui-collection-visit)
     ("o" "visit other window" vulpea-ui-collection-visit-other-window)
