@@ -3187,6 +3187,8 @@ dired-style marks and bulk actions on the selection.
   (hl-line-mode 1)
   (setq-local revert-buffer-function
               (lambda (&rest _) (vulpea-ui-collection-refresh)))
+  (add-hook 'window-buffer-change-functions
+            #'vulpea-ui-collection--on-displayed nil t)
   (when (boundp 'vulpea-db-worker-done-functions)
     (add-hook 'vulpea-db-worker-done-functions
               #'vulpea-ui-collection--on-worker-done)))
@@ -3279,11 +3281,18 @@ width is kept for as long as the column stays."
 (defvar vulpea-ui-collection--worker-refresh-pending nil
   "Non-nil when background extraction changed data during a busy burst.")
 
+(defvar-local vulpea-ui-collection--stale nil
+  "Non-nil when the database changed while this buffer was not displayed.
+The buffer re-queries when it is shown again instead of on every
+change nobody sees.")
+
 (defun vulpea-ui-collection--on-worker-done (_path status _count)
-  "Refresh live collection buffers when background extraction lands.
+  "Refresh visible collection buffers when background extraction lands.
 Mirrors `vulpea-ui--on-worker-done': STATUS `applied' and `missing'
 mark the database dirty; the refresh is deferred while the worker is
-busy (bulk syncs) and flushed once when the burst drains."
+busy (bulk syncs) and flushed once when the burst drains.  Buffers
+not shown in any window are only marked stale - they re-query when
+displayed, so a bulk sync does not run one query per hidden view."
   (when (memq status '(applied missing))
     (setq vulpea-ui-collection--worker-refresh-pending t))
   (when (and vulpea-ui-collection--worker-refresh-pending
@@ -3293,7 +3302,21 @@ busy (bulk syncs) and flushed once when the burst drains."
     (dolist (buf (buffer-list))
       (with-current-buffer buf
         (when (derived-mode-p 'vulpea-ui-collection-mode)
-          (vulpea-ui-collection-refresh))))))
+          (if (get-buffer-window buf 'visible)
+              (vulpea-ui-collection-refresh)
+            (setq vulpea-ui-collection--stale t)))))))
+
+(defun vulpea-ui-collection--on-displayed (window)
+  "Re-query a stale collection buffer once it is shown in WINDOW.
+Runs on the buffer-local `window-buffer-change-functions'; WINDOW is
+nil when called outside that hook."
+  (with-current-buffer (if (windowp window)
+                           (window-buffer window)
+                         (current-buffer))
+    (when (and (derived-mode-p 'vulpea-ui-collection-mode)
+               vulpea-ui-collection--stale)
+      (setq vulpea-ui-collection--stale nil)
+      (vulpea-ui-collection-refresh))))
 
 ;;;; Marks
 
