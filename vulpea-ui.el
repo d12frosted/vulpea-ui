@@ -2891,6 +2891,31 @@ FILTER is a plist; every present condition must hold:
          (let ((pred (plist-get filter :predicate)))
            (or (null pred) (funcall pred note))))))
 
+(defun vulpea-ui-collection--filter-description (filter)
+  "Return a short human-readable summary of FILTER.
+Empty string when FILTER has no conditions."
+  (let (parts)
+    (dolist (tag (plist-get filter :tags-all))
+      (push (concat "#" tag) parts))
+    (dolist (tag (plist-get filter :tags-any))
+      (push (concat "#" tag "?") parts))
+    (dolist (tag (plist-get filter :tags-none))
+      (push (concat "-#" tag) parts))
+    (when-let* ((level (plist-get filter :level)))
+      (push (format "level:%d" level) parts))
+    (when-let* ((dir (plist-get filter :directory)))
+      (push (concat "dir:" dir) parts))
+    (when-let* ((re (plist-get filter :title)))
+      (push (concat "title:" re) parts))
+    (dolist (condition (plist-get filter :meta))
+      (push (if (eq (cdr condition) t)
+                (format "%s:*" (car condition))
+              (format "%s:%s" (car condition) (cdr condition)))
+            parts))
+    (when (plist-get filter :predicate)
+      (push "predicate" parts))
+    (string-join (nreverse parts) " ")))
+
 (defun vulpea-ui-collection--query (filter)
   "Return all notes matching FILTER.
 The cheapest applicable database entry point narrows the candidate
@@ -3045,11 +3070,25 @@ dired-style marks and bulk actions on the selection.
   (setq-local vulpea-ui-collection--marked (make-hash-table :test 'equal))
   (setq-local vulpea-ui-collection--note-table
               (make-hash-table :test 'equal))
+  (setq-local mode-line-process
+              '((:eval (vulpea-ui-collection--mode-line-info))))
   (setq-local revert-buffer-function
               (lambda (&rest _) (vulpea-ui-collection-refresh)))
   (when (boundp 'vulpea-db-worker-done-functions)
     (add-hook 'vulpea-db-worker-done-functions
               #'vulpea-ui-collection--on-worker-done)))
+
+(defun vulpea-ui-collection--mode-line-info ()
+  "Return the mode line suffix: note count, marked count, filter."
+  (let ((notes (length tabulated-list-entries))
+        (marked (hash-table-count vulpea-ui-collection--marked))
+        (filter (vulpea-ui-collection--filter-description
+                 (plist-get vulpea-ui-collection--view :filter))))
+    (concat (format ":%d" notes)
+            (when (> marked 0) (format " (%d marked)" marked))
+            (unless (string-empty-p filter)
+              (concat " [" (truncate-string-to-width filter 40 nil nil "...")
+                      "]")))))
 
 (defun vulpea-ui-collection--context (columns)
   "Compute per-refresh context data needed by COLUMNS.
@@ -3313,12 +3352,18 @@ The function is called once with the list of selected notes."
 (defun vulpea-ui-collection--resolve-view (input)
   "Resolve INPUT into a view spec.
 INPUT is the name of a saved view from `vulpea-ui-collection-views',
-or a comma-separated list of tags for an ad-hoc view over notes
-carrying all of them."
-  (if-let* ((spec (cdr (assoc input vulpea-ui-collection-views))))
-      (append (list :name input) spec)
-    (list :name input
-          :filter (list :tags-all (split-string input "[, ]+" t)))))
+a comma-separated list of tags for an ad-hoc view over notes carrying
+all of them, or empty for a view over the whole collection."
+  (let ((input (string-trim input)))
+    (cond
+     ((string-empty-p input)
+      (list :name "all"))
+     ((cdr (assoc input vulpea-ui-collection-views))
+      (append (list :name input)
+              (cdr (assoc input vulpea-ui-collection-views))))
+     (t
+      (list :name input
+            :filter (list :tags-all (split-string input "[, ]+" t)))))))
 
 (defun vulpea-ui-collection-save-view (name)
   "Save the current view configuration under NAME.
@@ -3365,8 +3410,9 @@ Interactively, VIEW is read with completion over the saved views in
 comma-separated list of tags.  From Lisp, VIEW may also be a view
 spec plist, which is passed to `vulpea-ui-collection-open'."
   (interactive
-   (list (completing-read "Collection view (name or tags): "
-                          (mapcar #'car vulpea-ui-collection-views))))
+   (list (completing-read
+          "Collection (saved view, tags, or empty for all notes): "
+          (mapcar #'car vulpea-ui-collection-views))))
   (vulpea-ui-collection-open
    (if (stringp view)
        (vulpea-ui-collection--resolve-view view)
