@@ -3025,6 +3025,71 @@ MODIFIED-AT map to the corresponding `vulpea-note' slots."
     (should (equal (tabulated-list-get-id) "n1"))
     (should (equal (aref (tabulated-list-get-entry) 0) "*"))))
 
+(ert-deftest vulpea-ui-collection-test-filter-helpers ()
+  "Filter helpers return updated copies without mutating the original."
+  (let ((filter '(:tags-all ("wine"))))
+    (let ((updated (vulpea-ui-collection--filter-put filter :level 0)))
+      (should (= (plist-get updated :level) 0))
+      (should-not (plist-get filter :level)))
+    (let ((updated (vulpea-ui-collection--filter-add-to
+                    filter :tags-all "rated")))
+      (should (equal (plist-get updated :tags-all) '("wine" "rated")))
+      (should (equal (plist-get filter :tags-all) '("wine"))))
+    (should (equal (plist-get (vulpea-ui-collection--filter-add-to
+                               nil :tags-none "beer")
+                              :tags-none)
+                   '("beer")))))
+
+(ert-deftest vulpea-ui-collection-test-filter-commands ()
+  "Filter commands update the view's filter and re-query."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (let ((refreshed 0))
+      (cl-letf (((symbol-function 'vulpea-ui-collection-refresh)
+                 (lambda () (cl-incf refreshed)))
+                ((symbol-function 'vulpea-ui-collection--read-tag)
+                 (lambda (_prompt) "wine")))
+        (vulpea-ui-collection-filter-by-tag)
+        (vulpea-ui-collection-filter-exclude-tag)
+        (should (equal (plist-get
+                        (plist-get vulpea-ui-collection--view :filter)
+                        :tags-all)
+                       '("wine")))
+        (should (equal (plist-get
+                        (plist-get vulpea-ui-collection--view :filter)
+                        :tags-none)
+                       '("wine")))
+        (should (= refreshed 2))
+        (vulpea-ui-collection-filter-clear)
+        (should-not (plist-get vulpea-ui-collection--view :filter))
+        (should (= refreshed 3))))))
+
+(ert-deftest vulpea-ui-collection-test-filter-by-level-and-title ()
+  "Level and title filter commands parse their input."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (cl-letf (((symbol-function 'vulpea-ui-collection-refresh) #'ignore))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) "0")))
+        (vulpea-ui-collection-filter-by-level)
+        (should (= (plist-get
+                    (plist-get vulpea-ui-collection--view :filter)
+                    :level)
+                   0)))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) "any")))
+        (vulpea-ui-collection-filter-by-level)
+        (should-not (plist-get
+                     (plist-get vulpea-ui-collection--view :filter)
+                     :level)))
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (&rest _) "^Ch")))
+        (vulpea-ui-collection-filter-by-title)
+        (should (equal (plist-get
+                        (plist-get vulpea-ui-collection--view :filter)
+                        :title)
+                       "^Ch"))))))
+
 (ert-deftest vulpea-ui-collection-test-mode-line-info ()
   "The mode line shows note count, marked count and the filter."
   (vulpea-ui-test--with-collection-buffer
