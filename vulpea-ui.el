@@ -3065,6 +3065,19 @@ CTX is the per-refresh data plist."
     (< (string-to-number (aref (cadr a) index))
        (string-to-number (aref (cadr b) index)))))
 
+(defun vulpea-ui-collection--todo-sorter (index)
+  "Return a sort predicate comparing todo column INDEX in org order.
+States rank by their position in `org-todo-keywords-1'; unknown
+states come after the known ones, empty cells last."
+  (lambda (a b)
+    (cl-flet ((rank (entry)
+                (let ((state (aref (cadr entry) index)))
+                  (cond ((string-empty-p state) most-positive-fixnum)
+                        ((seq-position org-todo-keywords-1 state
+                                       #'string=))
+                        (t (1- most-positive-fixnum))))))
+      (< (rank a) (rank b)))))
+
 (defun vulpea-ui-collection--column-width (col index entries)
   "Return the width for normalized COL, the column at ENTRIES' INDEX.
 Without ENTRIES, or when COL carries an explicit width, the declared
@@ -3094,9 +3107,11 @@ without an explicit width are fitted to their content."
             (let ((col (vulpea-ui-collection--normalize-column col)))
               (list (plist-get col :name)
                     (vulpea-ui-collection--column-width col (1+ idx) entries)
-                    (if (memq (plist-get col :id) '(links backlinks))
-                        (vulpea-ui-collection--numeric-sorter (1+ idx))
-                      t))))
+                    (pcase (plist-get col :id)
+                      ((or 'links 'backlinks)
+                       (vulpea-ui-collection--numeric-sorter (1+ idx)))
+                      ('todo (vulpea-ui-collection--todo-sorter (1+ idx)))
+                      (_ t)))))
           columns)))
 
 (defun vulpea-ui-collection--entry (note cols marked ctx)
@@ -3174,6 +3189,7 @@ the note id."
     (define-key map (kbd "-") #'vulpea-ui-collection-remove-tag)
     (define-key map (kbd "e") #'vulpea-ui-collection-quick-edit)
     (define-key map (kbd "E") #'vulpea-ui-collection-remove-meta)
+    (define-key map (kbd "T") #'vulpea-ui-collection-set-todo)
     (define-key map (kbd "D") #'vulpea-ui-collection-delete)
     (define-key map (kbd "x") #'vulpea-ui-collection-apply)
     (define-key map (kbd "y") #'vulpea-ui-collection-copy-links)
@@ -4115,6 +4131,54 @@ Anywhere else, fall back to `vulpea-ui-collection-set-meta'."
         (message "Removed %s from %d note(s)" key (length notes))
         (vulpea-ui-collection-refresh)))))
 
+(defun vulpea-ui-collection--note-set-todo (note state)
+  "Set NOTE's todo STATE in its file and save.
+STATE nil or empty clears the state.  Only heading-level notes can
+carry one; returns non-nil when the note was updated."
+  (when (> (vulpea-note-level note) 0)
+    (with-current-buffer (find-file-noselect (vulpea-note-path note))
+      (org-with-wide-buffer
+       (goto-char (vulpea-note-pos note))
+       (org-todo (if (or (null state) (string-empty-p state))
+                     'none
+                   state)))
+      (save-buffer))
+    t))
+
+(defun vulpea-ui-collection-set-todo ()
+  "Set a todo state on the selection's heading-level notes.
+File-level notes cannot carry a state and are skipped.  The state is
+read with completion over `org-todo-keywords-1'; empty input clears
+it.  Undoable with \\[vulpea-ui-collection-undo]."
+  (interactive)
+  (let* ((notes (vulpea-ui-collection--notes-for-action))
+         (headings (seq-filter (lambda (note)
+                                 (> (vulpea-note-level note) 0))
+                               notes)))
+    (unless headings (user-error "No heading-level notes selected"))
+    (let ((state (completing-read "Todo state (empty to clear): "
+                                  org-todo-keywords-1)))
+      (when (vulpea-ui-collection--confirm
+             (if (string-empty-p state)
+                 "Clear the todo state of"
+               (format "Set todo %s on" state))
+             headings)
+        (let ((old (mapcar (lambda (note)
+                             (cons note (vulpea-note-todo note)))
+                           headings)))
+          (dolist (note headings)
+            (vulpea-ui-collection--note-set-todo note state))
+          (vulpea-ui-collection--record-undo
+           "set todo state"
+           (lambda ()
+             (dolist (item old)
+               (vulpea-ui-collection--note-set-todo
+                (car item) (cdr item))))))
+        (when (< (length headings) (length notes))
+          (message "Skipped %d file-level note(s)"
+                   (- (length notes) (length headings))))
+        (vulpea-ui-collection-refresh)))))
+
 (defun vulpea-ui-collection-delete ()
   "Delete the files of the marked file-level notes, with confirmation.
 Heading-level notes are skipped; deleting a heading in place is not
@@ -4487,6 +4551,7 @@ bookmark file; the current sort order and columns are captured."
     ("-" "remove tag" vulpea-ui-collection-remove-tag)
     ("e" "edit field at point" vulpea-ui-collection-quick-edit)
     ("E" "remove meta" vulpea-ui-collection-remove-meta)
+    ("!" "set todo state" vulpea-ui-collection-set-todo)
     ("D" "delete" vulpea-ui-collection-delete)
     ("x" "apply function" vulpea-ui-collection-apply)
     ("y" "copy as links" vulpea-ui-collection-copy-links)
