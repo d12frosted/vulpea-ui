@@ -3090,6 +3090,33 @@ MODIFIED-AT map to the corresponding `vulpea-note' slots."
                         :title)
                        "^Ch"))))))
 
+(ert-deftest vulpea-ui-collection-test-available-columns ()
+  "Available columns include the built-ins and meta keys in the view."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :meta '(("country" "France"))))
+    (let ((available (vulpea-ui-collection--available-columns)))
+      (should (assoc "tags" available))
+      (should (equal (cdr (assoc "meta:country" available))
+                     '(meta "country"))))))
+
+(ert-deftest vulpea-ui-collection-test-add-remove-column ()
+  "Adding and removing columns updates the view and the format."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :meta '(("country" "France"))))
+    (cl-letf (((symbol-function 'vulpea-ui-collection-refresh) #'ignore))
+      (vulpea-ui-collection-add-column '(meta "country"))
+      (should (equal (plist-get vulpea-ui-collection--view :columns)
+                     '(title (meta "country"))))
+      (should (= (length tabulated-list-format) 3))
+      (setq tabulated-list-sort-key '("Title" . nil))
+      (vulpea-ui-collection-remove-column "Title")
+      (should (equal (plist-get vulpea-ui-collection--view :columns)
+                     '((meta "country"))))
+      ;; the sort key pointed at the removed column
+      (should-not tabulated-list-sort-key))))
+
 (ert-deftest vulpea-ui-collection-test-mode-line-info ()
   "The mode line shows note count, marked count and the filter."
   (vulpea-ui-test--with-collection-buffer
