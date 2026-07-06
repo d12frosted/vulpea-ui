@@ -2821,6 +2821,27 @@ MODIFIED-AT map to the corresponding `vulpea-note' slots."
       (should (equal (plist-get (plist-get view :filter) :tags-all)
                      '("beer" "ale"))))))
 
+(ert-deftest vulpea-ui-collection-test-resolve-view-empty ()
+  "Empty or blank input resolves to a view over all notes."
+  (dolist (input '("" "   "))
+    (let ((view (vulpea-ui-collection--resolve-view input)))
+      (should (equal (plist-get view :name) "all"))
+      (should-not (plist-get view :filter)))))
+
+(ert-deftest vulpea-ui-collection-test-filter-description ()
+  "The filter summary is short and covers every condition kind."
+  (should (equal (vulpea-ui-collection--filter-description nil) ""))
+  (should (equal (vulpea-ui-collection--filter-description
+                  '(:tags-all ("wine")
+                    :tags-any ("red" "white")
+                    :tags-none ("beer")
+                    :level 0
+                    :directory "cellar"
+                    :title "^Ch"
+                    :meta (("country" . "France") ("rating" . t))))
+                 (concat "#wine #red? #white? -#beer level:0 dir:cellar"
+                         " title:^Ch country:France rating:*"))))
+
 (defmacro vulpea-ui-test--with-collection-buffer (notes &rest body)
   "Run BODY in a collection buffer populated with NOTES, no DB access."
   (declare (indent 1))
@@ -3003,6 +3024,21 @@ MODIFIED-AT map to the corresponding `vulpea-note' slots."
     (forward-line 1)
     (should (equal (tabulated-list-get-id) "n1"))
     (should (equal (aref (tabulated-list-get-entry) 0) "*"))))
+
+(ert-deftest vulpea-ui-collection-test-mode-line-info ()
+  "The mode line shows note count, marked count and the filter."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title) :filter (:tags-all ("wine"))))
+    (let ((info (vulpea-ui-collection--mode-line-info)))
+      (should (string-match-p "2" info))
+      (should-not (string-match-p "marked" info))
+      (should (string-match-p "#wine" info)))
+    (vulpea-ui-collection-mark)
+    (should (string-match-p "1 marked"
+                            (vulpea-ui-collection--mode-line-info)))))
 
 (ert-deftest vulpea-ui-collection-test-format-time ()
   "Time formatting handles nil, time values, and strings."
