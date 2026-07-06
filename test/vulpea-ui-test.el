@@ -3719,6 +3719,18 @@ single-note edits apply without asking."
         (should (equal (plist-get filter :title) "^A"))
         (should (equal (plist-get filter :tags-all) '("wine")))))))
 
+(ert-deftest vulpea-ui-collection-test-mode-line-total ()
+  "The mode line shows the total only when the filter bites."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (setq vulpea-ui-collection--total 10)
+    (should (string-match-p ":2/10" (vulpea-ui-collection--mode-line-info)))
+    (setq vulpea-ui-collection--total 2)
+    (should (string-match-p ":2\\'" (vulpea-ui-collection--mode-line-info)))
+    (setq vulpea-ui-collection--total nil)
+    (should (string-match-p ":2\\'" (vulpea-ui-collection--mode-line-info)))))
+
 (ert-deftest vulpea-ui-collection-test-mode-line-info ()
   "The mode line shows note count, marked count and the filter."
   (vulpea-ui-test--with-collection-buffer
