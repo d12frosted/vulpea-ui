@@ -115,3 +115,28 @@ text buttons instead of widgets. That original investigation, with the
 before/after measurements on the dashboard of the day, is recorded on
 [[https://github.com/d12frosted/vui.el/issues/107][vui #107]]. The bench here is the guard that stays behind: it exercises the
 current dashboard render and lets you compare vui versions from #108 on.
+
+* Collection view bench
+
+=vulpea-ui-bench-collection.el= times the collection view's three paths
+that matter at scale, on fabricated in-memory notes (no DB, nothing
+written to disk):
+
+- building tabulated-list entries (cell rendering, faces, help-echo)
+- a full refresh-equivalent render (entries + width fitting + print)
+- 100 single marks on the largest table
+
+Run it via eldev:
+
+#+begin_src bash
+eldev exec "(progn (require 'vulpea-ui-bench-collection) \
+                   (vulpea-ui-bench-collection-run))"
+#+end_src
+
+Sanity anchor from a batch run at 10000 notes with six columns: entries
+~0.12 s, full render ~0.4 s, and 100 marks ~6 ms total (~60 us per
+mark). The mark figure is the guard: marking used to go through the
+table's full re-print machinery - which walks and diffs every buffer
+line and was unusable around 4k notes - and now rewrites only its own
+row. If it regresses from microseconds to anything visible, that path
+broke.
