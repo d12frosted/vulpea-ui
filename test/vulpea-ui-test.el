@@ -3682,6 +3682,16 @@ single-note edits apply without asking."
       (vulpea-ui-collection-delete-view "cellar")
       (should-not vulpea-ui-collection-views))))
 
+(ert-deftest vulpea-ui-collection-test-sidebar-widget ()
+  "The collections widget shows only when saved views exist."
+  (let ((note (vulpea-ui-test--make-mock-note)))
+    (let ((vulpea-ui-collection-views nil))
+      (should-not (memq 'vulpea-ui-widget-collections
+                        (vulpea-ui--get-widgets-for-note note))))
+    (let ((vulpea-ui-collection-views '(("wines" . (:filter nil)))))
+      (should (memq 'vulpea-ui-widget-collections
+                    (vulpea-ui--get-widgets-for-note note))))))
+
 (ert-deftest vulpea-ui-collection-test-bookmark ()
   "Bookmarks capture the view (minus the predicate) and restore it."
   (vulpea-ui-test--with-collection-buffer
