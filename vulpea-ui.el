@@ -3070,7 +3070,7 @@ backlinks column is present."
       vulpea-ui-collection-default-columns))
 
 (defun vulpea-ui-collection-refresh ()
-  "Re-query the view and re-render, keeping marks and point."
+  "Re-query the view and re-render, keeping the marked set and point."
   (interactive)
   (let* ((columns (vulpea-ui-collection--view-columns))
          (notes (vulpea-ui-collection--query
@@ -3143,7 +3143,7 @@ Mark cells are replaced with fresh vectors so the update pass of
   (vulpea-ui-collection--sync-marks))
 
 (defun vulpea-ui-collection-toggle-marks ()
-  "Invert the marks of the notes currently in the view."
+  "Invert the mark of every note currently in the view."
   (interactive)
   (dolist (entry tabulated-list-entries)
     (let ((id (car entry)))
@@ -3153,7 +3153,7 @@ Mark cells are replaced with fresh vectors so the update pass of
   (vulpea-ui-collection--sync-marks))
 
 (defun vulpea-ui-collection--notes-for-action ()
-  "Return the notes an action applies to.
+  "Return the notes to act on.
 The marked notes when any are marked, otherwise the note at point."
   (let (notes)
     (maphash (lambda (id _)
