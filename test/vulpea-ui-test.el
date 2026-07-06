@@ -3214,6 +3214,44 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
         (should-not (plist-get vulpea-ui-collection--view :filter))
         (should (= refreshed 3))))))
 
+(ert-deftest vulpea-ui-collection-test-filter-remove ()
+  "Single conditions are removed from list, meta and scalar keys."
+  (let ((filter '(:tags-all ("wine" "rated")
+                  :level 0
+                  :meta (("country" . "France") ("rating" . t)))))
+    (should (equal (plist-get (vulpea-ui-collection--filter-remove
+                               filter :tags-all "wine")
+                              :tags-all)
+                   '("rated")))
+    (should-not (plist-get (vulpea-ui-collection--filter-remove
+                            filter :level)
+                           :level))
+    (should (equal (plist-get (vulpea-ui-collection--filter-remove
+                               filter :meta '("country" . "France"))
+                              :meta)
+                   '(("rating" . t))))
+    ;; the original is untouched
+    (should (equal (plist-get filter :tags-all) '("wine" "rated")))))
+
+(ert-deftest vulpea-ui-collection-test-filter-remove-command ()
+  "The command completes over active conditions and removes the pick."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title)
+            :filter (:tags-all ("wine" "rated") :level 0)))
+    (cl-letf (((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+              ((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _)
+                 (should (member "#wine" collection))
+                 (should (member "level:0" collection))
+                 "#wine")))
+      (vulpea-ui-collection-filter-remove-condition)
+      (should (equal (plist-get
+                      (plist-get vulpea-ui-collection--view :filter)
+                      :tags-all)
+                     '("rated"))))))
+
 (ert-deftest vulpea-ui-collection-test-filter-by-level-and-title ()
   "Level and title filter commands parse their input."
   (vulpea-ui-test--with-collection-buffer
