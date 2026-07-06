@@ -3018,6 +3018,36 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
     (should-not (gethash "n1" vulpea-ui-collection--marked))
     (should (gethash "n2" vulpea-ui-collection--marked))))
 
+(ert-deftest vulpea-ui-collection-test-mark-region ()
+  "With an active region, m marks every row the region touches."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two")
+            (vulpea-ui-test--collection-note :id "n3" :title "Three"))
+    (let ((transient-mark-mode t))
+      (goto-char (point-min))
+      (push-mark (point) t t)
+      (forward-line 2)
+      (vulpea-ui-collection-mark))
+    (should (gethash "n1" vulpea-ui-collection--marked))
+    (should (gethash "n2" vulpea-ui-collection--marked))
+    (should-not (gethash "n3" vulpea-ui-collection--marked))))
+
+(ert-deftest vulpea-ui-collection-test-mark-regexp-and-tag ()
+  "Regexp marking matches titles; tag marking matches tags."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "Wine note" :tags '("wine"))
+            (vulpea-ui-test--collection-note
+             :id "n2" :title "Beer note" :tags '("beer")))
+    (vulpea-ui-collection-mark-regexp "^Wine")
+    (should (gethash "n1" vulpea-ui-collection--marked))
+    (should-not (gethash "n2" vulpea-ui-collection--marked))
+    (vulpea-ui-collection-unmark-all)
+    (vulpea-ui-collection-mark-by-tag "beer")
+    (should (gethash "n2" vulpea-ui-collection--marked))
+    (should-not (gethash "n1" vulpea-ui-collection--marked))))
+
 (ert-deftest vulpea-ui-collection-test-notes-for-action ()
   "Actions target marked notes, falling back to the note at point."
   (vulpea-ui-test--with-collection-buffer
