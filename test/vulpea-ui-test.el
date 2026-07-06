@@ -2909,6 +2909,42 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
       (should (equal (aref (cadr (cadr entries)) 0) "*"))
       (should (equal (aref (cadr (car entries)) 1) "One")))))
 
+(ert-deftest vulpea-ui-collection-test-parse-query ()
+  "The query syntax covers tags, level, directory, title and meta."
+  (should (equal (vulpea-ui-collection--parse-query "wine, rated")
+                 '(:tags-all ("wine" "rated"))))
+  (should (equal (vulpea-ui-collection--parse-query
+                  "#wine #red? #white? -#beer level:0 dir:cellar title:^Ch country:France rating:*")
+                 '(:tags-all ("wine")
+                   :tags-any ("red" "white")
+                   :tags-none ("beer")
+                   :level 0
+                   :directory "cellar"
+                   :title "^Ch"
+                   :meta (("country" . "France") ("rating" . t)))))
+  (should (equal (vulpea-ui-collection--parse-query "-beer")
+                 '(:tags-none ("beer")))))
+
+(ert-deftest vulpea-ui-collection-test-query-round-trip ()
+  "A filter's description parses back into the same filter."
+  (let ((filter '(:tags-all ("wine")
+                  :tags-any ("red")
+                  :tags-none ("beer")
+                  :level 0
+                  :directory "cellar"
+                  :title "^Ch"
+                  :meta (("country" . "France") ("rating" . t)))))
+    (should (equal (vulpea-ui-collection--parse-query
+                    (vulpea-ui-collection--filter-description filter))
+                   filter))))
+
+(ert-deftest vulpea-ui-collection-test-resolve-view-query ()
+  "Free input at the prompt is parsed as a query."
+  (let ((vulpea-ui-collection-views nil))
+    (let ((view (vulpea-ui-collection--resolve-view "wine level:0")))
+      (should (equal (plist-get view :filter)
+                     '(:tags-all ("wine") :level 0))))))
+
 (ert-deftest vulpea-ui-collection-test-resolve-view ()
   "View resolution prefers saved views, falls back to a tags query."
   (let ((vulpea-ui-collection-views
