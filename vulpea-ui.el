@@ -2890,6 +2890,7 @@ FILTER is a plist; every present condition must hold:
   :directory  - absolute directory prefix, or a relative directory
                 that must appear as a component of the note's path
   :title      - regexp the note title must match
+  :todo       - todo state NOTE must have
   :meta       - alist of (KEY . VALUE) conditions; VALUE t means the
                 key must merely be present
   :predicate  - function called with NOTE, must return non-nil"
@@ -2915,6 +2916,8 @@ FILTER is a plist; every present condition must hold:
                   path))))
          (let ((re (plist-get filter :title)))
            (or (null re) (string-match-p re (vulpea-note-title note))))
+         (let ((todo (plist-get filter :todo)))
+           (or (null todo) (equal todo (vulpea-note-todo note))))
          (seq-every-p
           (lambda (condition)
             (let ((values (cdr (assoc (car condition)
@@ -2942,6 +2945,8 @@ Empty string when FILTER has no conditions."
       (push (concat "dir:" dir) parts))
     (when-let* ((re (plist-get filter :title)))
       (push (concat "title:" re) parts))
+    (when-let* ((todo (plist-get filter :todo)))
+      (push (concat "todo:" todo) parts))
     (dolist (condition (plist-get filter :meta))
       (push (if (eq (cdr condition) t)
                 (format "%s:*" (car condition))
@@ -3205,6 +3210,7 @@ the note id."
     (define-key map (kbd "Y") #'vulpea-ui-collection-export)
     (define-key map (kbd "Z") #'vulpea-ui-collection-undo)
     (define-key map (kbd "G") #'vulpea-ui-collection-group-by)
+    (define-key map (kbd "=") #'vulpea-ui-collection-narrow-at-point)
     (define-key map (kbd "w") #'vulpea-ui-collection-save-view)
     (define-key map (kbd "g") #'vulpea-ui-collection-refresh)
     (define-key map (kbd "/") vulpea-ui-collection-filter-map)
@@ -3755,6 +3761,8 @@ identifies the condition for `vulpea-ui-collection--filter-remove'."
       (push (cons (concat "dir:" dir) (cons :directory nil)) conditions))
     (when-let* ((re (plist-get filter :title)))
       (push (cons (concat "title:" re) (cons :title nil)) conditions))
+    (when-let* ((todo (plist-get filter :todo)))
+      (push (cons (concat "todo:" todo) (cons :todo nil)) conditions))
     (dolist (condition (plist-get filter :meta))
       (push (cons (if (eq (cdr condition) t)
                       (format "%s:*" (car condition))
@@ -3790,6 +3798,54 @@ VALUE picks the element to drop, scalar keys are cleared entirely."
         (vulpea-ui-collection--current-filter)
         (car condition)
         (cdr condition))))))
+
+(defun vulpea-ui-collection-narrow-at-point ()
+  "Add a filter condition from the cell at point.
+On a tags cell, require one of the note's tags; on a meta cell,
+require that key to have the cell's value; on a todo cell, require
+the state; on a context or file cell, scope to the note's directory.
+Other columns cannot narrow."
+  (interactive)
+  (let ((col (vulpea-ui-collection--column-at-point))
+        (note (vulpea-ui-collection--note-at-point))
+        (filter (vulpea-ui-collection--current-filter)))
+    (unless (and col note) (user-error "Nothing to narrow by here"))
+    (pcase (plist-get col :id)
+      ('tags
+       (let ((tags (vulpea-note-tags note)))
+         (unless tags (user-error "The note has no tags"))
+         (vulpea-ui-collection--set-filter
+          (vulpea-ui-collection--filter-add-to
+           filter :tags-all
+           (if (cdr tags)
+               (completing-read "Narrow to tag: " tags nil t)
+             (car tags))))))
+      ('meta
+       (let* ((key (plist-get col :key))
+              (values (vulpea-note-meta-get-list note key)))
+         (unless values (user-error "The note has no %s" key))
+         (vulpea-ui-collection--set-filter
+          (vulpea-ui-collection--filter-put
+           filter :meta
+           (append (plist-get filter :meta)
+                   (list (cons key
+                               (if (cdr values)
+                                   (completing-read
+                                    (format "Narrow to %s: " key)
+                                    values nil t)
+                                 (car values)))))))))
+      ('todo
+       (let ((state (vulpea-note-todo note)))
+         (unless state (user-error "The note has no todo state"))
+         (vulpea-ui-collection--set-filter
+          (vulpea-ui-collection--filter-put filter :todo state))))
+      ((or 'context 'file)
+       (vulpea-ui-collection--set-filter
+        (vulpea-ui-collection--filter-put
+         filter :directory
+         (directory-file-name
+          (file-name-directory (vulpea-note-path note))))))
+      (id (user-error "Cannot narrow by %s" id)))))
 
 (defun vulpea-ui-collection-filter-clear ()
   "Drop every filter condition and show the whole collection."
@@ -4235,7 +4291,7 @@ filter summary shown in the mode line is itself a valid query:
 
 Tokens are separated by spaces or commas.  A :predicate condition is
 not expressible in this syntax."
-  (let (all any none level dir title meta)
+  (let (all any none level dir title todo meta)
     (dolist (token (split-string input "[, ]+" t))
       (cond
        ((string-match "\\`level:\\([0-9]+\\)\\'" token)
@@ -4244,6 +4300,8 @@ not expressible in this syntax."
         (setq dir (match-string 1 token)))
        ((string-match "\\`title:\\(.+\\)\\'" token)
         (setq title (match-string 1 token)))
+       ((string-match "\\`todo:\\(.+\\)\\'" token)
+        (setq todo (match-string 1 token)))
        ((string-match "\\`-#?\\(.+\\)\\'" token)
         (push (match-string 1 token) none))
        ((string-match "\\`#?\\([^?]+\\)\\?\\'" token)
@@ -4261,6 +4319,7 @@ not expressible in this syntax."
      (when level (list :level level))
      (when dir (list :directory dir))
      (when title (list :title title))
+     (when todo (list :todo todo))
      (when meta (list :meta (nreverse meta))))))
 
 (defun vulpea-ui-collection--resolve-view (input)
@@ -4411,6 +4470,8 @@ bookmark file; the current sort order and columns are captured."
     ("M" "meta field" vulpea-ui-collection-filter-by-meta :transient t)
     ("l" "level" vulpea-ui-collection-filter-by-level :transient t)
     ("K" "remove condition" vulpea-ui-collection-filter-remove-condition
+     :transient t)
+    ("=" "narrow to value at point" vulpea-ui-collection-narrow-at-point
      :transient t)
     ("C" "clear" vulpea-ui-collection-filter-clear :transient t)]
    ["Columns"
