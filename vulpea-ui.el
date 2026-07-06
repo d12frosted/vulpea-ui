@@ -3175,6 +3175,7 @@ the note id."
     (define-key map (kbd "d") #'vulpea-ui-collection-filter-by-directory)
     (define-key map (kbd "m") #'vulpea-ui-collection-filter-by-meta)
     (define-key map (kbd "l") #'vulpea-ui-collection-filter-by-level)
+    (define-key map (kbd "k") #'vulpea-ui-collection-filter-remove-condition)
     (define-key map (kbd "/") #'vulpea-ui-collection-filter-clear)
     map)
   "Keymap for filter refinement in `vulpea-ui-collection-mode'.")
@@ -3551,6 +3552,59 @@ Level 0 keeps file-level notes only; \"any\" drops the condition."
       :level (unless (equal level "any")
                (string-to-number level))))))
 
+(defun vulpea-ui-collection--filter-conditions (filter)
+  "Return an alist of condition label to (KEY . VALUE) for FILTER.
+Labels match `vulpea-ui-collection--filter-description'; the cdr
+identifies the condition for `vulpea-ui-collection--filter-remove'."
+  (let (conditions)
+    (dolist (tag (plist-get filter :tags-all))
+      (push (cons (concat "#" tag) (cons :tags-all tag)) conditions))
+    (dolist (tag (plist-get filter :tags-any))
+      (push (cons (concat "#" tag "?") (cons :tags-any tag)) conditions))
+    (dolist (tag (plist-get filter :tags-none))
+      (push (cons (concat "-#" tag) (cons :tags-none tag)) conditions))
+    (when-let* ((level (plist-get filter :level)))
+      (push (cons (format "level:%d" level) (cons :level nil)) conditions))
+    (when-let* ((dir (plist-get filter :directory)))
+      (push (cons (concat "dir:" dir) (cons :directory nil)) conditions))
+    (when-let* ((re (plist-get filter :title)))
+      (push (cons (concat "title:" re) (cons :title nil)) conditions))
+    (dolist (condition (plist-get filter :meta))
+      (push (cons (if (eq (cdr condition) t)
+                      (format "%s:*" (car condition))
+                    (format "%s:%s" (car condition) (cdr condition)))
+                  (cons :meta condition))
+            conditions))
+    (when (plist-get filter :predicate)
+      (push (cons "predicate" (cons :predicate nil)) conditions))
+    (nreverse conditions)))
+
+(defun vulpea-ui-collection--filter-remove (filter key &optional value)
+  "Return a copy of FILTER without one condition.
+KEY names the condition; for the list-valued keys (tags and meta)
+VALUE picks the element to drop, scalar keys are cleared entirely."
+  (pcase key
+    ((or :tags-all :tags-any :tags-none :meta)
+     (vulpea-ui-collection--filter-put
+      filter key (remove value (plist-get filter key))))
+    (_ (vulpea-ui-collection--filter-put filter key nil))))
+
+(defun vulpea-ui-collection-filter-remove-condition ()
+  "Remove a single condition from the current filter."
+  (interactive)
+  (let ((conditions (vulpea-ui-collection--filter-conditions
+                     (vulpea-ui-collection--current-filter))))
+    (unless conditions (user-error "The filter has no conditions"))
+    (let* ((label (completing-read "Remove condition: "
+                                   (mapcar #'car conditions)
+                                   nil t))
+           (condition (cdr (assoc label conditions))))
+      (vulpea-ui-collection--set-filter
+       (vulpea-ui-collection--filter-remove
+        (vulpea-ui-collection--current-filter)
+        (car condition)
+        (cdr condition))))))
+
 (defun vulpea-ui-collection-filter-clear ()
   "Drop every filter condition and show the whole collection."
   (interactive)
@@ -3835,6 +3889,8 @@ The filter, columns and current sort order are stored in
      :transient t)
     ("M" "meta field" vulpea-ui-collection-filter-by-meta :transient t)
     ("l" "level" vulpea-ui-collection-filter-by-level :transient t)
+    ("K" "remove condition" vulpea-ui-collection-filter-remove-condition
+     :transient t)
     ("C" "clear" vulpea-ui-collection-filter-clear :transient t)]
    ["Columns"
     ("a" "add" vulpea-ui-collection-add-column :transient t)
