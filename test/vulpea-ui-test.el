@@ -3555,6 +3555,21 @@ single-note edits apply without asking."
     (should (string-match-p "rating avg 8.8"
                             (vulpea-ui-collection--mode-line-info)))))
 
+(ert-deftest vulpea-ui-collection-test-live-title-quit-restores ()
+  "Quitting the live title narrow restores the previous filter."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title)
+            :filter (:tags-all ("wine") :title "^A")))
+    (cl-letf (((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+              ((symbol-function 'read-string)
+               (lambda (&rest _) (signal 'quit nil))))
+      (vulpea-ui-collection-filter-by-title)
+      (let ((filter (plist-get vulpea-ui-collection--view :filter)))
+        (should (equal (plist-get filter :title) "^A"))
+        (should (equal (plist-get filter :tags-all) '("wine")))))))
+
 (ert-deftest vulpea-ui-collection-test-mode-line-info ()
   "The mode line shows note count, marked count and the filter."
   (vulpea-ui-test--with-collection-buffer
