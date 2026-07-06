@@ -3037,6 +3037,19 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
                  (concat "#wine #red? #white? -#beer level:0 dir:cellar"
                          " title:^Ch country:France rating:*"))))
 
+(defun vulpea-ui-test--collection-set-columns (notes columns)
+  "Re-render the current collection test buffer with NOTES and COLUMNS."
+  (setq vulpea-ui-collection--view
+        (list :name "test" :columns columns))
+  (setq tabulated-list-entries
+        (vulpea-ui-collection--entries
+         notes columns vulpea-ui-collection--marked nil))
+  (setq tabulated-list-format
+        (vulpea-ui-collection--format columns tabulated-list-entries))
+  (tabulated-list-init-header)
+  (tabulated-list-print)
+  (goto-char (point-min)))
+
 (defmacro vulpea-ui-test--with-collection-buffer (notes &rest body)
   "Run BODY in a collection buffer populated with NOTES, no DB access."
   (declare (indent 1))
@@ -3382,6 +3395,58 @@ single-note edits apply without asking."
         (vulpea-ui-collection-undo)
         (should (equal restored '(("n1" "country" "France"))))
         (should (equal removed '(("n2" "country"))))))))
+
+(ert-deftest vulpea-ui-collection-test-matches-todo ()
+  "The :todo condition matches the note's state."
+  (let ((note (vulpea-ui-test--collection-note :todo "TODO")))
+    (should (vulpea-ui-collection--note-matches-p note '(:todo "TODO")))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:todo "DONE")))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 (vulpea-ui-test--collection-note) '(:todo "TODO")))))
+
+(ert-deftest vulpea-ui-collection-test-todo-round-trip ()
+  "The :todo condition survives description, parsing and removal."
+  (let ((filter '(:tags-all ("task") :todo "TODO")))
+    (should (equal (vulpea-ui-collection--filter-description filter)
+                   "#task todo:TODO"))
+    (should (equal (vulpea-ui-collection--parse-query "#task todo:TODO")
+                   filter))
+    (should (assoc "todo:TODO"
+                   (vulpea-ui-collection--filter-conditions filter)))
+    (should-not (plist-get (vulpea-ui-collection--filter-remove
+                            filter :todo)
+                           :todo))))
+
+(ert-deftest vulpea-ui-collection-test-narrow-at-point ()
+  "= adds a condition from the cell at point."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :tags '("wine")
+             :meta '(("country" "France")) :todo "TODO"))
+    (vulpea-ui-test--collection-set-columns
+     notes '(title tags (meta "country") todo))
+    (cl-letf (((symbol-function 'vulpea-ui-collection-refresh) #'ignore))
+      (search-forward "wine")
+      (goto-char (match-beginning 0))
+      (vulpea-ui-collection-narrow-at-point)
+      (should (equal (plist-get (vulpea-ui-collection--current-filter)
+                                :tags-all)
+                     '("wine")))
+      (goto-char (point-min))
+      (search-forward "France")
+      (goto-char (match-beginning 0))
+      (vulpea-ui-collection-narrow-at-point)
+      (should (equal (plist-get (vulpea-ui-collection--current-filter)
+                                :meta)
+                     '(("country" . "France"))))
+      (goto-char (point-min))
+      (search-forward "TODO")
+      (goto-char (match-beginning 0))
+      (vulpea-ui-collection-narrow-at-point)
+      (should (equal (plist-get (vulpea-ui-collection--current-filter)
+                                :todo)
+                     "TODO")))))
 
 (ert-deftest vulpea-ui-collection-test-copy-links ()
   "Copying links puts an org list of the selection on the kill ring."
