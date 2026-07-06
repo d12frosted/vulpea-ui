@@ -3074,11 +3074,34 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
       (cl-letf (((symbol-function 'vulpea-tags-batch-add)
                  (lambda (notes tag) (setq batched (cons tag notes))))
                 ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'yes-or-no-p) (lambda (_) t))
                 ((symbol-function 'vulpea-ui-collection--read-tag)
                  (lambda (_prompt) "rated")))
         (vulpea-ui-collection-add-tag)
         (should (equal (car batched) "rated"))
         (should (= (length (cdr batched)) 2))))))
+
+(ert-deftest vulpea-ui-collection-test-bulk-edit-aborts ()
+  "A declined confirmation leaves the notes untouched.
+Edits on more than one note ask first, listing the affected notes;
+single-note edits apply without asking."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-mark)
+    (let (batched prompt)
+      (cl-letf (((symbol-function 'vulpea-tags-batch-add)
+                 (lambda (notes tag) (setq batched (cons tag notes))))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'yes-or-no-p)
+                 (lambda (question) (setq prompt question) nil))
+                ((symbol-function 'vulpea-ui-collection--read-tag)
+                 (lambda (_prompt) "rated")))
+        (vulpea-ui-collection-add-tag)
+        (should-not batched)
+        (should (string-match-p "2 note" prompt))
+        (should (string-match-p "One" prompt))))))
 
 (ert-deftest vulpea-ui-collection-test-delete-action ()
   "Delete removes files of file-level notes after confirmation."
