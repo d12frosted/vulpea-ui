@@ -2857,6 +2857,45 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
     (should (equal (car (aref format 1)) "Title"))
     (should (equal (car (aref format 2)) "Tags"))))
 
+(ert-deftest vulpea-ui-collection-test-auto-fit-widths ()
+  "Widths fit the content, capped at the default; explicit widths win."
+  (let ((marked (make-hash-table :test 'equal)))
+    (let* ((entries (vulpea-ui-collection--entries
+                     (list (vulpea-ui-test--collection-note :title "Short"))
+                     '(title) marked nil))
+           (format (vulpea-ui-collection--format '(title) entries)))
+      (should (< (nth 1 (aref format 1)) 48))
+      (should (>= (nth 1 (aref format 1)) (length "Title"))))
+    (let* ((entries (vulpea-ui-collection--entries
+                     (list (vulpea-ui-test--collection-note
+                            :title (make-string 100 ?x)))
+                     '(title) marked nil))
+           (format (vulpea-ui-collection--format '(title) entries)))
+      (should (= (nth 1 (aref format 1)) 48))
+      (should (= (nth 1 (aref (vulpea-ui-collection--format
+                               '((title :width 60)) entries)
+                              1))
+                 60)))))
+
+(ert-deftest vulpea-ui-collection-test-user-width-survives-refresh ()
+  "A hand-resized column keeps its width across format updates."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (vulpea-ui-collection--update-format '(title))
+    (let ((auto (nth 1 (aref tabulated-list-format 1))))
+      (setf (nth 1 (aref tabulated-list-format 1)) (+ auto 7))
+      (vulpea-ui-collection--update-format '(title))
+      (should (= (nth 1 (aref tabulated-list-format 1)) (+ auto 7))))))
+
+(ert-deftest vulpea-ui-collection-test-empty-state ()
+  "An empty result shows a hint instead of a blank buffer."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (cl-letf (((symbol-function 'vulpea-ui-collection--query)
+               (lambda (_filter) nil)))
+      (vulpea-ui-collection-refresh)
+      (should (string-match-p "No notes match" (buffer-string))))))
+
 (ert-deftest vulpea-ui-collection-test-entries ()
   "Entries are keyed by note id and reflect the marked set."
   (let* ((n1 (vulpea-ui-test--collection-note :id "n1" :title "One"))
