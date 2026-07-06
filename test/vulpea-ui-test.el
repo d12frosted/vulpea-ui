@@ -2576,5 +2576,79 @@ Real DB, real fixer: `- name ::' must land between the two headings."
           (should (> name-at red-at))
           (should (< name-at white-at)))))))
 
+(ert-deftest vulpea-ui-worker-done-refreshes-when-idle ()
+  "A background extraction landing triggers a sidebar refresh.
+With vulpea's async extraction, the database changes when the worker
+applies results - not when the file is saved - so the sidebar must
+refresh on the done hook, once the worker is idle."
+  (let ((refreshed 0)
+        (vulpea-ui--worker-refresh-pending nil))
+    (cl-letf (((symbol-function 'vulpea-ui--sidebar-visible-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'vulpea-ui-sidebar-refresh)
+               (lambda () (cl-incf refreshed)))
+              ((symbol-function 'vulpea-db-worker-busy-p)
+               (lambda () nil)))
+      (vulpea-ui--on-worker-done "/tmp/a.org" 'applied 3)
+      (should (= 1 refreshed))
+      ;; unchanged results do not change data: no refresh
+      (vulpea-ui--on-worker-done "/tmp/b.org" 'unchanged nil)
+      (should (= 1 refreshed)))))
+
+(ert-deftest vulpea-ui-worker-done-coalesces-bulk-syncs ()
+  "During a bulk sync, refreshes coalesce to one when the burst drains.
+Refreshing per applied file during a 10k-note rebuild would be a
+refresh storm; the pending flag defers to the end of the burst."
+  (let ((refreshed 0)
+        (busy t)
+        (vulpea-ui--worker-refresh-pending nil))
+    (cl-letf (((symbol-function 'vulpea-ui--sidebar-visible-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'vulpea-ui-sidebar-refresh)
+               (lambda () (cl-incf refreshed)))
+              ((symbol-function 'vulpea-db-worker-busy-p)
+               (lambda () busy)))
+      ;; Burst in progress: applied results only mark pending
+      (vulpea-ui--on-worker-done "/tmp/a.org" 'applied 1)
+      (vulpea-ui--on-worker-done "/tmp/b.org" 'applied 1)
+      (should (= 0 refreshed))
+      (should vulpea-ui--worker-refresh-pending)
+      ;; Last completion of the burst: worker idle, even an unchanged
+      ;; status flushes the pending refresh
+      (setq busy nil)
+      (vulpea-ui--on-worker-done "/tmp/c.org" 'unchanged nil)
+      (should (= 1 refreshed))
+      (should-not vulpea-ui--worker-refresh-pending))))
+
+(ert-deftest vulpea-ui-worker-done-ignores-when-sidebar-hidden ()
+  "No sidebar, no refresh - but the pending flag must not leak."
+  (let ((refreshed 0)
+        (vulpea-ui--worker-refresh-pending nil))
+    (cl-letf (((symbol-function 'vulpea-ui--sidebar-visible-p)
+               (lambda (&rest _) nil))
+              ((symbol-function 'vulpea-ui-sidebar-refresh)
+               (lambda () (cl-incf refreshed)))
+              ((symbol-function 'vulpea-db-worker-busy-p)
+               (lambda () nil)))
+      (vulpea-ui--on-worker-done "/tmp/a.org" 'applied 1)
+      (should (= 0 refreshed))
+      (should-not vulpea-ui--worker-refresh-pending))))
+
+(ert-deftest vulpea-ui-worker-hook-registration-guarded ()
+  "Hook setup registers on the worker hook only when vulpea provides it.
+Keeps vulpea-ui compatible with vulpea versions without async
+extraction."
+  (when (boundp 'vulpea-db-worker-done-functions)
+    (let ((vulpea-db-worker-done-functions nil)
+          (vulpea-ui-auto-refresh t))
+      (cl-letf (((symbol-function 'vulpea-ui--start-idle-timer) #'ignore))
+        (vulpea-ui--setup-hooks)
+        (unwind-protect
+            (should (memq #'vulpea-ui--on-worker-done
+                          vulpea-db-worker-done-functions))
+          (vulpea-ui--teardown-hooks))
+        (should-not (memq #'vulpea-ui--on-worker-done
+                          vulpea-db-worker-done-functions))))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
