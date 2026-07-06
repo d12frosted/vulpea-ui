@@ -241,11 +241,16 @@ lightweight Airtable for your collection. It is built on
 columns and familiar navigation for free.
 
 =M-x vulpea-ui-collection= completes over your saved views; free input
-is treated as a comma-separated list of tags, so typing =wine, rated=
-opens an ad-hoc view of notes carrying both tags. Empty input opens
-the whole collection. Press =?= inside the view for a menu of
-everything it can do; the mode line shows the note count, how many
-are marked, and the active filter.
+is parsed as a query, so =wine -beer #red? level:0 country:France=
+works straight from the prompt (bare words require a tag, =-tag=
+excludes one, =#tag?= means any-of, =level:=, =dir:=, =title:= and
+=KEY:VALUE= / =KEY:*= condition on the rest). The syntax is exactly
+what the mode line prints as the filter summary, so the description
+you see is a query you can type. Empty input opens the whole
+collection. Press =?= inside the view for a menu of everything it can
+do; the mode line shows the note count, how many are marked, the
+active filter, and averages for numeric meta columns (=:142 {rating
+avg 8.4}=).
 
 Filters are refined without leaving the buffer (=/= prefix) and
 columns are added and removed on the fly (=c= prefix), so a typical
@@ -296,15 +301,17 @@ Keybindings:
 | =% t= | Mark notes carrying a tag                         |
 | =+=   | Add a tag to the selection                        |
 | =-=   | Remove a tag from the selection                   |
-| =e=   | Set a metadata field on the selection             |
+| =e=   | Edit the field of the column at point             |
 | =E=   | Remove a metadata field from the selection        |
+| =Z=   | Undo the last batch edit (one level)              |
+| =G=   | Group rows by a column (Emacs 30+)                |
 | =D=   | Delete the selected notes (with confirmation)     |
 | =x=   | Apply a function to the selection                 |
 | =y=   | Copy the selection as an org list of links        |
 | =Y=   | Export the selection to an org buffer             |
 | =/ t= | Require a tag                                     |
 | =/ T= | Exclude a tag                                     |
-| =/ s= | Filter titles by regexp                           |
+| =/ s= | Narrow titles live (updates as you type)          |
 | =/ d= | Scope to a directory                              |
 | =/ m= | Condition on a metadata field                     |
 | =/ l= | Filter by level                                   |
@@ -316,6 +323,13 @@ Keybindings:
 | =g=   | Re-query and refresh                              |
 | =S=   | Sort by column at point (=tabulated-list-mode=)   |
 | =?=   | Menu with all of the above                        |
+
+=e= is context-aware: on the tags column it rewrites the tags of the
+note at point (completion, prefilled); on a meta column it reads a
+value for that key - prefilled from the note at point - and sets it
+on the selection; anywhere else it prompts for the key. =Z= undoes
+the last batch edit precisely: adding a tag only strips it from notes
+that gained it, and meta edits restore each note's previous values.
 
 Actions apply to the marked notes, or to the note at point when
 nothing is marked (=y= and =Y= fall back to the whole view instead).
@@ -335,6 +349,18 @@ Like the sidebar, the view refreshes itself when vulpea's background
 extraction lands changes in the database (vulpea 2.6+), coalescing
 bulk syncs into a single refresh. Only visible buffers re-query
 immediately; hidden ones wait until they are shown again.
+
+Saved views also show up as a =Collections= widget in the sidebar
+(one click from any note to a view), and any view can be embedded in
+a note as an org dynamic block:
+
+#+begin_src org
+,#+BEGIN: vulpea-collection :query "wine rating:*" :columns (title (meta "rating"))
+,#+END:
+#+end_src
+
+=C-c C-x x= (=org-dynamic-block-insert=) offers the block; titles
+render as =id:= links, and =:view "name"= reuses a saved view.
 
 * Default widgets
 
