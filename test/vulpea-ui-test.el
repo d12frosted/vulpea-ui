@@ -2754,6 +2754,65 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
       (should (equal (list wine beer)
                      (vulpea-ui-collection--query nil))))))
 
+(ert-deftest vulpea-ui-collection-test-adaptive-columns ()
+  "Adaptive defaults show only columns the data can fill."
+  ;; bare file-level notes: just identity and connectedness
+  (should (equal (vulpea-ui-collection--adaptive-columns
+                  (list (vulpea-ui-test--collection-note :id "n1")))
+                 '(title backlinks)))
+  ;; heading notes bring context, tags bring tags, todo brings todo
+  (should (equal (vulpea-ui-collection--adaptive-columns
+                  (list (vulpea-ui-test--collection-note
+                         :id "n1" :level 2 :file-title "File"
+                         :tags '("wine") :todo "TODO")))
+                 '(title context tags todo backlinks))))
+
+(ert-deftest vulpea-ui-collection-test-adaptive-refresh ()
+  "A view without :columns derives them from the queried notes."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view '(:name "test"))
+    (let ((vulpea-ui-collection-default-columns 'adaptive))
+      (cl-letf (((symbol-function 'vulpea-ui-collection--query)
+                 (lambda (_filter)
+                   (list (vulpea-ui-test--collection-note
+                          :id "n1" :title "One" :tags '("wine"))))))
+        (vulpea-ui-collection-refresh)
+        (should (equal (vulpea-ui-collection--view-columns)
+                       '(title tags backlinks)))
+        (should (equal (car (aref tabulated-list-format 2)) "Tags")))
+      ;; the data changes, the columns follow
+      (cl-letf (((symbol-function 'vulpea-ui-collection--query)
+                 (lambda (_filter)
+                   (list (vulpea-ui-test--collection-note
+                          :id "n1" :title "One")))))
+        (vulpea-ui-collection-refresh)
+        (should (equal (vulpea-ui-collection--view-columns)
+                       '(title backlinks)))))))
+
+(ert-deftest vulpea-ui-collection-test-static-default-columns ()
+  "An explicit default column list is honored as before."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view '(:name "test"))
+    (let ((vulpea-ui-collection-default-columns '(title modified)))
+      (should (equal (vulpea-ui-collection--view-columns)
+                     '(title modified))))))
+
+(ert-deftest vulpea-ui-collection-test-ad-hoc-views-sort-by-title ()
+  "Ad-hoc and all-notes views come sorted by title."
+  (should (equal (plist-get (vulpea-ui-collection--resolve-view "") :sort)
+                 '("Title")))
+  (should (equal (plist-get (vulpea-ui-collection--resolve-view "wine")
+                            :sort)
+                 '("Title")))
+  ;; saved views keep their own sort
+  (let ((vulpea-ui-collection-views
+         '(("wines" . (:filter nil :sort ("Modified" . t))))))
+    (should (equal (plist-get (vulpea-ui-collection--resolve-view "wines")
+                              :sort)
+                   '("Modified" . t)))))
+
 (ert-deftest vulpea-ui-collection-test-normalize-column ()
   "Column descriptors normalize to plists with name and width."
   (let ((col (vulpea-ui-collection--normalize-column 'title)))

@@ -2828,9 +2828,15 @@ plist with the keys:
   :type '(alist :key-type string :value-type plist)
   :group 'vulpea-ui)
 
-(defcustom vulpea-ui-collection-default-columns '(title tags modified)
-  "Columns used by collection views that do not specify their own."
-  :type '(repeat sexp)
+(defcustom vulpea-ui-collection-default-columns 'adaptive
+  "Columns used by collection views that do not specify their own.
+The default, `adaptive', derives the columns from the notes being
+shown, so empty columns never appear: title always, context when
+heading-level notes are present, tags and todo when some note
+carries them, and the backlink count.  Set an explicit list of
+column descriptors to always use those instead."
+  :type '(choice (const :tag "Derive from the data" adaptive)
+                 (repeat sexp))
   :group 'vulpea-ui)
 
 (defface vulpea-ui-collection-tags-face
@@ -3289,10 +3295,31 @@ backlinks column is present."
              (fboundp 'vulpea-db-query-backlink-counts))
     (list :backlinks (vulpea-db-query-backlink-counts "id"))))
 
+(defvar-local vulpea-ui-collection--adaptive-columns nil
+  "Columns derived at the last refresh for a view without :columns.")
+
+(defun vulpea-ui-collection--adaptive-columns (notes)
+  "Derive default columns from NOTES: only columns the data can fill.
+Title and the backlink count always show; context appears when
+heading-level notes are present, tags and todo when some note
+carries them."
+  (append '(title)
+          (when (seq-some (lambda (note) (> (vulpea-note-level note) 0))
+                          notes)
+            '(context))
+          (when (seq-some #'vulpea-note-tags notes) '(tags))
+          (when (seq-some #'vulpea-note-todo notes) '(todo))
+          '(backlinks)))
+
 (defun vulpea-ui-collection--view-columns ()
-  "Return the column descriptors of the current view."
+  "Return the column descriptors of the current view.
+A view without :columns falls back to
+`vulpea-ui-collection-default-columns'; with the `adaptive' default
+the columns derived at the last refresh apply."
   (or (plist-get vulpea-ui-collection--view :columns)
-      vulpea-ui-collection-default-columns))
+      (if (eq vulpea-ui-collection-default-columns 'adaptive)
+          (or vulpea-ui-collection--adaptive-columns '(title backlinks))
+        vulpea-ui-collection-default-columns)))
 
 (defvar-local vulpea-ui-collection--computed-widths nil
   "Alist of column name to last computed (auto-fitted) width.
@@ -3318,6 +3345,13 @@ width is kept for as long as the column stays."
                    (/= (nth 1 current) last-width))
           (setf (nth 1 col) (nth 1 current)))))
     (setq vulpea-ui-collection--computed-widths fresh)
+    ;; adaptive columns can drop the column the sort points at
+    (when (and tabulated-list-sort-key
+               (not (seq-some (lambda (col)
+                                (equal (car col)
+                                       (car tabulated-list-sort-key)))
+                              (append computed nil))))
+      (setq tabulated-list-sort-key nil))
     (setq tabulated-list-format computed)
     (tabulated-list-init-header)))
 
@@ -3382,9 +3416,16 @@ tabulated-list support that arrived in Emacs 30."
 (defun vulpea-ui-collection-refresh ()
   "Re-query the view and re-render, keeping the marked set and point."
   (interactive)
-  (let* ((columns (vulpea-ui-collection--view-columns))
-         (notes (vulpea-ui-collection--query
+  (let* ((notes (vulpea-ui-collection--query
                  (plist-get vulpea-ui-collection--view :filter)))
+         (columns (progn
+                    (when (and (eq vulpea-ui-collection-default-columns
+                                   'adaptive)
+                               (not (plist-get vulpea-ui-collection--view
+                                               :columns)))
+                      (setq vulpea-ui-collection--adaptive-columns
+                            (vulpea-ui-collection--adaptive-columns notes)))
+                    (vulpea-ui-collection--view-columns)))
          (ctx (vulpea-ui-collection--context columns)))
     (setq vulpea-ui-collection--ctx ctx)
     (setq vulpea-ui-collection--aggregates
@@ -4231,13 +4272,14 @@ empty for a view over the whole collection."
   (let ((input (string-trim input)))
     (cond
      ((string-empty-p input)
-      (list :name "all"))
+      (list :name "all" :sort '("Title")))
      ((cdr (assoc input vulpea-ui-collection-views))
       (append (list :name input)
               (cdr (assoc input vulpea-ui-collection-views))))
      (t
       (list :name input
-            :filter (vulpea-ui-collection--parse-query input))))))
+            :filter (vulpea-ui-collection--parse-query input)
+            :sort '("Title"))))))
 
 (defun vulpea-ui-collection--column-with-width (col width)
   "Return descriptor COL with :width WIDTH pinned into it."
