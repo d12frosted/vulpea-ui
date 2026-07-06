@@ -3221,6 +3221,8 @@ dired-style marks and bulk actions on the selection.
   (hl-line-mode 1)
   (setq-local revert-buffer-function
               (lambda (&rest _) (vulpea-ui-collection-refresh)))
+  (setq-local bookmark-make-record-function
+              #'vulpea-ui-collection--bookmark-record)
   (add-hook 'window-buffer-change-functions
             #'vulpea-ui-collection--on-displayed nil t)
   (when (boundp 'vulpea-db-worker-done-functions)
@@ -3974,6 +3976,29 @@ The filter, columns and current sort order are stored in
         (customize-save-variable 'vulpea-ui-collection-views
                                  vulpea-ui-collection-views)
       (error (message "View %s saved for this session only" name)))))
+
+(declare-function bookmark-prop-get "bookmark" (bookmark prop))
+
+(defun vulpea-ui-collection--bookmark-record ()
+  "Return a bookmark record for the current collection view.
+The :predicate condition is dropped, functions do not survive the
+bookmark file; the current sort order and columns are captured."
+  (let ((name (or (plist-get vulpea-ui-collection--view :name)
+                  "collection")))
+    `(,(format "vulpea-collection: %s" name)
+      (view . ,(list :name name
+                     :filter (vulpea-ui-collection--filter-put
+                              (vulpea-ui-collection--current-filter)
+                              :predicate nil)
+                     :columns (vulpea-ui-collection--view-columns)
+                     :sort tabulated-list-sort-key))
+      (handler . vulpea-ui-collection-bookmark-handler))))
+
+;;;###autoload
+(defun vulpea-ui-collection-bookmark-handler (record)
+  "Open the collection view stored in bookmark RECORD."
+  (require 'bookmark)
+  (vulpea-ui-collection-open (bookmark-prop-get record 'view)))
 
 (defun vulpea-ui-collection--menu-description ()
   "Return the headline of the collection menu."
