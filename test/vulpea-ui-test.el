@@ -3238,6 +3238,56 @@ single-note edits apply without asking."
         (vulpea-ui-collection-quick-edit)
         (should (equal (cdr set-args) '("wine" "rated")))))))
 
+(ert-deftest vulpea-ui-collection-test-undo-add-tag ()
+  "Undo removes the added tag only from notes that gained it."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :tags '("rated"))
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-mark)
+    (let (removed)
+      (cl-letf (((symbol-function 'vulpea-tags-batch-add) #'ignore)
+                ((symbol-function 'vulpea-tags-batch-remove)
+                 (lambda (notes tag) (setq removed (cons tag notes))))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'yes-or-no-p) (lambda (_) t))
+                ((symbol-function 'vulpea-ui-collection--read-tag)
+                 (lambda (_prompt) "rated")))
+        (vulpea-ui-collection-add-tag)
+        (vulpea-ui-collection-undo)
+        ;; n1 already carried the tag, so only n2 is reverted
+        (should (equal (car removed) "rated"))
+        (should (equal (mapcar #'vulpea-note-id (cdr removed)) '("n2")))
+        ;; one level only
+        (should-error (vulpea-ui-collection-undo) :type 'user-error)))))
+
+(ert-deftest vulpea-ui-collection-test-undo-set-meta ()
+  "Undo restores the previous meta value, removing keys that were absent."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :meta '(("country" "France")))
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-mark)
+    (let (restored removed)
+      (cl-letf (((symbol-function 'vulpea-meta-batch-set) #'ignore)
+                ((symbol-function 'vulpea-meta-set)
+                 (lambda (note key value)
+                   (push (list (vulpea-note-id note) key value) restored)))
+                ((symbol-function 'vulpea-meta-remove)
+                 (lambda (note key)
+                   (push (list (vulpea-note-id note) key) removed)))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'yes-or-no-p) (lambda (_) t))
+                ((symbol-function 'vulpea-ui-collection--read-meta-key)
+                 (lambda (_prompt) "country"))
+                ((symbol-function 'read-string) (lambda (&rest _) "Italy")))
+        (vulpea-ui-collection-set-meta)
+        (vulpea-ui-collection-undo)
+        (should (equal restored '(("n1" "country" "France"))))
+        (should (equal removed '(("n2" "country"))))))))
+
 (ert-deftest vulpea-ui-collection-test-copy-links ()
   "Copying links puts an org list of the selection on the kill ring."
   (vulpea-ui-test--with-collection-buffer
