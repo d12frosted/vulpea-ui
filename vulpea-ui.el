@@ -3008,6 +3008,13 @@ the note id."
 
 ;;;; Mode
 
+(defvar vulpea-ui-collection-column-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "a") #'vulpea-ui-collection-add-column)
+    (define-key map (kbd "k") #'vulpea-ui-collection-remove-column)
+    map)
+  "Keymap for column management in `vulpea-ui-collection-mode'.")
+
 (defvar vulpea-ui-collection-filter-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "t") #'vulpea-ui-collection-filter-by-tag)
@@ -3036,6 +3043,7 @@ the note id."
     (define-key map (kbd "w") #'vulpea-ui-collection-save-view)
     (define-key map (kbd "g") #'vulpea-ui-collection-refresh)
     (define-key map (kbd "/") vulpea-ui-collection-filter-map)
+    (define-key map (kbd "c") vulpea-ui-collection-column-map)
     map)
   "Keymap for `vulpea-ui-collection-mode'.")
 
@@ -3297,6 +3305,75 @@ Level 0 keeps file-level notes only; \"any\" drops the condition."
   "Drop every filter condition and show the whole collection."
   (interactive)
   (vulpea-ui-collection--set-filter nil))
+
+;;;; Column management
+
+(defun vulpea-ui-collection--known-meta-keys ()
+  "Return the metadata keys present on the notes currently in the view."
+  (let (keys)
+    (maphash (lambda (_ note)
+               (dolist (item (vulpea-note-meta note))
+                 (push (car item) keys)))
+             vulpea-ui-collection--note-table)
+    (seq-uniq keys)))
+
+(defun vulpea-ui-collection--available-columns ()
+  "Return an alist of column display name to column descriptor.
+Built-in columns plus a meta:KEY column for every metadata key found
+on the notes currently in the view."
+  (append
+   (mapcar (lambda (id) (cons (symbol-name id) id))
+           '(title tags created modified links backlinks file))
+   (mapcar (lambda (key) (cons (format "meta:%s" key) (list 'meta key)))
+           (vulpea-ui-collection--known-meta-keys))))
+
+(defun vulpea-ui-collection--set-columns (columns)
+  "Install COLUMNS on the current view and re-render.
+The sort key is dropped when it points at a column that is gone."
+  (setq vulpea-ui-collection--view
+        (plist-put (copy-sequence vulpea-ui-collection--view)
+                   :columns columns))
+  (setq tabulated-list-format (vulpea-ui-collection--format columns))
+  (when (and tabulated-list-sort-key
+             (not (seq-some
+                   (lambda (col)
+                     (equal (car tabulated-list-sort-key)
+                            (plist-get
+                             (vulpea-ui-collection--normalize-column col)
+                             :name)))
+                   columns)))
+    (setq tabulated-list-sort-key nil))
+  (tabulated-list-init-header)
+  (vulpea-ui-collection-refresh))
+
+(defun vulpea-ui-collection-add-column (column)
+  "Append COLUMN to the current view.
+Interactively, complete over the built-in columns and the meta keys of
+the notes in the view; free input is treated as a meta key."
+  (interactive
+   (list (let* ((available (vulpea-ui-collection--available-columns))
+                (name (completing-read "Add column: " available)))
+           (or (cdr (assoc name available))
+               (list 'meta (string-remove-prefix "meta:" name))))))
+  (vulpea-ui-collection--set-columns
+   (append (vulpea-ui-collection--view-columns) (list column))))
+
+(defun vulpea-ui-collection-remove-column (name)
+  "Remove the column named NAME from the current view."
+  (interactive
+   (list (completing-read
+          "Remove column: "
+          (mapcar (lambda (col)
+                    (plist-get (vulpea-ui-collection--normalize-column col)
+                               :name))
+                  (vulpea-ui-collection--view-columns))
+          nil t)))
+  (vulpea-ui-collection--set-columns
+   (seq-remove
+    (lambda (col)
+      (equal (plist-get (vulpea-ui-collection--normalize-column col) :name)
+             name))
+    (vulpea-ui-collection--view-columns))))
 
 ;;;; Actions
 
