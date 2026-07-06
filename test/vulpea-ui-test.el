@@ -3128,6 +3128,38 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
         (should (equal (nth 2 batched) "France"))
         (should (= (length (nth 0 batched)) 1))))))
 
+(ert-deftest vulpea-ui-collection-test-copy-links ()
+  "Copying links puts an org list of the selection on the kill ring."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One")
+            (vulpea-ui-test--collection-note :id "n2" :title "Two"))
+    ;; nothing marked: the whole view
+    (vulpea-ui-collection-copy-links)
+    (let ((copied (current-kill 0)))
+      (should (string-match-p "\\[\\[id:n1\\]\\[One\\]\\]" copied))
+      (should (string-match-p "\\[\\[id:n2\\]\\[Two\\]\\]" copied)))
+    ;; marked subset wins
+    (goto-char (point-min))
+    (vulpea-ui-collection-mark)
+    (vulpea-ui-collection-copy-links)
+    (let ((copied (current-kill 0)))
+      (should (string-match-p "id:n1" copied))
+      (should-not (string-match-p "id:n2" copied)))))
+
+(ert-deftest vulpea-ui-collection-test-export ()
+  "Export produces an org buffer listing the selection as links."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view '(:name "test view" :columns (title)))
+    (unwind-protect
+        (progn
+          (vulpea-ui-collection-export)
+          (should (derived-mode-p 'org-mode))
+          (should (string-match-p "\\[\\[id:n1\\]\\[One\\]\\]"
+                                  (buffer-string))))
+      (when (derived-mode-p 'org-mode)
+        (kill-buffer)))))
+
 (ert-deftest vulpea-ui-collection-test-apply-action ()
   "The custom action calls the chosen function with the selection."
   (vulpea-ui-test--with-collection-buffer
