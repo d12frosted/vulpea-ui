@@ -22,6 +22,7 @@ Visual tools for [[https://github.com/d12frosted/vulpea][vulpea]] notes: a per-n
 - Configurable per-frame sidebar (position, size, auto-hide)
 - Built-in widgets: outline, backlinks, unlinked mentions, forward links, outgoing mentions, stats, schema health
 - Schema dashboard: a collection-wide view of how every note measures up to its schema
+- Collection view: a sortable table over a filtered set of notes, with dired-style marks and bulk actions (tags, metadata, delete, your own function)
 - Built on [[https://github.com/d12frosted/vui.el][vui]] components, with an easy API for your own widgets
 
 * Installation
@@ -187,6 +188,7 @@ For large org files or many backlinks, enable fast parsing:
 | =vulpea-ui-sidebar-toggle=   | Toggle sidebar visibility |
 | =vulpea-ui-sidebar-refresh=  | Force refresh content     |
 | =vulpea-ui-schema-dashboard= | Open the schema dashboard |
+| =vulpea-ui-collection=       | Open a collection view    |
 
 * Sidebar keybindings
 
@@ -230,6 +232,70 @@ the note without fixing. =g= rescans, =q= buries the buffer. The scan is
 one query plus an in-memory pass, so it stays fast on a large collection.
 Needs a vulpea with =vulpea-schema-collection-health= (the =fix= button
 additionally needs =vulpea-schema-fix-violation=).
+
+* Collection view
+
+The collection view is a table over a filtered set of notes - think a
+lightweight Airtable for your collection. It is built on
+=tabulated-list-mode=, so you get a sticky header, click-to-sort
+columns and familiar navigation for free.
+
+=M-x vulpea-ui-collection= completes over your saved views; free input
+is treated as a comma-separated list of tags, so typing =wine, rated=
+opens an ad-hoc view of notes carrying both tags.
+
+Views are plists. Save them in =vulpea-ui-collection-views= (or press
+=w= in a collection buffer to save the current one):
+
+#+begin_src emacs-lisp
+(setq vulpea-ui-collection-views
+      '(("wines" . (:filter (:tags-all ("wine")
+                             :level 0)
+                    :columns (title (meta "country") (meta "producer") tags modified)
+                    :sort ("Modified" . t)))))
+#+end_src
+
+The =:filter= plist supports =:tags-all=, =:tags-any=, =:tags-none=,
+=:level= (0 for file-level notes), =:directory= (absolute prefix or a
+relative path component), =:title= (regexp), =:meta= (alist of
+=(KEY . VALUE)= conditions, =(KEY . t)= for mere presence) and
+=:predicate= (any function on the note). The cheapest condition is
+pushed down to the database, the rest is applied in memory.
+
+Columns: =title=, =tags=, =(meta KEY)=, =created=, =modified=, =links=
+(outgoing link count), =backlinks= (incoming link count, one grouped
+query for the whole table) and =file=. Any column takes =:name= and
+=:width= overrides, e.g. =(title :width 60)=.
+
+Keybindings:
+
+| Key   | Action                                            |
+|-------+---------------------------------------------------|
+| =RET= | Visit the note                                    |
+| =m=   | Mark the note at point                            |
+| =u=   | Unmark the note at point                          |
+| =U=   | Unmark all                                        |
+| =t=   | Invert marks                                      |
+| =+=   | Add a tag to the selection                        |
+| =-=   | Remove a tag from the selection                   |
+| =e=   | Set a metadata field on the selection             |
+| =E=   | Remove a metadata field from the selection        |
+| =D=   | Delete the selected notes (with confirmation)     |
+| =x=   | Apply a function to the selection                 |
+| =w=   | Save the current view                             |
+| =g=   | Re-query and refresh                              |
+| =S=   | Sort by column at point (=tabulated-list-mode=)   |
+
+Actions apply to the marked notes, or to the note at point when
+nothing is marked. Marks are keyed by note id, so they survive
+sorting and re-querying. Bulk tag and metadata edits go through
+vulpea's batch operations (=vulpea-tags-batch-add= and friends), so
+they need a vulpea recent enough to provide them. Deleting removes
+the files of file-level notes; heading-level notes are skipped.
+
+Like the sidebar, the view refreshes itself when vulpea's background
+extraction lands changes in the database (vulpea 2.6+), coalescing
+bulk syncs into a single refresh.
 
 * Default widgets
 
