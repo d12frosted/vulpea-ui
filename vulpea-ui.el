@@ -3042,6 +3042,18 @@ the note id."
 
 ;;;; Mode
 
+(defvar vulpea-ui-collection-filter-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "t") #'vulpea-ui-collection-filter-by-tag)
+    (define-key map (kbd "T") #'vulpea-ui-collection-filter-exclude-tag)
+    (define-key map (kbd "s") #'vulpea-ui-collection-filter-by-title)
+    (define-key map (kbd "d") #'vulpea-ui-collection-filter-by-directory)
+    (define-key map (kbd "m") #'vulpea-ui-collection-filter-by-meta)
+    (define-key map (kbd "l") #'vulpea-ui-collection-filter-by-level)
+    (define-key map (kbd "/") #'vulpea-ui-collection-filter-clear)
+    map)
+  "Keymap for filter refinement in `vulpea-ui-collection-mode'.")
+
 (defvar vulpea-ui-collection-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'vulpea-ui-collection-visit)
@@ -3057,6 +3069,7 @@ the note id."
     (define-key map (kbd "x") #'vulpea-ui-collection-apply)
     (define-key map (kbd "w") #'vulpea-ui-collection-save-view)
     (define-key map (kbd "g") #'vulpea-ui-collection-refresh)
+    (define-key map (kbd "/") vulpea-ui-collection-filter-map)
     map)
   "Keymap for `vulpea-ui-collection-mode'.")
 
@@ -3224,6 +3237,100 @@ The marked notes when any are marked, otherwise the note at point."
         (when-let* ((id (tabulated-list-get-id))
                     (note (gethash id vulpea-ui-collection--note-table)))
           (list note)))))
+
+;;;; Filter refinement
+
+(defun vulpea-ui-collection--filter-put (filter key value)
+  "Return a copy of FILTER with KEY set to VALUE."
+  (plist-put (copy-sequence filter) key value))
+
+(defun vulpea-ui-collection--filter-add-to (filter key value)
+  "Return a copy of FILTER with VALUE appended to the list at KEY."
+  (vulpea-ui-collection--filter-put
+   filter key (append (plist-get filter key) (list value))))
+
+(defun vulpea-ui-collection--set-filter (filter)
+  "Install FILTER as the current view's filter and re-query."
+  (setq vulpea-ui-collection--view
+        (plist-put (copy-sequence vulpea-ui-collection--view)
+                   :filter filter))
+  (vulpea-ui-collection-refresh))
+
+(defun vulpea-ui-collection--current-filter ()
+  "Return the current view's filter."
+  (plist-get vulpea-ui-collection--view :filter))
+
+(defun vulpea-ui-collection-filter-by-tag ()
+  "Narrow the view to notes carrying one more tag."
+  (interactive)
+  (vulpea-ui-collection--set-filter
+   (vulpea-ui-collection--filter-add-to
+    (vulpea-ui-collection--current-filter)
+    :tags-all (vulpea-ui-collection--read-tag "Require tag: "))))
+
+(defun vulpea-ui-collection-filter-exclude-tag ()
+  "Narrow the view to notes not carrying a tag."
+  (interactive)
+  (vulpea-ui-collection--set-filter
+   (vulpea-ui-collection--filter-add-to
+    (vulpea-ui-collection--current-filter)
+    :tags-none (vulpea-ui-collection--read-tag "Exclude tag: "))))
+
+(defun vulpea-ui-collection-filter-by-title ()
+  "Narrow the view to notes whose title matches a regexp.
+Empty input drops the title condition."
+  (interactive)
+  (let ((re (read-string "Title regexp: "
+                         (plist-get (vulpea-ui-collection--current-filter)
+                                    :title))))
+    (vulpea-ui-collection--set-filter
+     (vulpea-ui-collection--filter-put
+      (vulpea-ui-collection--current-filter)
+      :title (unless (string-empty-p re) re)))))
+
+(defun vulpea-ui-collection-filter-by-directory ()
+  "Narrow the view to notes under a directory.
+An absolute directory matches as a path prefix, a relative one as a
+path component.  Empty input drops the condition."
+  (interactive)
+  (let ((dir (read-string "Directory (absolute or relative): "
+                          (plist-get (vulpea-ui-collection--current-filter)
+                                     :directory))))
+    (vulpea-ui-collection--set-filter
+     (vulpea-ui-collection--filter-put
+      (vulpea-ui-collection--current-filter)
+      :directory (unless (string-empty-p dir) dir)))))
+
+(defun vulpea-ui-collection-filter-by-meta ()
+  "Narrow the view on a metadata field.
+Empty value means the field must merely be present."
+  (interactive)
+  (let* ((key (vulpea-ui-collection--read-meta-key "Meta key: "))
+         (value (read-string (format "Value for %s (empty for presence): "
+                                     key)))
+         (filter (vulpea-ui-collection--current-filter)))
+    (vulpea-ui-collection--set-filter
+     (vulpea-ui-collection--filter-put
+      filter :meta
+      (append (plist-get filter :meta)
+              (list (cons key (if (string-empty-p value) t value))))))))
+
+(defun vulpea-ui-collection-filter-by-level ()
+  "Narrow the view to notes of a given level.
+Level 0 keeps file-level notes only; \"any\" drops the condition."
+  (interactive)
+  (let ((level (completing-read "Level (any, 0 for file-level, 1, ...): "
+                                '("any" "0" "1" "2" "3"))))
+    (vulpea-ui-collection--set-filter
+     (vulpea-ui-collection--filter-put
+      (vulpea-ui-collection--current-filter)
+      :level (unless (equal level "any")
+               (string-to-number level))))))
+
+(defun vulpea-ui-collection-filter-clear ()
+  "Drop every filter condition and show the whole collection."
+  (interactive)
+  (vulpea-ui-collection--set-filter nil))
 
 ;;;; Actions
 
