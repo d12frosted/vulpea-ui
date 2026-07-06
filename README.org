@@ -243,14 +243,14 @@ columns and familiar navigation for free.
 =M-x vulpea-ui-collection= completes over your saved views; free input
 is parsed as a query, so =wine -beer #red? level:0 country:France=
 works straight from the prompt (bare words require a tag, =-tag=
-excludes one, =#tag?= means any-of, =level:=, =dir:=, =title:= and
-=KEY:VALUE= / =KEY:*= condition on the rest). The syntax is exactly
-what the mode line prints as the filter summary, so the description
-you see is a query you can type. Empty input opens the whole
-collection. Press =?= inside the view for a menu of everything it can
-do; the mode line shows the note count, how many are marked, the
-active filter, and averages for numeric meta columns (=:142 {rating
-avg 8.4}=).
+excludes one, =#tag?= means any-of, =level:=, =dir:=, =title:=,
+=todo:= and =KEY:VALUE= / =KEY:*= condition on the rest). The syntax
+is exactly what the mode line prints as the filter summary, so the
+description you see is a query you can type. Empty input opens the
+whole collection. Press =?= inside the view for a menu of everything
+it can do; the mode line shows how many notes matched out of the
+whole collection, how many are marked, the active filter, and
+averages for numeric meta columns (=:142/4231 {rating avg 8.4}=).
 
 Filters are refined without leaving the buffer (=/= prefix) and
 columns are added and removed on the fly (=c= prefix), so a typical
@@ -301,6 +301,7 @@ Keybindings:
 | =RET= | Visit the note                                    |
 | =o=   | Visit the note in another window                  |
 | =C-o= | Preview the note without leaving the table        |
+| =SPC= | Show the row's full values                        |
 | =m=   | Mark the note at point (or the region's rows)     |
 | =u=   | Unmark the note at point (or the region's rows)   |
 | =U=   | Unmark all                                        |
@@ -311,8 +312,10 @@ Keybindings:
 | =-=   | Remove a tag from the selection                   |
 | =e=   | Edit the field of the column at point             |
 | =E=   | Remove a metadata field from the selection        |
+| =T=   | Set a todo state on the selection                 |
 | =Z=   | Undo the last batch edit (one level)              |
 | =G=   | Group rows by a column (Emacs 30+)                |
+| ===   | Narrow to the value of the cell at point          |
 | =D=   | Delete the selected notes (with confirmation)     |
 | =x=   | Apply a function to the selection                 |
 | =y=   | Copy the selection as an org list of links        |
@@ -335,9 +338,18 @@ Keybindings:
 =e= is context-aware: on the tags column it rewrites the tags of the
 note at point (completion, prefilled); on a meta column it reads a
 value for that key - prefilled from the note at point - and sets it
-on the selection; anywhere else it prompts for the key. =Z= undoes
-the last batch edit precisely: adding a tag only strips it from notes
-that gained it, and meta edits restore each note's previous values.
+on the selection; anywhere else it prompts for the key. =T= sets a
+todo state on the selection's heading-level notes (empty input clears
+it). =Z= undoes the last batch edit precisely: adding a tag only
+strips it from notes that gained it, meta edits restore each note's
+previous values, and todo edits restore the old states.
+
+=== is the drill-down gesture: it adds a filter condition from the
+cell at point - a tag from the tags column, the value of a meta cell,
+a todo state, or the note's directory from the context and file
+columns. See "France", press ===, see the wines. Hovering a truncated
+cell shows its full value, and =SPC= prints the whole row as
+=column: value= lines.
 
 Actions apply to the marked notes, or to the note at point when
 nothing is marked (=y= and =Y= fall back to the whole view instead).
