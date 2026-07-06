@@ -3711,6 +3711,38 @@ single-note edits apply without asking."
           (vulpea-ui-collection-bookmark-handler record)
           (should (equal (plist-get opened :name) "wines")))))))
 
+(ert-deftest vulpea-ui-collection-test-dblock ()
+  "The dynamic block renders a query as an org table with linked titles."
+  (cl-letf (((symbol-function 'vulpea-ui-collection--query)
+             (lambda (filter)
+               (should (equal (plist-get filter :tags-all) '("wine")))
+               (list (vulpea-ui-test--collection-note
+                      :id "n1" :title "One" :tags '("wine" "red"))))))
+    (with-temp-buffer
+      (org-mode)
+      (insert "#+BEGIN: vulpea-collection :query \"wine\" :columns (title tags)\n"
+              "#+END:\n")
+      (goto-char (point-min))
+      (org-dblock-update)
+      (let ((content (buffer-string)))
+        (should (string-match-p "| Title" content))
+        (should (string-match-p "\\[\\[id:n1\\]\\[One\\]\\]" content))
+        (should (string-match-p "wine red" content))))))
+
+(ert-deftest vulpea-ui-collection-test-dblock-escapes-pipes ()
+  "Cell values containing | do not break the table."
+  (should (equal (vulpea-ui-collection--dblock-cell
+                  (vulpea-ui-test--collection-note :title "a|b")
+                  (vulpea-ui-collection--normalize-column 'file)
+                  nil)
+                 "n1.org"))
+  (let ((cell (vulpea-ui-collection--dblock-cell
+               (vulpea-ui-test--collection-note
+                :meta '(("label" "a|b")))
+               (vulpea-ui-collection--normalize-column '(meta "label"))
+               nil)))
+    (should-not (string-match-p "|" cell))))
+
 (ert-deftest vulpea-ui-collection-test-format-time ()
   "Time formatting handles nil, time values, and strings."
   (should (equal (vulpea-ui-collection--format-time nil) ""))
