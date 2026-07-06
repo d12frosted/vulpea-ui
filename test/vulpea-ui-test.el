@@ -2654,14 +2654,20 @@ extraction."
 
 (cl-defun vulpea-ui-test--collection-note
     (&key (id "n1") (title "Note") (path "/notes/n1.org") (level 0)
-          (pos 1) tags meta links created-at modified-at)
+          (pos 1) tags meta links created-at modified-at
+          todo priority scheduled deadline aliases
+          file-title outline-path)
   "Create a mock note for collection tests.
-ID, TITLE, PATH, LEVEL, POS, TAGS, META, LINKS, CREATED-AT and
-MODIFIED-AT map to the corresponding `vulpea-note' slots."
+ID, TITLE, PATH, LEVEL, POS, TAGS, META, LINKS, CREATED-AT,
+MODIFIED-AT, TODO, PRIORITY, SCHEDULED, DEADLINE, ALIASES,
+FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
   (make-vulpea-note
    :id id :title title :primary-title title :path path :level level
    :pos pos :tags tags :meta meta :links links
-   :created-at created-at :modified-at modified-at))
+   :created-at created-at :modified-at modified-at
+   :todo todo :priority priority :scheduled scheduled
+   :deadline deadline :aliases aliases
+   :file-title file-title :outline-path outline-path))
 
 (ert-deftest vulpea-ui-collection-test-matches-empty-filter ()
   "An empty filter matches any note."
@@ -2787,6 +2793,29 @@ MODIFIED-AT map to the corresponding `vulpea-note' slots."
         (should (equal (value 'backlinks (list :backlinks counts)) "3"))
         (should (equal (value 'backlinks (list :backlinks (make-hash-table :test 'equal)))
                        "0"))))))
+
+(ert-deftest vulpea-ui-collection-test-context-and-task-columns ()
+  "Context, todo, priority, scheduled, deadline and aliases columns."
+  (cl-flet ((value (note col)
+              (vulpea-ui-collection--column-value
+               note (vulpea-ui-collection--normalize-column col) nil)))
+    (let ((heading (vulpea-ui-test--collection-note
+                    :id "h1" :title "Tasks" :level 2
+                    :file-title "Barberry Garden"
+                    :outline-path '("Environment")
+                    :todo "TODO" :priority ?A
+                    :scheduled "<2026-07-10 Fri>"
+                    :deadline "[2026-08-01 Sat]"
+                    :aliases '("bg tasks")))
+          (file-note (vulpea-ui-test--collection-note :id "f1")))
+      (should (equal (value heading 'context) "Barberry Garden > Environment"))
+      (should (equal (value file-note 'context) ""))
+      (should (equal (value heading 'todo) "TODO"))
+      (should (equal (value file-note 'todo) ""))
+      (should (equal (value heading 'priority) "A"))
+      (should (equal (value heading 'scheduled) "2026-07-10"))
+      (should (equal (value heading 'deadline) "2026-08-01"))
+      (should (equal (value heading 'aliases) "bg tasks")))))
 
 (ert-deftest vulpea-ui-collection-test-format ()
   "The tabulated-list format has a mark column plus one per descriptor."

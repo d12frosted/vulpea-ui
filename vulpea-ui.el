@@ -2942,12 +2942,18 @@ FILTER in memory."
 
 (defconst vulpea-ui-collection--columns
   '((title "Title" 48)
+    (context "Context" 36)
     (tags "Tags" 24)
     (meta nil 14)
+    (todo "Todo" 8)
+    (priority "Pri" 4)
+    (scheduled "Scheduled" 10)
+    (deadline "Deadline" 10)
     (created "Created" 10)
     (modified "Modified" 10)
     (links "Links" 6)
     (backlinks "Backlinks" 9)
+    (aliases "Aliases" 20)
     (file "File" 20))
   "Column defaults: (ID NAME WIDTH) per column type.
 A nil NAME means the column is named after its key (meta columns).")
@@ -2973,10 +2979,13 @@ The result is a plist with :id, :key, :name and :width."
 
 (defun vulpea-ui-collection--format-time (value)
   "Format timestamp VALUE as an ISO date string.
-VALUE may be nil (empty string), a string (its date part) or a time
-value (formatted as %Y-%m-%d)."
+VALUE may be nil (empty string), a string (its date part, org
+timestamp brackets stripped) or a time value (formatted as
+%Y-%m-%d)."
   (cond ((null value) "")
-        ((stringp value) (substring value 0 (min 10 (length value))))
+        ((stringp value)
+         (let ((s (string-trim value "[<[]+" "[]>]+")))
+           (substring s 0 (min 10 (length s)))))
         (t (format-time-string "%Y-%m-%d" value))))
 
 (defun vulpea-ui-collection--column-value (note col &optional ctx)
@@ -2989,6 +2998,22 @@ table of backlink counts keyed by note id."
     ('meta (string-join (cdr (assoc (plist-get col :key)
                                     (vulpea-note-meta note)))
                         ", "))
+    ('context (if (> (vulpea-note-level note) 0)
+                  (string-join
+                   (delq nil (cons (vulpea-note-file-title note)
+                                   (vulpea-note-outline-path note)))
+                   " > ")
+                ""))
+    ('todo (or (vulpea-note-todo note) ""))
+    ('priority (let ((priority (vulpea-note-priority note)))
+                 (cond ((null priority) "")
+                       ((characterp priority) (char-to-string priority))
+                       (t (format "%s" priority)))))
+    ('scheduled (vulpea-ui-collection--format-time
+                 (vulpea-note-scheduled note)))
+    ('deadline (vulpea-ui-collection--format-time
+                (vulpea-note-deadline note)))
+    ('aliases (string-join (vulpea-note-aliases note) ", "))
     ('created (vulpea-ui-collection--format-time
                (vulpea-note-created-at note)))
     ('modified (vulpea-ui-collection--format-time
@@ -3359,7 +3384,8 @@ Built-in columns plus a meta:KEY column for every metadata key found
 on the notes currently in the view."
   (append
    (mapcar (lambda (id) (cons (symbol-name id) id))
-           '(title tags created modified links backlinks file))
+           '(title context tags todo priority scheduled deadline
+             created modified links backlinks aliases file))
    (mapcar (lambda (key) (cons (format "meta:%s" key) (list 'meta key)))
            (vulpea-ui-collection--known-meta-keys))))
 
