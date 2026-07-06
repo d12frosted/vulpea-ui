@@ -3414,6 +3414,25 @@ single-note edits apply without asking."
         (vulpea-ui-collection--on-displayed nil)
         (should (= refreshed 1))))))
 
+(ert-deftest vulpea-ui-collection-test-bookmark ()
+  "Bookmarks capture the view (minus the predicate) and restore it."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view
+          (list :name "wines" :columns '(title)
+                :filter (list :tags-all '("wine") :predicate #'ignore)))
+    (let ((record (vulpea-ui-collection--bookmark-record)))
+      (should (string-match-p "wines" (car record)))
+      (let ((view (alist-get 'view (cdr record))))
+        (should (equal (plist-get (plist-get view :filter) :tags-all)
+                       '("wine")))
+        (should-not (plist-get (plist-get view :filter) :predicate)))
+      (let (opened)
+        (cl-letf (((symbol-function 'vulpea-ui-collection-open)
+                   (lambda (view) (setq opened view))))
+          (vulpea-ui-collection-bookmark-handler record)
+          (should (equal (plist-get opened :name) "wines")))))))
+
 (ert-deftest vulpea-ui-collection-test-format-time ()
   "Time formatting handles nil, time values, and strings."
   (should (equal (vulpea-ui-collection--format-time nil) ""))
