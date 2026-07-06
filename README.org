@@ -286,6 +286,14 @@ Any column takes =:name= and =:width= overrides, e.g.
 act as caps); a column you resize by hand keeps its width and is
 pinned into the view when you save it.
 
+A view without =:columns= gets *adaptive* defaults: columns are
+derived from the notes being shown, so empty ones never appear -
+title always, context when heading-level notes are present, tags and
+todo when some note carries them, plus the backlink count (sort by it
+to surface your hub notes). Ad-hoc views come sorted by title. Set
+=vulpea-ui-collection-default-columns= to an explicit list to opt
+out.
+
 Keybindings:
 
 | Key   | Action                                            |
