@@ -3507,6 +3507,28 @@ single-note edits apply without asking."
       (should (funcall sorter (entry "WAIT") (entry "DONE")))
       (should (funcall sorter (entry "DONE") (entry ""))))))
 
+(ert-deftest vulpea-ui-collection-test-dired ()
+  "The dired hand-off lists the selection's files, deduplicated."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :path "/notes/a.org")
+            (vulpea-ui-test--collection-note
+             :id "n2" :title "Heading" :path "/notes/a.org" :level 2)
+            (vulpea-ui-test--collection-note
+             :id "n3" :title "Two" :path "/notes/b.org"))
+    (let (dired-arg)
+      (cl-letf (((symbol-function 'dired)
+                 (lambda (arg &rest _) (setq dired-arg arg)))
+                ((symbol-function 'dired-toggle-marks) #'ignore))
+        ;; nothing marked: the whole view, one entry per file
+        (vulpea-ui-collection-dired)
+        (should (equal (cdr dired-arg) '("/notes/a.org" "/notes/b.org")))
+        ;; marked subset wins
+        (goto-char (point-min))
+        (vulpea-ui-collection-mark)
+        (vulpea-ui-collection-dired)
+        (should (equal (cdr dired-arg) '("/notes/a.org")))))))
+
 (ert-deftest vulpea-ui-collection-test-copy-links ()
   "Copying links puts an org list of the selection on the kill ring."
   (vulpea-ui-test--with-collection-buffer
