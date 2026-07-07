@@ -244,7 +244,8 @@ columns and familiar navigation for free.
 is parsed as a query, so =wine -beer #red? level:0 country:France=
 works straight from the prompt (bare words require a tag, =-tag=
 excludes one, =#tag?= means any-of, =level:=, =dir:=, =title:=,
-=todo:= and =KEY:VALUE= / =KEY:*= condition on the rest). The syntax
+=body:= (file content), =todo:= and =KEY:VALUE= / =KEY:*= condition
+on the rest). The syntax
 is exactly what the mode line prints as the filter summary, so the
 description you see is a query you can type. Empty input opens the
 whole collection. Press =?= inside the view for a menu of everything
@@ -320,9 +321,11 @@ Keybindings:
 | =x=   | Apply a function to the selection                 |
 | =y=   | Copy the selection as an org list of links        |
 | =Y=   | Export the selection to an org buffer             |
+| =d=   | Open the selection's files in dired, pre-marked   |
 | =/ t= | Require a tag                                     |
 | =/ T= | Exclude a tag                                     |
 | =/ s= | Narrow titles live (updates as you type)          |
+| =/ g= | Narrow by file content (ripgrep when available)   |
 | =/ d= | Scope to a directory                              |
 | =/ m= | Condition on a metadata field                     |
 | =/ l= | Filter by level                                   |
@@ -360,9 +363,26 @@ batch operations (=vulpea-tags-batch-add= and friends), so they need
 a vulpea recent enough to provide them. Deleting removes the files of
 file-level notes; heading-level notes are skipped.
 
+=d= hands the selection off to dired with every file pre-marked, so
+batch rename, moving between directories, wdired and shell commands
+come from dired instead of being reimplemented here.
+
+A view's =:filter= can also carry =:source=, a function returning the
+candidate notes, with the rest of the filter applied on top. vulpea
+already ships the interesting queries, so janitor dashboards are one
+saved view away:
+
+#+begin_src emacs-lisp
+(add-to-list 'vulpea-ui-collection-views
+             '("orphans" . (:filter (:source vulpea-db-query-orphan-notes))))
+#+end_src
+
 Collection buffers are bookmarkable: =C-x r m= records the view and
-jumping to the bookmark re-opens it. Saved views are managed with
-=vulpea-ui-collection-rename-view= and
+jumping to the bookmark re-opens it. =org-store-link= works too, and
+the =vulpea-collection:= link type turns any note into a dashboard -
+=[[vulpea-collection:wine level:0][my cellar]]= opens the live view
+when followed (the path is a saved view name or a query). Saved
+views are managed with =vulpea-ui-collection-rename-view= and
 =vulpea-ui-collection-delete-view= (also in the =?= menu).
 
 Like the sidebar, the view refreshes itself when vulpea's background

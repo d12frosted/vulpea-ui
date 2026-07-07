@@ -4389,15 +4389,17 @@ The marked notes, or the whole view when nothing is marked."
       (pop-to-buffer buffer)
       (message "Exported %d note(s)" (length notes)))))
 
+(declare-function dired-toggle-marks "dired" ())
+
 (defun vulpea-ui-collection-dired ()
-  "Open the selection's files in dired, all pre-marked.
+  "Open the selection's files in Dired, all pre-marked.
 The marked notes, or the whole view when nothing is marked; heading
 notes contribute their file once.  Dired brings the file operations
 this view does not reimplement: batch rename, moving between
 directories, wdired, shell commands."
   (interactive)
   (let ((notes (vulpea-ui-collection--notes-for-export)))
-    (unless notes (user-error "Nothing to show in dired"))
+    (unless notes (user-error "Nothing to show in Dired"))
     (let ((files (seq-uniq (mapcar #'vulpea-note-path notes))))
       (dired (cons (or (file-name-directory (car files)) "/") files))
       (dired-toggle-marks))))
