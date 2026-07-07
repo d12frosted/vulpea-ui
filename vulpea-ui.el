@@ -3194,6 +3194,7 @@ the note id."
     (define-key map (kbd "x") #'vulpea-ui-collection-apply)
     (define-key map (kbd "y") #'vulpea-ui-collection-copy-links)
     (define-key map (kbd "Y") #'vulpea-ui-collection-export)
+    (define-key map (kbd "d") #'vulpea-ui-collection-dired)
     (define-key map (kbd "Z") #'vulpea-ui-collection-undo)
     (define-key map (kbd "G") #'vulpea-ui-collection-group-by)
     (define-key map (kbd "=") #'vulpea-ui-collection-narrow-at-point)
@@ -4279,6 +4280,19 @@ The marked notes, or the whole view when nothing is marked."
       (pop-to-buffer buffer)
       (message "Exported %d note(s)" (length notes)))))
 
+(defun vulpea-ui-collection-dired ()
+  "Open the selection's files in dired, all pre-marked.
+The marked notes, or the whole view when nothing is marked; heading
+notes contribute their file once.  Dired brings the file operations
+this view does not reimplement: batch rename, moving between
+directories, wdired, shell commands."
+  (interactive)
+  (let ((notes (vulpea-ui-collection--notes-for-export)))
+    (unless notes (user-error "Nothing to show in dired"))
+    (let ((files (seq-uniq (mapcar #'vulpea-note-path notes))))
+      (dired (cons (or (file-name-directory (car files)) "/") files))
+      (dired-toggle-marks))))
+
 (defun vulpea-ui-collection--note-at-point ()
   "Return the note of the row at point, if any."
   (when-let* ((id (tabulated-list-get-id)))
@@ -4556,6 +4570,7 @@ bookmark file; the current sort order and columns are captured."
     ("x" "apply function" vulpea-ui-collection-apply)
     ("y" "copy as links" vulpea-ui-collection-copy-links)
     ("Y" "export to org buffer" vulpea-ui-collection-export)
+    ("d" "open in dired" vulpea-ui-collection-dired)
     ("Z" "undo last edit" vulpea-ui-collection-undo)]
    ["View"
     ("RET" "visit note" vulpea-ui-collection-visit)
