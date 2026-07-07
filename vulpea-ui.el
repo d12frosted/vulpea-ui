@@ -2861,9 +2861,9 @@ FILTER is a plist; every present condition must hold:
                 key must merely be present
   :predicate  - function called with NOTE, must return non-nil
 
-The :body condition (file content match) and the :source function
-(candidate pool) are applied by `vulpea-ui-collection--query', not
-here."
+The :body condition (file content match) and the :source
+candidate-pool function are applied by
+`vulpea-ui-collection--query', not here."
   (let ((tags (vulpea-note-tags note))
         (path (vulpea-note-path note)))
     (and (let ((all (plist-get filter :tags-all)))
