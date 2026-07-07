@@ -2861,6 +2861,31 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
                               :sort)
                    '("Modified" . t)))))
 
+(ert-deftest vulpea-ui-collection-test-source ()
+  "A :source function provides the candidate pool; the rest filters it."
+  (let ((wine (vulpea-ui-test--collection-note
+               :id "w" :tags '("wine" "orphan")))
+        (beer (vulpea-ui-test--collection-note
+               :id "b" :tags '("beer" "orphan"))))
+    (cl-letf (((symbol-function 'vulpea-ui-test--orphans)
+               (lambda () (list wine beer))))
+      (should (equal (vulpea-ui-collection--query
+                      '(:source vulpea-ui-test--orphans))
+                     (list wine beer)))
+      (should (equal (vulpea-ui-collection--query
+                      '(:source vulpea-ui-test--orphans
+                        :tags-all ("wine")))
+                     (list wine)))))
+  (let ((filter '(:source ignore :tags-all ("wine"))))
+    (should (string-match-p "source"
+                            (vulpea-ui-collection--filter-description
+                             filter)))
+    (should (assoc "source"
+                   (vulpea-ui-collection--filter-conditions filter)))
+    (should-not (plist-get (vulpea-ui-collection--filter-remove
+                            filter :source)
+                           :source))))
+
 (ert-deftest vulpea-ui-collection-test-normalize-column ()
   "Column descriptors normalize to plists with name and width."
   (let ((col (vulpea-ui-collection--normalize-column 'title)))
