@@ -244,6 +244,43 @@ https://github.com/d12frosted/vulpea-ui/issues/36)."
         (when (buffer-live-p main-buf) (kill-buffer main-buf))
         (when (buffer-live-p side-buf) (kill-buffer side-buf))))))
 
+(ert-deftest vulpea-ui-test-get-main-window-prefers-mru ()
+  "`vulpea-ui--get-main-window' picks the most recently used main window.
+With two stacked main windows, working in the bottom one and then
+focusing the sidebar must keep the bottom window as the main window.
+The old fallback walked `window-list' in cyclic order, so the top
+window always won and the sidebar flipped to the wrong note (see
+https://github.com/d12frosted/vulpea-ui/issues/57)."
+  (save-window-excursion
+    (let* ((buf-a (get-buffer-create " *vulpea-ui-test-top*"))
+           (buf-b (get-buffer-create " *vulpea-ui-test-bottom*"))
+           (sidebar-buf (get-buffer-create (vulpea-ui--sidebar-buffer-name)))
+           top-win bottom-win sidebar-win)
+      (unwind-protect
+          (progn
+            (delete-other-windows)
+            (switch-to-buffer buf-a)
+            (setq top-win (selected-window)
+                  bottom-win (split-window-below))
+            (set-window-buffer bottom-win buf-b)
+            (setq sidebar-win (display-buffer-in-side-window
+                               sidebar-buf '((side . right) (slot . 0))))
+            ;; The user works in the bottom window, then focuses the
+            ;; sidebar.  The bottom window is the most recently used
+            ;; main window and must stay the anchor.
+            (select-window bottom-win)
+            (select-window sidebar-win)
+            (should (eq (vulpea-ui--get-main-window) bottom-win))
+            ;; And the other way around: work in the top window last.
+            (select-window bottom-win)
+            (select-window top-win)
+            (select-window sidebar-win)
+            (should (eq (vulpea-ui--get-main-window) top-win)))
+        (when (window-live-p sidebar-win)
+          (ignore-errors (delete-window sidebar-win)))
+        (dolist (buf (list buf-a buf-b sidebar-buf))
+          (when (buffer-live-p buf) (kill-buffer buf)))))))
+
 
 ;;; Sidebar render tests
 
