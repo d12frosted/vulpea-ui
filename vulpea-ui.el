@@ -4639,6 +4639,36 @@ VIEW is a plist with :name, :filter, :columns and :sort, see
       (vulpea-ui-collection-refresh))
     (switch-to-buffer buf)))
 
+;;;; Org link type
+
+(defun vulpea-ui-collection-link-open (query &optional _prefix)
+  "Open the collection view for QUERY.
+QUERY is a saved view name from `vulpea-ui-collection-views' or a
+query in the syntax of `vulpea-ui-collection--parse-query'; empty
+opens the whole collection."
+  (vulpea-ui-collection query))
+
+(defun vulpea-ui-collection-link-store ()
+  "Store a link to the collection view in the current buffer.
+The link carries the saved view's name when the view is saved,
+otherwise the filter itself in query syntax - either way following
+the link re-opens the live view."
+  (when (derived-mode-p 'vulpea-ui-collection-mode)
+    (let* ((name (plist-get vulpea-ui-collection--view :name))
+           (query (if (assoc name vulpea-ui-collection-views)
+                      name
+                    (vulpea-ui-collection--filter-description
+                     (vulpea-ui-collection--current-filter)))))
+      (org-link-store-props
+       :type "vulpea-collection"
+       :link (concat "vulpea-collection:" query)
+       :description (format "collection: %s" (or name "all")))
+      t)))
+
+(org-link-set-parameters "vulpea-collection"
+                         :follow #'vulpea-ui-collection-link-open
+                         :store #'vulpea-ui-collection-link-store)
+
 ;;;; Org dynamic block
 
 (defun vulpea-ui-collection--dblock-cell (note col ctx)
