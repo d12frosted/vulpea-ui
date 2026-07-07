@@ -3928,6 +3928,37 @@ single-note edits apply without asking."
           (vulpea-ui-collection-bookmark-handler record)
           (should (equal (plist-get opened :name) "wines")))))))
 
+(ert-deftest vulpea-ui-collection-test-org-link-follow ()
+  "The vulpea-collection link type follows into the live view."
+  (should (eq (org-link-get-parameter "vulpea-collection" :follow)
+              #'vulpea-ui-collection-link-open))
+  (let (opened)
+    (cl-letf (((symbol-function 'vulpea-ui-collection)
+               (lambda (view) (setq opened view))))
+      (vulpea-ui-collection-link-open "wine level:0")
+      (should (equal opened "wine level:0")))))
+
+(ert-deftest vulpea-ui-collection-test-org-link-store ()
+  "Storing a link in a collection buffer captures the view as a query."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view
+          '(:name "ad hoc" :columns (title) :filter (:tags-all ("wine"))))
+    (let ((vulpea-ui-collection-views nil)
+          props)
+      (cl-letf (((symbol-function 'org-link-store-props)
+                 (lambda (&rest args) (setq props args))))
+        (should (vulpea-ui-collection-link-store))
+        (should (equal (plist-get props :link) "vulpea-collection:#wine"))))
+    ;; a saved view stores its name instead
+    (let ((vulpea-ui-collection-views '(("ad hoc" . (:filter nil))))
+          props)
+      (cl-letf (((symbol-function 'org-link-store-props)
+                 (lambda (&rest args) (setq props args))))
+        (vulpea-ui-collection-link-store)
+        (should (equal (plist-get props :link)
+                       "vulpea-collection:ad hoc"))))))
+
 (ert-deftest vulpea-ui-collection-test-dblock ()
   "The dynamic block renders a query as an org table with linked titles."
   (cl-letf (((symbol-function 'vulpea-ui-collection--query)
