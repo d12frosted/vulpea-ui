@@ -2861,8 +2861,9 @@ FILTER is a plist; every present condition must hold:
                 key must merely be present
   :predicate  - function called with NOTE, must return non-nil
 
-A :body condition (file content match) is applied separately by
-`vulpea-ui-collection--query', not here - it needs the files."
+The :body condition (file content match) and the :source function
+(candidate pool) are applied by `vulpea-ui-collection--query', not
+here."
   (let ((tags (vulpea-note-tags note))
         (path (vulpea-note-path note)))
     (and (let ((all (plist-get filter :tags-all)))
@@ -2925,14 +2926,22 @@ Empty string when FILTER has no conditions."
             parts))
     (when (plist-get filter :predicate)
       (push "predicate" parts))
+    (when (plist-get filter :source)
+      (push "source" parts))
     (string-join (nreverse parts) " ")))
 
 (defun vulpea-ui-collection--query (filter)
   "Return all notes matching FILTER.
 The cheapest applicable database entry point narrows the candidate
 set, then `vulpea-ui-collection--note-matches-p' applies the full
-FILTER in memory."
+FILTER in memory.  A :source function (called with no arguments,
+returning notes) replaces the database entry point entirely - it
+lets a view sit over any note-returning query, e.g.
+`vulpea-db-query-orphan-notes' - with the rest of FILTER applied on
+top."
   (let ((notes (cond
+                ((plist-get filter :source)
+                 (funcall (plist-get filter :source)))
                 ((plist-get filter :tags-all)
                  (vulpea-db-query-by-tags-every
                   (plist-get filter :tags-all)))
@@ -3833,6 +3842,8 @@ identifies the condition for `vulpea-ui-collection--filter-remove'."
             conditions))
     (when (plist-get filter :predicate)
       (push (cons "predicate" (cons :predicate nil)) conditions))
+    (when (plist-get filter :source)
+      (push (cons "source" (cons :source nil)) conditions))
     (nreverse conditions)))
 
 (defun vulpea-ui-collection--filter-remove (filter key &optional value)
