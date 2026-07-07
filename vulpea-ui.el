@@ -2893,7 +2893,10 @@ FILTER is a plist; every present condition must hold:
   :todo       - todo state NOTE must have
   :meta       - alist of (KEY . VALUE) conditions; VALUE t means the
                 key must merely be present
-  :predicate  - function called with NOTE, must return non-nil"
+  :predicate  - function called with NOTE, must return non-nil
+
+A :body condition (file content match) is applied separately by
+`vulpea-ui-collection--query', not here - it needs the files."
   (let ((tags (vulpea-note-tags note))
         (path (vulpea-note-path note)))
     (and (let ((all (plist-get filter :tags-all)))
@@ -2945,6 +2948,8 @@ Empty string when FILTER has no conditions."
       (push (concat "dir:" dir) parts))
     (when-let* ((re (plist-get filter :title)))
       (push (concat "title:" re) parts))
+    (when-let* ((re (plist-get filter :body)))
+      (push (concat "body:" re) parts))
     (when-let* ((todo (plist-get filter :todo)))
       (push (concat "todo:" todo) parts))
     (dolist (condition (plist-get filter :meta))
@@ -2972,9 +2977,51 @@ FILTER in memory."
                       (fboundp 'vulpea-db-query-by-directory))
                  (vulpea-db-query-by-directory
                   (plist-get filter :directory)))
-                (t (vulpea-db-query)))))
+                (t (vulpea-db-query))))
+        (matched nil))
+    (setq matched
+          (seq-filter (lambda (note)
+                        (vulpea-ui-collection--note-matches-p note filter))
+                      notes))
+    (if-let* ((body (plist-get filter :body)))
+        (vulpea-ui-collection--filter-by-body matched body)
+      matched)))
+
+(defun vulpea-ui-collection--paths-matching-body (paths regexp)
+  "Return the subset of PATHS whose content matches REGEXP.
+Uses ripgrep in chunks when available (so the argument list stays
+within limits on large collections), otherwise searches from Emacs,
+which is slower but always works."
+  (if (executable-find "rg")
+      (let (matching)
+        (dolist (chunk (seq-partition paths 400))
+          (with-temp-buffer
+            (apply #'call-process "rg" nil t nil
+                   "--files-with-matches" "--no-messages"
+                   "--regexp" regexp chunk)
+            (setq matching
+                  (nconc matching
+                         (split-string (buffer-string) "\n" t)))))
+        matching)
+    (seq-filter (lambda (path)
+                  (when (file-readable-p path)
+                    (with-temp-buffer
+                      (insert-file-contents path)
+                      (goto-char (point-min))
+                      (re-search-forward regexp nil t))))
+                paths)))
+
+(defun vulpea-ui-collection--filter-by-body (notes regexp)
+  "Keep the NOTES whose file content matches REGEXP.
+Matching is at the file level: a heading note matches when its file
+does."
+  (let ((matching (make-hash-table :test 'equal)))
+    (dolist (path (vulpea-ui-collection--paths-matching-body
+                   (seq-uniq (mapcar #'vulpea-note-path notes))
+                   regexp))
+      (puthash path t matching))
     (seq-filter (lambda (note)
-                  (vulpea-ui-collection--note-matches-p note filter))
+                  (gethash (vulpea-note-path note) matching))
                 notes)))
 
 ;;;; Columns
@@ -3201,6 +3248,7 @@ the note id."
     (define-key map (kbd "t") #'vulpea-ui-collection-filter-by-tag)
     (define-key map (kbd "T") #'vulpea-ui-collection-filter-exclude-tag)
     (define-key map (kbd "s") #'vulpea-ui-collection-filter-by-title)
+    (define-key map (kbd "g") #'vulpea-ui-collection-filter-by-body)
     (define-key map (kbd "d") #'vulpea-ui-collection-filter-by-directory)
     (define-key map (kbd "m") #'vulpea-ui-collection-filter-by-meta)
     (define-key map (kbd "l") #'vulpea-ui-collection-filter-by-level)
@@ -3750,6 +3798,20 @@ path component.  Empty input drops the condition."
       (vulpea-ui-collection--current-filter)
       :directory (unless (string-empty-p dir) dir)))))
 
+(defun vulpea-ui-collection-filter-by-body ()
+  "Narrow the view to notes whose file content matches a regexp.
+Matching is at the file level (a heading note matches when its file
+does) and uses ripgrep when available, so plain words are the safest
+input.  Empty input drops the condition."
+  (interactive)
+  (let ((re (read-string "Content regexp: "
+                         (plist-get (vulpea-ui-collection--current-filter)
+                                    :body))))
+    (vulpea-ui-collection--set-filter
+     (vulpea-ui-collection--filter-put
+      (vulpea-ui-collection--current-filter)
+      :body (unless (string-empty-p re) re)))))
+
 (defun vulpea-ui-collection-filter-by-meta ()
   "Narrow the view on a metadata field.
 Empty value means the field must merely be present."
@@ -3793,6 +3855,8 @@ identifies the condition for `vulpea-ui-collection--filter-remove'."
       (push (cons (concat "dir:" dir) (cons :directory nil)) conditions))
     (when-let* ((re (plist-get filter :title)))
       (push (cons (concat "title:" re) (cons :title nil)) conditions))
+    (when-let* ((re (plist-get filter :body)))
+      (push (cons (concat "body:" re) (cons :body nil)) conditions))
     (when-let* ((todo (plist-get filter :todo)))
       (push (cons (concat "todo:" todo) (cons :todo nil)) conditions))
     (dolist (condition (plist-get filter :meta))
@@ -4400,7 +4464,7 @@ filter summary shown in the mode line is itself a valid query:
 
 Tokens are separated by spaces or commas.  A :predicate condition is
 not expressible in this syntax."
-  (let (all any none level dir title todo meta)
+  (let (all any none level dir title body todo meta)
     (dolist (token (split-string input "[, ]+" t))
       (cond
        ((string-match "\\`level:\\([0-9]+\\)\\'" token)
@@ -4409,6 +4473,8 @@ not expressible in this syntax."
         (setq dir (match-string 1 token)))
        ((string-match "\\`title:\\(.+\\)\\'" token)
         (setq title (match-string 1 token)))
+       ((string-match "\\`body:\\(.+\\)\\'" token)
+        (setq body (match-string 1 token)))
        ((string-match "\\`todo:\\(.+\\)\\'" token)
         (setq todo (match-string 1 token)))
        ((string-match "\\`-#?\\(.+\\)\\'" token)
@@ -4428,6 +4494,7 @@ not expressible in this syntax."
      (when level (list :level level))
      (when dir (list :directory dir))
      (when title (list :title title))
+     (when body (list :body body))
      (when todo (list :todo todo))
      (when meta (list :meta (nreverse meta))))))
 
@@ -4574,6 +4641,8 @@ bookmark file; the current sort order and columns are captured."
     ("T" "exclude tag" vulpea-ui-collection-filter-exclude-tag
      :transient t)
     ("s" "title regexp" vulpea-ui-collection-filter-by-title :transient t)
+    ("b" "content regexp" vulpea-ui-collection-filter-by-body
+     :transient t)
     ("d" "directory" vulpea-ui-collection-filter-by-directory
      :transient t)
     ("M" "meta field" vulpea-ui-collection-filter-by-meta :transient t)
