@@ -459,7 +459,14 @@ main editing window, so focusing one must not be mistaken for switching
 away from the vulpea note.  Treating such a window as the main one made
 `vulpea-ui--on-buffer-change' auto-hide and then re-show the sidebar on
 every focus change, which under `window-combination-resize' steadily
-shrank the note window (see vulpea-ui#36)."
+shrank the note window (see vulpea-ui#36).
+
+When no main window is selected (the sidebar itself is), the fallback
+picks the main window with the highest `window-use-time' - the one the
+user was just editing.  Walking `window-list' in cyclic order instead
+made the topmost window win, so with two stacked note windows focusing
+the sidebar flipped its context to the first buffer (see
+vulpea-ui#57)."
   (let* ((frame (or frame (selected-frame)))
          (sidebar-win (vulpea-ui--get-sidebar-window frame))
          (selected (frame-selected-window frame))
@@ -470,8 +477,10 @@ shrank the note window (see vulpea-ui#36)."
     ;; Prefer the currently selected window if it's a valid main window
     (if (and selected (funcall mainp selected))
         selected
-      ;; Fallback to first valid window
-      (or (seq-find mainp (window-list frame nil))
+      ;; Fallback to the most recently used valid window
+      (or (car (sort (seq-filter mainp (window-list frame nil))
+                     (lambda (a b)
+                       (> (window-use-time a) (window-use-time b)))))
           (frame-first-window frame)))))
 
 

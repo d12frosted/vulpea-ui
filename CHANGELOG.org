@@ -46,6 +46,8 @@ All notable changes to this project will be documented in this file.
 
 ** Fixed
 
+- Focusing the sidebar no longer flips its context to the wrong note ([[https://github.com/d12frosted/vulpea-ui/issues/57][#57]]). With two stacked note windows, moving point into the sidebar made it show the *first* window's note instead of the one just edited: the main-window fallback walked =window-list= in cyclic order, so the topmost window always won. It now picks the main window with the highest =window-use-time= - the most recently used one, as the docstring promised all along.
+
 - The schema health widget and the schema dashboard now jump to the right line for a field that fails =:one-of= on more than one of its values. =vulpea-ui--schema-violation-position= matched on the field name alone, so each disallowed value of a multi-value field jumped to that field's *first* line; it now prefers the line carrying the offending value, falling back to the first occurrence when the value cannot be matched textually.
 
 - The schema health widget was blind to heading-level notes: it always resolved the file-level note and reported only that one's schema, so a violation on an =:execution:= heading inside a schema-less =:journal:= file was invisible in the sidebar (the counterpart, on the authoring side, to [[https://github.com/d12frosted/vulpea/issues/356][vulpea#356]]). It now looks at the whole file, so heading violations surface regardless of where point sits. The lower-level scoping helpers (=vulpea-ui--schema-note-end=, =-meta-position=, =-violation-position=) were already heading-aware but had never been exercised on a heading; they now have coverage.
