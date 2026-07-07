@@ -2738,6 +2738,54 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
     (should-not (vulpea-ui-collection--note-matches-p
                  note (list :predicate #'ignore)))))
 
+(ert-deftest vulpea-ui-collection-test-body-matching-fallback ()
+  "Content matching works without ripgrep via the Emacs fallback."
+  (let ((with-match (make-temp-file "vulpea-body" nil ".org"
+                                    "notes about syrah grapes"))
+        (without-match (make-temp-file "vulpea-body" nil ".org"
+                                       "nothing to see")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) #'ignore))
+          (should (equal (vulpea-ui-collection--paths-matching-body
+                          (list with-match without-match) "syrah")
+                         (list with-match)))
+          (let* ((notes (list (vulpea-ui-test--collection-note
+                               :id "n1" :path with-match)
+                              (vulpea-ui-test--collection-note
+                               :id "n2" :path without-match))))
+            (should (equal (mapcar #'vulpea-note-id
+                                   (vulpea-ui-collection--filter-by-body
+                                    notes "syrah"))
+                           '("n1")))))
+      (delete-file with-match)
+      (delete-file without-match))))
+
+(ert-deftest vulpea-ui-collection-test-body-round-trip ()
+  "The body: condition round-trips and is removable."
+  (let ((filter '(:tags-all ("wine") :body "syrah")))
+    (should (equal (vulpea-ui-collection--filter-description filter)
+                   "#wine body:syrah"))
+    (should (equal (vulpea-ui-collection--parse-query "#wine body:syrah")
+                   filter))
+    (should (assoc "body:syrah"
+                   (vulpea-ui-collection--filter-conditions filter)))
+    (should-not (plist-get (vulpea-ui-collection--filter-remove
+                            filter :body)
+                           :body))))
+
+(ert-deftest vulpea-ui-collection-test-query-applies-body ()
+  "The query narrows by content after the in-memory filter."
+  (let ((wine (vulpea-ui-test--collection-note :id "w" :tags '("wine"))))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-tags-every)
+               (lambda (_tags) (list wine)))
+              ((symbol-function 'vulpea-ui-collection--filter-by-body)
+               (lambda (notes regexp)
+                 (should (equal regexp "syrah"))
+                 (should (equal notes (list wine)))
+                 nil)))
+      (should-not (vulpea-ui-collection--query
+                   '(:tags-all ("wine") :body "syrah"))))))
+
 (ert-deftest vulpea-ui-collection-test-query-dispatch ()
   "The query uses the cheapest DB entry point, then filters in memory."
   (let ((wine (vulpea-ui-test--collection-note
