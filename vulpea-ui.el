@@ -112,6 +112,32 @@ When nil, sidebar remains visible with stale content."
   :type 'boolean
   :group 'vulpea-ui)
 
+(defcustom vulpea-ui-link-types '("id")
+  "Link types treated as note-to-note links.
+
+Links of these types participate in the backlinks and links widgets,
+link statistics, and collection backlink counts.  The destination of
+a link of a listed type must be a note ID.  For example, add
+\"denote\" if your collection uses denote: links whose identifiers
+double as note IDs.
+
+Counting backlinks over more than one type requires a vulpea version
+where `vulpea-db-query-backlink-counts' accepts a list of types."
+  :type '(repeat string)
+  :group 'vulpea-ui)
+
+(defun vulpea-ui--note-link-p (link)
+  "Return non-nil when LINK's type is in `vulpea-ui-link-types'."
+  (member (plist-get link :type) vulpea-ui-link-types))
+
+(defun vulpea-ui--link-types-query-arg ()
+  "Return `vulpea-ui-link-types' as a link-type query argument.
+A single type collapses to a plain string, which every vulpea
+version understands; multiple types are passed through as a list."
+  (if (cdr vulpea-ui-link-types)
+      vulpea-ui-link-types
+    (car vulpea-ui-link-types)))
+
 (defcustom vulpea-ui-backlinks-show-preview t
   "Whether to show content preview in backlinks widget.
 When non-nil, shows a snippet of text around each backlink mention."
@@ -862,8 +888,7 @@ If the note's file is open in a buffer, reads from buffer for live stats.
 Otherwise reads from disk."
   (if (and note (vulpea-note-path note))
       (let ((path (vulpea-note-path note))
-            (links (seq-filter (lambda (link)
-                                 (equal "id" (plist-get link :type)))
+            (links (seq-filter #'vulpea-ui--note-link-p
                                (vulpea-note-links note)))
             (existing-buf (find-buffer-visiting (vulpea-note-path note))))
         (let* ((content (if existing-buf
@@ -1018,8 +1043,7 @@ Applies `vulpea-ui-backlinks-note-filter' and
   (if (null note)
       (list :groups nil :filtered-count 0 :total-count 0)
     (let* ((target-id (vulpea-note-id note))
-           (backlinks (vulpea-db-query-by-links-some
-                       (list (cons "id" target-id))))
+           (backlinks (vulpea-db-query-by-links-some (list target-id)))
            ;; Group backlinks by file path
            (by-path (make-hash-table :test 'equal))
            (total-count 0))
@@ -1031,7 +1055,7 @@ Applies `vulpea-ui-backlinks-note-filter' and
                  ;; Find links pointing to our target
                  (target-links (seq-filter
                                 (lambda (link)
-                                  (and (equal "id" (plist-get link :type))
+                                  (and (vulpea-ui--note-link-p link)
                                        (equal target-id (plist-get link :dest))))
                                 links)))
             (dolist (link target-links)
@@ -1504,10 +1528,8 @@ Returns a list of plists with :note and :count, sorted by title."
            (file-notes (vulpea-db-query-by-file-paths (list path)))
            ;; Collect all links from all notes
            (all-links (seq-mapcat #'vulpea-note-links file-notes))
-           ;; Filter to id links only
-           (id-links (seq-filter (lambda (link)
-                                   (equal "id" (plist-get link :type)))
-                                 all-links))
+           ;; Filter to note-to-note links (see `vulpea-ui-link-types')
+           (id-links (seq-filter #'vulpea-ui--note-link-p all-links))
            ;; Count occurrences of each destination ID
            (id-counts (make-hash-table :test 'equal)))
       (dolist (link id-links)
@@ -3351,7 +3373,8 @@ backlinks column is present."
                              'backlinks))
                        columns)
              (fboundp 'vulpea-db-query-backlink-counts))
-    (list :backlinks (vulpea-db-query-backlink-counts "id"))))
+    (list :backlinks (vulpea-db-query-backlink-counts
+                      (vulpea-ui--link-types-query-arg)))))
 
 (defvar-local vulpea-ui-collection--adaptive-columns nil
   "Columns derived at the last refresh for a view without :columns.")
