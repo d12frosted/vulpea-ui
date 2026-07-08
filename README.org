@@ -152,6 +152,23 @@ The faces =vulpea-ui-schema-health-ok-face= / =-error-face= /
 (setq vulpea-ui-backlinks-sort 'title-asc)
 #+end_src
 
+** Link types
+
+By default only =id:= links count as note-to-note links in the
+backlinks and links widgets, link statistics, and the collection
+backlink-count column. If other link types carry your note graph -
+for example =denote:= links whose identifiers double as note IDs -
+add them:
+
+#+begin_src emacs-lisp
+(setq vulpea-ui-link-types '("id" "denote"))
+#+end_src
+
+The destination of a link of a listed type must be a note ID.
+Counting collection backlinks over more than one type requires a
+vulpea version where =vulpea-db-query-backlink-counts= accepts a
+list of types.
+
 ** Behaviour options
 
 #+begin_src emacs-lisp
