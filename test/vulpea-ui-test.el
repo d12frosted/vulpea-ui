@@ -360,6 +360,110 @@ must not run and take over an unrelated window (see vulpea-journal#21)."
       (delete-file temp-file))))
 
 
+;;; Link type configuration tests
+
+(defun vulpea-ui-test--make-linked-note (id title path links)
+  "Create a note with ID, TITLE, PATH and LINKS for link-type tests."
+  (make-vulpea-note
+   :id id
+   :path path
+   :level 0
+   :pos 1
+   :title title
+   :primary-title title
+   :aliases nil
+   :tags nil
+   :links links
+   :properties nil
+   :meta nil))
+
+(ert-deftest vulpea-ui-test-link-types-default ()
+  "Only id: links carry the note graph by default."
+  (should (equal vulpea-ui-link-types '("id"))))
+
+(ert-deftest vulpea-ui-test-compute-stats-respects-link-types ()
+  "Stats count links of every configured type, and only those."
+  (let* ((temp-file (make-temp-file "vulpea-ui-test" nil ".org"))
+         (note (vulpea-ui-test--make-linked-note
+                "test-stats-types" "Test" temp-file
+                '((:type "id" :dest "a" :pos 10)
+                  (:type "denote" :dest "20250828T131843" :pos 20)
+                  (:type "https" :dest "//example.com" :pos 30)))))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert "content"))
+          (let ((vulpea-ui-link-types '("id")))
+            (should (= (plist-get (vulpea-ui--compute-stats note) :links) 1)))
+          (let ((vulpea-ui-link-types '("id" "denote")))
+            (should (= (plist-get (vulpea-ui--compute-stats note) :links) 2))))
+      (delete-file temp-file))))
+
+(ert-deftest vulpea-ui-test-forward-links-respect-link-types ()
+  "Forward links include destinations of every configured type."
+  (let* ((src (vulpea-ui-test--make-linked-note
+               "src" "Source" "/tmp/vulpea-ui-test-src.org"
+               '((:type "id" :dest "a" :pos 10)
+                 (:type "denote" :dest "b" :pos 20)
+                 (:type "https" :dest "//example.com" :pos 30))))
+         (note-a (vulpea-ui-test--make-linked-note
+                  "a" "A" "/tmp/vulpea-ui-test-a.org" nil))
+         (note-b (vulpea-ui-test--make-linked-note
+                  "b" "B" "/tmp/vulpea-ui-test-b.org" nil)))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-file-paths)
+               (lambda (&rest _) (list src)))
+              ((symbol-function 'vulpea-db-query-by-ids)
+               (lambda (ids)
+                 (seq-filter (lambda (n) (member (vulpea-note-id n) ids))
+                             (list note-a note-b)))))
+      (let ((vulpea-ui-link-types '("id")))
+        (should (equal (mapcar (lambda (r) (vulpea-note-id (plist-get r :note)))
+                               (vulpea-ui--get-forward-links src))
+                       '("a"))))
+      (let ((vulpea-ui-link-types '("id" "denote")))
+        (should (equal (mapcar (lambda (r) (vulpea-note-id (plist-get r :note)))
+                               (vulpea-ui--get-forward-links src))
+                       '("a" "b")))))))
+
+(ert-deftest vulpea-ui-test-grouped-backlinks-respect-link-types ()
+  "Backlink mentions are collected for every configured link type."
+  (let* ((target (vulpea-ui-test--make-linked-note
+                  "target" "Target" "/tmp/vulpea-ui-test-target.org" nil))
+         (bl (vulpea-ui-test--make-linked-note
+              "bl" "Backlinker" "/tmp/vulpea-ui-test-bl.org"
+              '((:type "denote" :dest "target" :pos 42)))))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-links-some)
+               (lambda (&rest _) (list bl)))
+              ((symbol-function 'vulpea-db-query-by-file-paths)
+               (lambda (&rest _) (list bl)))
+              ((symbol-function 'vulpea-ui--enrich-backlink-mentions)
+               (lambda (_path mentions _target-id) mentions)))
+      (let ((vulpea-ui-link-types '("id")))
+        (should (= (plist-get (vulpea-ui--get-grouped-backlinks target)
+                              :total-count)
+                   0)))
+      (let ((vulpea-ui-link-types '("id" "denote")))
+        (let ((result (vulpea-ui--get-grouped-backlinks target)))
+          (should (= (plist-get result :total-count) 1))
+          (should (= (plist-get result :filtered-count) 1)))))))
+
+(ert-deftest vulpea-ui-test-collection-context-respects-link-types ()
+  "Collection backlink counts query the configured link types.
+A single type is passed as a plain string for compatibility with
+vulpea versions that predate list support."
+  (let (captured)
+    (cl-letf (((symbol-function 'vulpea-db-query-backlink-counts)
+               (lambda (&optional link-type)
+                 (setq captured link-type)
+                 (make-hash-table :test 'equal))))
+      (let ((vulpea-ui-link-types '("id")))
+        (vulpea-ui-collection--context '(backlinks))
+        (should (equal captured "id")))
+      (let ((vulpea-ui-link-types '("id" "denote")))
+        (vulpea-ui-collection--context '(backlinks))
+        (should (equal captured '("id" "denote")))))))
+
+
 ;;; Note preview tests
 
 (ert-deftest vulpea-ui-test-get-preview-nil ()
