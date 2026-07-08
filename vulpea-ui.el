@@ -359,6 +359,11 @@ Widgets are filtered by predicate and sorted by order."
   "Face for context type indicators (§, •, >, etc.) in backlink previews."
   :group 'vulpea-ui)
 
+(defface vulpea-ui-backlink-target-face
+  '((t :inherit (shadow italic)))
+  "Face for the → target annotation on heading-targeted backlinks."
+  :group 'vulpea-ui)
+
 (defface vulpea-ui-mention-context-face
   '((t :inherit shadow))
   "Face for the context line of an unlinked mention."
@@ -1044,74 +1049,98 @@ Groups backlinks by file and shows heading context with optional previews."
 
 (defun vulpea-ui--get-grouped-backlinks (note)
   "Get backlinks to NOTE grouped by file.
+Backlinks may target any ID living in NOTE's file: the file-level ID
+or a heading-level one, so links to a heading show up alongside links
+to the file itself.
 Returns a plist with :groups, :filtered-count, and :total-count.
 Each group has :file-note, :path, and :mentions.
-Each mention has :heading-path, :pos, and :preview.
+Each mention has :heading-path, :pos, :preview, and - when the link
+targets an ID other than NOTE's - the :target-title of that note.
 Applies `vulpea-ui-backlinks-note-filter' and
 `vulpea-ui-backlinks-context-types'."
   (if (null note)
       (list :groups nil :filtered-count 0 :total-count 0)
     (let* ((target-id (vulpea-note-id note))
-           (backlinks (vulpea-db-query-by-links-some (list target-id)))
-           ;; Group backlinks by file path
-           (by-path (make-hash-table :test 'equal))
-           (total-count 0))
-      ;; Collect all mentions grouped by path (deduplicate by position)
-      (let ((seen-positions (make-hash-table :test 'equal)))
-        (dolist (bl backlinks)
-          (let* ((path (vulpea-note-path bl))
-                 (links (vulpea-note-links bl))
-                 ;; Find links pointing to our target
-                 (target-links (seq-filter
-                                (lambda (link)
-                                  (and (vulpea-ui--note-link-p link)
-                                       (equal target-id (plist-get link :dest))))
-                                links)))
-            (dolist (link target-links)
-              (let* ((pos (plist-get link :pos))
-                     (key (cons path pos)))
-                ;; Only add if we haven't seen this path+position combo
-                (unless (gethash key seen-positions)
-                  (puthash key t seen-positions)
-                  (cl-incf total-count)
-                  (push (list :pos pos :source-note bl)
-                        (gethash path by-path))))))))
-      ;; Batch fetch file-level notes
-      (let* ((paths (hash-table-keys by-path))
-             (file-notes (when paths
-                           (vulpea-db-query-by-file-paths paths 0)))
-             (file-notes-by-path (make-hash-table :test 'equal)))
-        ;; Index file notes by path
-        (dolist (fn file-notes)
-          (puthash (vulpea-note-path fn) fn file-notes-by-path))
-        ;; Build grouped result with filtering
-        (let ((result nil)
-              (filtered-count 0))
-          (dolist (path paths)
-            (let* ((file-note (gethash path file-notes-by-path))
-                   ;; Apply note filter
-                   (note-allowed (funcall vulpea-ui-backlinks-note-filter file-note)))
-              (when note-allowed
-                (let* ((mentions (gethash path by-path))
-                       ;; Sort mentions by position
-                       (sorted-mentions (seq-sort
-                                         (lambda (a b)
-                                           (< (plist-get a :pos) (plist-get b :pos)))
-                                         mentions))
-                       ;; Enrich mentions with heading context and preview
-                       ;; (context type filtering now happens inside this function)
-                       (enriched (vulpea-ui--enrich-backlink-mentions
-                                  path sorted-mentions target-id)))
-                  (when enriched
-                    (cl-incf filtered-count (length enriched))
-                    (push (list :file-note file-note
-                                :path path
-                                :mentions enriched)
-                          result))))))
-          ;; Sort groups according to configuration
-          (list :groups (vulpea-ui--sort-backlink-groups result)
-                :filtered-count filtered-count
-                :total-count total-count))))))
+           ;; Every note in the file - the file-level note plus any
+           ;; heading carrying its own ID - is a valid link target.
+           (file-notes (when (vulpea-note-path note)
+                         (vulpea-db-query-by-file-path
+                          (vulpea-note-path note))))
+           (titles-by-id (make-hash-table :test 'equal)))
+      (dolist (fn file-notes)
+        (puthash (vulpea-note-id fn) (vulpea-note-title fn) titles-by-id))
+      ;; The anchor note is a target even when the DB has not indexed
+      ;; its file yet (or the path query returns nothing).
+      (puthash target-id (vulpea-note-title note) titles-by-id)
+      (let* ((backlinks (vulpea-db-query-by-links-some
+                         (hash-table-keys titles-by-id)))
+             ;; Group backlinks by file path
+             (by-path (make-hash-table :test 'equal))
+             (total-count 0))
+        ;; Collect all mentions grouped by path (deduplicate by position)
+        (let ((seen-positions (make-hash-table :test 'equal)))
+          (dolist (bl backlinks)
+            (let* ((path (vulpea-note-path bl))
+                   (links (vulpea-note-links bl))
+                   ;; Find links pointing to any of our targets
+                   (target-links (seq-filter
+                                  (lambda (link)
+                                    (and (vulpea-ui--note-link-p link)
+                                         (gethash (plist-get link :dest)
+                                                  titles-by-id)))
+                                  links)))
+              (dolist (link target-links)
+                (let* ((pos (plist-get link :pos))
+                       (dest (plist-get link :dest))
+                       (key (cons path pos)))
+                  ;; Only add if we haven't seen this path+position combo
+                  (unless (gethash key seen-positions)
+                    (puthash key t seen-positions)
+                    (cl-incf total-count)
+                    (push (list :pos pos
+                                :source-note bl
+                                :target-id dest
+                                ;; Annotate mentions that target another
+                                ;; note in the file (i.e. a heading)
+                                :target-title (unless (equal dest target-id)
+                                                (gethash dest titles-by-id)))
+                          (gethash path by-path))))))))
+        ;; Batch fetch file-level notes
+        (let* ((paths (hash-table-keys by-path))
+               (file-notes (when paths
+                             (vulpea-db-query-by-file-paths paths 0)))
+               (file-notes-by-path (make-hash-table :test 'equal)))
+          ;; Index file notes by path
+          (dolist (fn file-notes)
+            (puthash (vulpea-note-path fn) fn file-notes-by-path))
+          ;; Build grouped result with filtering
+          (let ((result nil)
+                (filtered-count 0))
+            (dolist (path paths)
+              (let* ((file-note (gethash path file-notes-by-path))
+                     ;; Apply note filter
+                     (note-allowed (funcall vulpea-ui-backlinks-note-filter file-note)))
+                (when note-allowed
+                  (let* ((mentions (gethash path by-path))
+                         ;; Sort mentions by position
+                         (sorted-mentions (seq-sort
+                                           (lambda (a b)
+                                             (< (plist-get a :pos) (plist-get b :pos)))
+                                           mentions))
+                         ;; Enrich mentions with heading context and preview
+                         ;; (context type filtering now happens inside this function)
+                         (enriched (vulpea-ui--enrich-backlink-mentions
+                                    path sorted-mentions)))
+                    (when enriched
+                      (cl-incf filtered-count (length enriched))
+                      (push (list :file-note file-note
+                                  :path path
+                                  :mentions enriched)
+                            result))))))
+            ;; Sort groups according to configuration
+            (list :groups (vulpea-ui--sort-backlink-groups result)
+                  :filtered-count filtered-count
+                  :total-count total-count)))))))
 
 (defun vulpea-ui--sort-backlink-groups (groups)
   "Sort GROUPS according to `vulpea-ui-backlinks-sort'."
@@ -1128,11 +1157,14 @@ Applies `vulpea-ui-backlinks-note-filter' and
     ((pred functionp) (seq-sort vulpea-ui-backlinks-sort groups))
     (_ groups)))
 
-(defun vulpea-ui--enrich-backlink-mentions (path mentions target-id)
+(defun vulpea-ui--enrich-backlink-mentions (path mentions)
   "Enrich MENTIONS with heading context and preview from file at PATH.
-TARGET-ID is the ID of the note being linked to (for prose context extraction).
+Each mention carries its own :target-id (the ID the link points to),
+which centers the prose preview on that link, and optionally a
+:target-title that is passed through to the result.
 Filters by `vulpea-ui-backlinks-context-types' BEFORE expensive operations.
-Deduplicates mentions with identical heading-path and preview text."
+Deduplicates mentions with identical heading-path, preview text and
+target."
   (when (and path mentions)
     (with-temp-buffer
       (insert-file-contents path)
@@ -1148,7 +1180,7 @@ Deduplicates mentions with identical heading-path and preview text."
                                  (line-beginning-position)
                                  (line-end-position))))
                         (context-type (vulpea-ui--detect-context-type pos line)))
-                   (list :pos pos :context-type context-type)))
+                   (append (list :context-type context-type) mention)))
                mentions))
              ;; Filter by context type BEFORE expensive operations
              (filtered
@@ -1166,18 +1198,22 @@ Deduplicates mentions with identical heading-path and preview text."
                 (result nil))
             (dolist (mention filtered)
               (let* ((pos (plist-get mention :pos))
+                     (target-title (plist-get mention :target-title))
                      (heading-path (vulpea-ui--find-heading-path headings pos))
                      (preview (when vulpea-ui-backlinks-show-preview
-                                (vulpea-ui--extract-preview pos target-id)))
-                     ;; Create dedup key from heading-path and preview text
+                                (vulpea-ui--extract-preview
+                                 pos (plist-get mention :target-id))))
+                     ;; Create dedup key from heading-path, preview text
+                     ;; and target
                      (preview-text (when preview (plist-get preview :text)))
-                     (dedup-key (list heading-path preview-text)))
+                     (dedup-key (list heading-path preview-text target-title)))
                 ;; Only add if we haven't seen this heading+preview combo
                 (unless (gethash dedup-key seen)
                   (puthash dedup-key t seen)
                   (push (list :pos pos
                               :heading-path heading-path
-                              :preview preview)
+                              :preview preview
+                              :target-title target-title)
                         result))))
             (nreverse result)))))))
 
@@ -1448,43 +1484,54 @@ Returns list of (:heading-path :depth :mentions) plists."
 
 (defun vulpea-ui--render-backlink-mention (mention path)
   "Render a single backlink MENTION from file at PATH.
-Renders the preview as a clickable button to jump to the mention."
+Renders the preview as a clickable button to jump to the mention.
+A mention that targets a heading-level ID of the current note carries
+a :target-title, rendered as a muted → suffix after the preview."
   (let* ((preview (plist-get mention :preview))
-         (pos (plist-get mention :pos)))
+         (pos (plist-get mention :pos))
+         (target-title (plist-get mention :target-title)))
     (when preview
-      (vulpea-ui--render-preview-button preview path pos))))
+      (vulpea-ui--render-preview-button preview path pos target-title))))
 
-(defun vulpea-ui--render-preview-button (preview path pos)
-  "Render PREVIEW as a clickable button to jump to PATH at POS."
+(defun vulpea-ui--render-preview-button (preview path pos &optional target-title)
+  "Render PREVIEW as a clickable button to jump to PATH at POS.
+When TARGET-TITLE is non-nil, append a muted → TARGET-TITLE suffix
+indicating which heading of the current note the mention targets."
   (let ((type (plist-get preview :type))
         (on-click (lambda () (vulpea-ui--jump-to-file-position path pos))))
-    (let ((indicator (pcase type
-                       ('meta "⊢")
-                       ('header "§")
-                       ('table "▤")
-                       ('list "·")
-                       ('quote ">")
-                       ('code "λ")
-                       ('footnote "†")
-                       (_ nil)))
-          (text (pcase type
-                  ('meta (concat (plist-get preview :key) ": "
-                                 (or (plist-get preview :value) "")))
-                  (_ (or (plist-get preview :text) "")))))
-      (if indicator
-          (vui-hstack
-           :spacing 1
-           (vui-text indicator :face 'vulpea-ui-backlink-context-face)
-           (vui-button text
-             :face 'vulpea-ui-backlink-preview-face
-             :no-decoration t
-             :on-click on-click
-             :help-echo nil))
-        (vui-button text
-          :face 'vulpea-ui-backlink-preview-face
-          :no-decoration t
-          :on-click on-click
-          :help-echo nil)))))
+    (let* ((indicator (pcase type
+                        ('meta "⊢")
+                        ('header "§")
+                        ('table "▤")
+                        ('list "·")
+                        ('quote ">")
+                        ('code "λ")
+                        ('footnote "†")
+                        (_ nil)))
+           (text (pcase type
+                   ('meta (concat (plist-get preview :key) ": "
+                                  (or (plist-get preview :value) "")))
+                   (_ (or (plist-get preview :text) ""))))
+           (button (vui-button text
+                     :face 'vulpea-ui-backlink-preview-face
+                     :no-decoration t
+                     :on-click on-click
+                     :help-echo nil))
+           (suffix (when target-title
+                     (vui-text (concat "→ " (vulpea-ui--clean-org-links
+                                             target-title))
+                               :face 'vulpea-ui-backlink-target-face))))
+      (if (or indicator suffix)
+          (apply #'vui-hstack
+                 :spacing 1
+                 (delq nil
+                       (list
+                        (when indicator
+                          (vui-text indicator
+                                    :face 'vulpea-ui-backlink-context-face))
+                        button
+                        suffix)))
+        button))))
 
 (defun vulpea-ui--jump-to-file-position (path pos)
   "Jump to position POS in file at PATH."
