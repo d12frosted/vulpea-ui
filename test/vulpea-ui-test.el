@@ -432,12 +432,14 @@ must not run and take over an unrelated window (see vulpea-journal#21)."
          (bl (vulpea-ui-test--make-linked-note
               "bl" "Backlinker" "/tmp/vulpea-ui-test-bl.org"
               '((:type "denote" :dest "target" :pos 42)))))
-    (cl-letf (((symbol-function 'vulpea-db-query-by-links-some)
+    (cl-letf (((symbol-function 'vulpea-db-query-by-file-path)
+               (lambda (&rest _) (list target)))
+              ((symbol-function 'vulpea-db-query-by-links-some)
                (lambda (&rest _) (list bl)))
               ((symbol-function 'vulpea-db-query-by-file-paths)
                (lambda (&rest _) (list bl)))
               ((symbol-function 'vulpea-ui--enrich-backlink-mentions)
-               (lambda (_path mentions _target-id) mentions)))
+               (lambda (_path mentions) mentions)))
       (let ((vulpea-ui-link-types '("id")))
         (should (= (plist-get (vulpea-ui--get-grouped-backlinks target)
                               :total-count)
@@ -446,6 +448,77 @@ must not run and take over an unrelated window (see vulpea-journal#21)."
         (let ((result (vulpea-ui--get-grouped-backlinks target)))
           (should (= (plist-get result :total-count) 1))
           (should (= (plist-get result :filtered-count) 1)))))))
+
+(ert-deftest vulpea-ui-test-grouped-backlinks-include-heading-targets ()
+  "Backlinks pointing at heading-level IDs of the file are collected.
+The query covers every ID in the file, a mention targeting a heading
+carries the heading's title as :target-title, and a mention targeting
+the anchor note itself carries none ([[https://github.com/d12frosted/vulpea-ui/issues/60][#60]])."
+  (let* ((target (vulpea-ui-test--make-linked-note
+                  "target" "Target" "/tmp/vulpea-ui-test-target.org" nil))
+         (heading (make-vulpea-note
+                   :id "target-h"
+                   :path "/tmp/vulpea-ui-test-target.org"
+                   :level 1
+                   :pos 100
+                   :title "Tasks"
+                   :primary-title "Tasks"))
+         (bl (vulpea-ui-test--make-linked-note
+              "bl" "Backlinker" "/tmp/vulpea-ui-test-bl.org"
+              '((:type "id" :dest "target-h" :pos 42)
+                (:type "id" :dest "target" :pos 84))))
+         (queried-ids nil))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-file-path)
+               (lambda (&rest _) (list target heading)))
+              ((symbol-function 'vulpea-db-query-by-links-some)
+               (lambda (ids &rest _) (setq queried-ids ids) (list bl)))
+              ((symbol-function 'vulpea-db-query-by-file-paths)
+               (lambda (&rest _) (list bl)))
+              ((symbol-function 'vulpea-ui--enrich-backlink-mentions)
+               (lambda (_path mentions) mentions)))
+      (let* ((result (vulpea-ui--get-grouped-backlinks target))
+             (group (car (plist-get result :groups)))
+             (mentions (plist-get group :mentions)))
+        (should (member "target" queried-ids))
+        (should (member "target-h" queried-ids))
+        (should (= (plist-get result :total-count) 2))
+        ;; Mentions are sorted by position: heading target first
+        (should (equal (plist-get (car mentions) :target-title) "Tasks"))
+        (should (null (plist-get (cadr mentions) :target-title)))))))
+
+(ert-deftest vulpea-ui-test-enrich-backlink-mentions-keep-target ()
+  "Enrichment preserves :target-title and previews the mention's own dest."
+  (let ((temp-file (make-temp-file "vulpea-ui-test" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert "some prose around [[id:target-h][Tasks link]] here\n"))
+          (let* ((mentions (list (list :pos 19
+                                       :target-id "target-h"
+                                       :target-title "Tasks")))
+                 (enriched (vulpea-ui--enrich-backlink-mentions
+                            temp-file mentions)))
+            (should (= (length enriched) 1))
+            (should (equal (plist-get (car enriched) :target-title) "Tasks"))
+            (let ((preview (plist-get (car enriched) :preview)))
+              (should preview)
+              ;; The preview is centered on the link to the mention's own
+              ;; dest, so the link description survives cleaning
+              (should (string-match-p "Tasks link"
+                                      (or (plist-get preview :text) ""))))))
+      (delete-file temp-file))))
+
+(ert-deftest vulpea-ui-test-render-preview-button-target-suffix ()
+  "Preview buttons carry a → suffix only for heading-targeted mentions."
+  (let ((preview (list :type 'prose :text "some text")))
+    (should (string-match-p
+             "→ Tasks"
+             (format "%S" (vulpea-ui--render-preview-button
+                           preview "/tmp/f.org" 1 "Tasks"))))
+    (should-not (string-match-p
+                 "→"
+                 (format "%S" (vulpea-ui--render-preview-button
+                               preview "/tmp/f.org" 1 nil))))))
 
 (ert-deftest vulpea-ui-test-collection-context-respects-link-types ()
   "Collection backlink counts query the configured link types.
