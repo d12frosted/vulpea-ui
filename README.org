@@ -484,6 +484,9 @@ Displays the heading structure of the note. Click headings to navigate.
 
 Shows notes that link to the current note, grouped by file with:
 - Heading path context (where in the document the link appears)
+- Links targeting a heading-level ID of the current file are included
+  too, annotated with a muted =→ Heading= suffix naming the targeted
+  heading; links to the file-level ID look as before
 - Content preview with context type indicators:
   - =⊢= meta property
   - =§= header
