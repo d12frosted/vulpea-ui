@@ -182,7 +182,7 @@ a particular tag, e.g.
 (defcustom vulpea-ui-fast-parse nil
   "Use fast `org-mode' initialization for parsing.
 When non-nil, skip mode hooks when parsing org files for headings
-and backlinks. This can significantly improve performance but may
+and backlinks.  This can significantly improve performance but may
 cause issues if your org-element parsing depends on mode hooks.
 Disabled by default for safety."
   :type 'boolean
@@ -1481,7 +1481,8 @@ being available on `exec-path' and reports gracefully when it is not."
   :render
   (let ((note (use-vulpea-ui-note)))
     (when note
-      (let* ((last-ref (vui-use-ref nil))
+      (let* ((path (vulpea-note-path note))
+             (last-ref (vui-use-ref nil))
              (result (vui-use-async
                          (list (vulpea-note-id note)
                                vulpea-ui--refresh-generation)
@@ -1502,19 +1503,21 @@ being available on `exec-path' and reports gracefully when it is not."
           :children
           (lambda ()
             (pcase state
-              ('shown (vulpea-ui--render-unlinked-mentions-body data))
+              ('shown (vulpea-ui--render-unlinked-mentions-body data path))
               ('error
                (vui-muted (format "Unavailable: %s"
                                   (plist-get result :error))))
               (_ (vui-muted "Searching…")))))))))
 
-(defun vulpea-ui--render-unlinked-mentions-body (data)
-  "Render incoming mention DATA as grouped context lines."
+(defun vulpea-ui--render-unlinked-mentions-body (data path)
+  "Render incoming mention DATA as grouped context lines for PATH."
   (let ((groups (vulpea-ui--group-mentions data)))
     (if groups
         (vui-vstack
          :spacing 1
-         (seq-map #'vulpea-ui--render-mention-group groups))
+         (seq-map (lambda (group)
+                    (vulpea-ui--render-mention-group group path))
+                  groups))
       (vui-muted "No unlinked mentions"))))
 
 (defun vulpea-ui--filter-mentions (mentions filter)
@@ -1584,16 +1587,26 @@ first-encounter order, each with :note, :path, and :mentions - a list of
                       :mentions (nreverse (gethash id lists)))))
             (nreverse order))))
 
-(defun vulpea-ui--render-mention-group (group)
-  "Render a mention GROUP: the mentioning note link and its context lines."
+(defun vulpea-ui--render-mention-group (group source-path)
+  "Render a mention GROUP: the mentioning note link and its context lines.
+
+For each note link, there is an ignore button, which adds the mentioning
+note id to the value of `vulpea-mentions-per-note-ignore-property-key'
+in SOURCE-PATH."
   (let ((note (plist-get group :note))
         (path (plist-get group :path))
         (mentions (plist-get group :mentions)))
     (vui-vstack
      :spacing 0
-     (if note
-         (vui-component 'vulpea-ui-note-link :note note)
-       (vui-muted (file-name-nondirectory path)))
+     (vui-hstack
+      (if note
+          (vui-component 'vulpea-ui-note-link :note note)
+        (vui-muted (file-name-nondirectory path)))
+      (vui-button "ignore"
+        :face 'vulpea-ui-mention-action-face
+        :on-click (lambda ()
+                    (vulpea-ui--ignore-mentions-from-note source-path note))
+        :help-echo "Ignore mentions from this note."))
      (vui-vstack
       :spacing 0
       :indent 2
@@ -1622,6 +1635,27 @@ Clicking jumps to the mention's line in the main window."
         (org-fold-show-entry)
         (recenter)))))
 
+(defun vulpea-ui--ignore-mentions-from-note (path note)
+  "Add NOTE id to the per note mention ignore property of note file PATH."
+  (when-let ((buffer (find-buffer-visiting path))
+             (id (vulpea-note-id note)))
+    ;; Search for the property in the buffer
+    (with-current-buffer buffer
+      (goto-char (point-min))
+      ;; If the property already exists, append the note id if no duplicates.
+      (if (search-forward-regexp
+           (rx line-start
+               (eval (format ":%s:" vulpea-mentions-per-note-ignore-property-key)))
+           nil t)
+          (unless (search-forward (format "%s" id) nil t)
+            (goto-char (pos-eol))
+            (insert (format " %s" id)))
+        ;; If the property is absent, insert it after the file level ID property
+        (when (search-forward-regexp (rx line-start ":ID:") nil t)
+          (goto-char (pos-eol))
+          (insert (format "\n:%s: %s"
+                          vulpea-mentions-per-note-ignore-property-key
+                          id)))))))
 
 ;;; Outgoing mentions widget
 
