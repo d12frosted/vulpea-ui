@@ -72,6 +72,12 @@ To automatically open the sidebar when entering org-mode buffers:
 (add-hook 'org-mode-hook #'vulpea-ui-sidebar-open)
 #+end_src
 
+This is safe even though =org-mode-hook= fires for buffers you never
+asked to see (previews such as [[https://github.com/protesilaos/dired-preview][dired-preview]], export copies, packages
+enabling org-mode in the background): the sidebar only opens once the
+buffer is actually displayed in a regular window. Buffers that never
+show up, or only appear in side windows, open nothing.
+
 * Configuration
 
 ** Sidebar position and size
@@ -188,16 +194,6 @@ list of types.
 
 ;; Idle delay before auto-refresh (in seconds)
 (setq vulpea-ui-auto-refresh-delay 1.5)
-#+end_src
-
-** Performance
-
-For large org files or many backlinks, enable fast parsing:
-
-#+begin_src emacs-lisp
-;; Skip org-mode hooks during parsing (faster but may cause issues
-;; if your setup depends on mode hooks for org-element parsing)
-(setq vulpea-ui-fast-parse t)
 #+end_src
 
 * Commands

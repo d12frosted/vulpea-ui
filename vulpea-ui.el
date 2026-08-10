@@ -218,13 +218,18 @@ a particular tag, e.g.
   :group 'vulpea-ui)
 
 (defcustom vulpea-ui-fast-parse nil
-  "Use fast `org-mode' initialization for parsing.
-When non-nil, skip mode hooks when parsing org files for headings
-and backlinks.  This can significantly improve performance but may
-cause issues if your org-element parsing depends on mode hooks.
-Disabled by default for safety."
+  "Obsolete; parse buffers always skip mode hooks now.
+Running user mode hooks in throwaway parse buffers was both a
+performance drain and a correctness hazard: with the documented
+recipe (`vulpea-ui-sidebar-open' on `org-mode-hook') every parse
+re-entered the sidebar machinery from a temp buffer (see
+vulpea-ui#63).  Org-element parsing does not depend on mode hooks."
   :type 'boolean
   :group 'vulpea-ui)
+
+(make-obsolete-variable 'vulpea-ui-fast-parse
+                        "parse buffers always skip mode hooks."
+                        "1.3.0")
 
 (defcustom vulpea-ui-auto-refresh t
   "Automatically refresh sidebar content.
@@ -483,6 +488,14 @@ buffer would clobber the selected window."
                                       vulpea-ui-sidebar-position)))
     (display-buffer-in-side-window buffer (vulpea-ui--display-buffer-params))))
 
+(defun vulpea-ui--main-window-p (window)
+  "Return non-nil when WINDOW is a live main window.
+A main window is a live, non-minibuffer window that is not a side
+window."
+  (and (window-live-p window)
+       (not (window-parameter window 'window-side))
+       (not (window-minibuffer-p window))))
+
 (defun vulpea-ui--get-main-window (&optional frame)
   "Get the most recently used main window in FRAME.
 A main window is a live, non-minibuffer window that is neither the
@@ -506,8 +519,7 @@ vulpea-ui#57)."
          (selected (frame-selected-window frame))
          (mainp (lambda (win)
                   (and (not (eq win sidebar-win))
-                       (not (window-parameter win 'window-side))
-                       (not (window-minibuffer-p win))))))
+                       (vulpea-ui--main-window-p win)))))
     ;; Prefer the currently selected window if it's a valid main window
     (if (and selected (funcall mainp selected))
         selected
@@ -753,17 +765,19 @@ stats and outline) will recompute."
 ;;; Utility functions
 
 (defun vulpea-ui--setup-org-mode ()
-  "Set up `org-mode' for parsing, respecting `vulpea-ui-fast-parse'.
-When fast parsing is enabled, skip mode hooks for better performance.
+  "Set up `org-mode' for parsing.
+Mode hooks are always delayed: these buffers exist only to be read by
+org-element, and running the user's `org-mode-hook' in them would run
+arbitrary user setup in throwaway buffers - including
+`vulpea-ui-sidebar-open' itself when it is on that hook, re-entering
+the sidebar machinery from a temp buffer (see vulpea-ui#63).
 All startup actions (inline images, LaTeX previews, visibility
 cycling) are inhibited since these buffers are used only for
 parsing.  Using `org-inhibit-startup' prevents `org-mode' from
 processing buffer-level #+STARTUP keywords (e.g. inlineimages)
 which would otherwise override let-bound variable suppression."
   (let ((org-inhibit-startup t))
-    (if vulpea-ui-fast-parse
-        (delay-mode-hooks (org-mode))
-      (org-mode))))
+    (delay-mode-hooks (org-mode))))
 
 (defun vulpea-ui-clean-org-markup (text)
   "Clean `org-mode' markup from TEXT for display purposes.
@@ -2156,27 +2170,91 @@ clobbering an unrelated buffer."
 
 ;;; Commands
 
+(defun vulpea-ui--buffer-main-window (buffer)
+  "Return the first main window showing BUFFER, or nil.
+All visible frames are considered."
+  (seq-find #'vulpea-ui--main-window-p
+            (get-buffer-window-list buffer nil 'visible)))
+
+(defun vulpea-ui--open-sidebar-in-frame (frame)
+  "Open or show the sidebar in FRAME and render the current context."
+  (with-selected-frame frame
+    (let* ((buf-name (vulpea-ui--sidebar-buffer-name frame))
+           (buf (get-buffer-create buf-name)))
+      ;; Set up the buffer
+      (with-current-buffer buf
+        (unless (derived-mode-p 'vulpea-ui-sidebar-mode)
+          (vulpea-ui-sidebar-mode)))
+      ;; Create window if not visible
+      (unless (vulpea-ui--sidebar-visible-p frame)
+        (vulpea-ui--create-sidebar-window buf))
+      ;; Set up hooks
+      (vulpea-ui--setup-hooks)
+      ;; Initial render with current note
+      (let* ((main-win (vulpea-ui--get-main-window frame))
+             (main-buf (when main-win (window-buffer main-win)))
+             (note (vulpea-ui--get-note-from-buffer main-buf)))
+        (vulpea-ui--render-sidebar note frame)))))
+
+(defun vulpea-ui--open-on-display (window)
+  "Open the sidebar for a parked buffer newly shown in WINDOW.
+Added buffer-locally to `window-buffer-change-functions' by
+`vulpea-ui-sidebar-open' when called from a buffer that no main
+window displays; redisplay then calls it with each window newly
+showing the buffer.  A side or minibuffer window (a preview) keeps
+the open parked; a main window performs it, in that window's frame.
+Because the hook is buffer-local, a parked buffer costs nothing while
+it stays hidden, and the deferral simply dies with the buffer."
+  (when (vulpea-ui--main-window-p window)
+    (with-current-buffer (window-buffer window)
+      (remove-hook 'window-buffer-change-functions
+                   #'vulpea-ui--open-on-display t))
+    ;; When the frame already has a sidebar, the tracking machinery
+    ;; (`vulpea-ui--on-buffer-change') picks the note up from this
+    ;; same event; opening again would render twice.
+    (unless (vulpea-ui--get-sidebar-buffer (window-frame window))
+      (vulpea-ui--open-sidebar-in-frame (window-frame window)))))
+
 ;;;###autoload
-(defun vulpea-ui-sidebar-open ()
-  "Open or show the vulpea-ui sidebar in the current frame."
-  (interactive)
-  (let* ((frame (selected-frame))
-         (buf-name (vulpea-ui--sidebar-buffer-name frame))
-         (buf (get-buffer-create buf-name)))
-    ;; Set up the buffer
-    (with-current-buffer buf
-      (unless (derived-mode-p 'vulpea-ui-sidebar-mode)
-        (vulpea-ui-sidebar-mode)))
-    ;; Create window if not visible
-    (unless (vulpea-ui--sidebar-visible-p frame)
-      (vulpea-ui--create-sidebar-window buf))
-    ;; Set up hooks
-    (vulpea-ui--setup-hooks)
-    ;; Initial render with current note
-    (let* ((main-win (vulpea-ui--get-main-window frame))
-           (main-buf (when main-win (window-buffer main-win)))
-           (note (vulpea-ui--get-note-from-buffer main-buf)))
-      (vulpea-ui--render-sidebar note frame))))
+(defun vulpea-ui-sidebar-open (&optional force)
+  "Open or show the vulpea-ui sidebar.
+
+Safe to put on `org-mode-hook'.  When called from a buffer that no
+main window displays - as mode hooks are during `find-file-noselect',
+including preview machinery like dired-preview (vulpea-ui#63) - the
+open is deferred until the buffer is actually shown in a main window,
+and never happens for buffers that only appear in side windows or are
+killed unseen.  Hook calls from internal buffers or the minibuffer
+are dropped entirely.
+
+The sidebar opens in the frame whose main window shows the buffer;
+interactive calls, and calls with FORCE non-nil, open immediately in
+the selected frame regardless of what the current buffer is.  No
+call opens anything during a render: a parse buffer entering
+`org-mode' runs this very hook again, and that re-entry must be
+inert."
+  (interactive (list :interactive))
+  (cond
+   ;; Mid-render re-entry: never open, not even forced.
+   (vulpea-ui--rendering nil)
+   ;; An explicit command opens in the selected frame, no questions
+   ;; asked; likewise a call from the sidebar's own buffer.
+   ((or force (derived-mode-p 'vulpea-ui-sidebar-mode))
+    (vulpea-ui--open-sidebar-in-frame (selected-frame)))
+   ;; Hook calls from internal buffers or the minibuffer never
+   ;; warrant a sidebar, now or later.
+   ((or (minibufferp) (string-prefix-p " " (buffer-name)))
+    nil)
+   ;; A buffer some main window shows: open in that window's frame.
+   ((let ((win (vulpea-ui--buffer-main-window (current-buffer))))
+      (when win
+        (vulpea-ui--open-sidebar-in-frame (window-frame win))
+        t)))
+   ;; Not displayed yet: park the open in the buffer; it fires when
+   ;; (and if) redisplay puts the buffer in a main window.
+   (t
+    (add-hook 'window-buffer-change-functions
+              #'vulpea-ui--open-on-display nil t))))
 
 ;;;###autoload
 (defun vulpea-ui-sidebar-close ()
@@ -2187,7 +2265,10 @@ clobbering an unrelated buffer."
     (vulpea-ui--hide-sidebar-window frame)
     (when buf
       (kill-buffer buf))
-    ;; Clean up state
+    ;; Clean up state.  Parked opens in undisplayed buffers are left
+    ;; alone deliberately: with the `org-mode-hook' recipe any newly
+    ;; visited note reopens the sidebar anyway, so a parked buffer
+    ;; behaves exactly like a future visit.
     (remhash frame vulpea-ui--sidebar-instances)
     (remhash frame vulpea-ui--sidebar-auto-hidden)
     ;; Teardown hooks if no more sidebars
@@ -2200,7 +2281,9 @@ clobbering an unrelated buffer."
   (interactive)
   (if (vulpea-ui--sidebar-visible-p)
       (vulpea-ui-sidebar-close)
-    (vulpea-ui-sidebar-open)))
+    ;; An explicit toggle must open no matter which window is
+    ;; selected; the display gate is for hook calls only.
+    (vulpea-ui-sidebar-open :force)))
 
 ;;;###autoload
 (defun vulpea-ui-sidebar-refresh ()

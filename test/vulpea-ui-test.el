@@ -1116,11 +1116,169 @@ This is what keeps point from jumping to the top on refresh."
       (should (equal (vulpea-note-title (plist-get (nth 1 sorted) :file-note)) "Apple")))))
 
 
-;;; Fast parse configuration tests
+;;; Parse buffers must not run user mode hooks (issue #63)
 
-(ert-deftest vulpea-ui-test-fast-parse-default ()
-  "Test that fast-parse is disabled by default."
-  (should-not vulpea-ui-fast-parse))
+(ert-deftest vulpea-ui-test-setup-org-mode-skips-mode-hooks ()
+  "Test that parse buffers never run `org-mode-hook'.
+Regression test for issue #63: with the documented recipe
+\(`vulpea-ui-sidebar-open' on `org-mode-hook'), running user hooks in
+throwaway parse buffers re-enters the sidebar machinery from a temp
+buffer."
+  (let* ((hook-ran nil)
+         (probe (lambda () (setq hook-ran t))))
+    (unwind-protect
+        (progn
+          (add-hook 'org-mode-hook probe)
+          (with-temp-buffer
+            (insert "* Heading\n")
+            (vulpea-ui--setup-org-mode)
+            (should (derived-mode-p 'org-mode)))
+          (should-not hook-ran))
+      (remove-hook 'org-mode-hook probe))))
+
+(ert-deftest vulpea-ui-test-parse-headings-skips-mode-hooks ()
+  "Test that parsing headings does not run `org-mode-hook'."
+  (let* ((hook-ran nil)
+         (probe (lambda () (setq hook-ran t)))
+         (temp-file (make-temp-file "vulpea-ui-test" nil ".org"))
+         (note (vulpea-ui-test--make-mock-note "test-hooks" "Test hooks")))
+    (setf (vulpea-note-path note) temp-file)
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert "* Heading One\nbody\n* Heading Two\nbody\n"))
+          (add-hook 'org-mode-hook probe)
+          (let ((headings (vulpea-ui--parse-headings note)))
+            (should (= (length headings) 2)))
+          (should-not hook-ran))
+      (remove-hook 'org-mode-hook probe)
+      (delete-file temp-file))))
+
+
+;;; Deferred sidebar open (issue #63)
+
+(defun vulpea-ui-test--deferred-p (buffer)
+  "Return non-nil when BUFFER carries a parked sidebar open."
+  (memq #'vulpea-ui--open-on-display
+        (buffer-local-value 'window-buffer-change-functions buffer)))
+
+(ert-deftest vulpea-ui-test-main-window-p ()
+  "Test the main-window predicate on ordinary and minibuffer windows."
+  (should (vulpea-ui--main-window-p (frame-selected-window)))
+  (should-not (vulpea-ui--main-window-p (minibuffer-window))))
+
+(ert-deftest vulpea-ui-test-buffer-main-window ()
+  "Test main-window lookup for displayed and hidden buffers."
+  (let ((shown (window-buffer (frame-selected-window)))
+        (hidden (generate-new-buffer "vulpea-ui-test-hidden.org")))
+    (unwind-protect
+        (progn
+          (should (vulpea-ui--buffer-main-window shown))
+          (should-not (vulpea-ui--buffer-main-window hidden)))
+      (kill-buffer hidden))))
+
+(ert-deftest vulpea-ui-test-sidebar-open-defers-for-undisplayed-buffer ()
+  "Test that opening from an undisplayed buffer defers instead.
+This is the `org-mode-hook' during `find-file-noselect' case: the
+buffer enters `org-mode' before any window shows it (previews like
+dired-preview, issue #63).  The deferral must live in the buffer, not
+in global state, so it costs nothing while parked and dies with the
+buffer."
+  (let ((buf (generate-new-buffer "vulpea-ui-test-defer.org")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (vulpea-ui-sidebar-open))
+          (should-not (vulpea-ui--get-sidebar-buffer))
+          (should (vulpea-ui-test--deferred-p buf))
+          ;; No global machinery: the default hook value is untouched.
+          (should-not (memq #'vulpea-ui--open-on-display
+                            (default-value
+                             'window-buffer-change-functions))))
+      (kill-buffer buf))))
+
+(ert-deftest vulpea-ui-test-sidebar-open-deferred-fires-when-displayed ()
+  "Test that a deferred open happens once the buffer is displayed."
+  (let ((buf (generate-new-buffer "vulpea-ui-test-defer.org"))
+        (original (window-buffer (frame-selected-window))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (vulpea-ui-sidebar-open))
+          (should-not (vulpea-ui--get-sidebar-buffer))
+          ;; Show the buffer in the main window and run the parked
+          ;; hook with it, as redisplay would.
+          (set-window-buffer (frame-selected-window) buf)
+          (vulpea-ui--open-on-display (frame-selected-window))
+          (should (vulpea-ui--get-sidebar-buffer))
+          ;; The deferral is one-shot.
+          (should-not (vulpea-ui-test--deferred-p buf)))
+      (vulpea-ui-sidebar-close)
+      (set-window-buffer (frame-selected-window) original)
+      (kill-buffer buf))))
+
+(ert-deftest vulpea-ui-test-sidebar-open-deferred-ignores-side-window ()
+  "Test that showing a parked buffer in a side window opens nothing.
+This is the dired-preview case: previews land in side windows and
+must keep the open parked."
+  (let ((buf (generate-new-buffer "vulpea-ui-test-defer.org"))
+        (side-win nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (vulpea-ui-sidebar-open))
+          (setq side-win (display-buffer-in-side-window
+                          buf '((side . left) (slot . -1))))
+          (skip-unless (window-live-p side-win))
+          (vulpea-ui--open-on-display side-win)
+          (should-not (vulpea-ui--get-sidebar-buffer))
+          ;; Still parked for a later real visit.
+          (should (vulpea-ui-test--deferred-p buf)))
+      (when (window-live-p side-win)
+        (delete-window side-win))
+      (kill-buffer buf))))
+
+(ert-deftest vulpea-ui-test-sidebar-open-skips-internal-buffers ()
+  "Test that internal (space-named) buffers never open or defer."
+  (let ((buf (generate-new-buffer " *vulpea-ui-test-internal*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (vulpea-ui-sidebar-open))
+          (should-not (vulpea-ui--get-sidebar-buffer))
+          (should-not (vulpea-ui-test--deferred-p buf)))
+      (kill-buffer buf))))
+
+(ert-deftest vulpea-ui-test-sidebar-open-interactive-opens-now ()
+  "Test that an explicit interactive call opens without deferring.
+The displayed-in-a-main-window gate is for hook calls; a user running
+the command from an undisplayed buffer or a side window must not have
+it silently swallowed."
+  (let ((buf (generate-new-buffer "vulpea-ui-test-defer.org")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (call-interactively #'vulpea-ui-sidebar-open))
+          (should (vulpea-ui--get-sidebar-buffer))
+          (should-not (vulpea-ui-test--deferred-p buf))
+          (vulpea-ui-sidebar-close)
+          ;; FORCE behaves the same for programmatic explicit calls
+          ;; (e.g. `vulpea-ui-sidebar-toggle').
+          (with-current-buffer buf
+            (vulpea-ui-sidebar-open :force))
+          (should (vulpea-ui--get-sidebar-buffer))
+          (should-not (vulpea-ui-test--deferred-p buf)))
+      (vulpea-ui-sidebar-close)
+      (kill-buffer buf))))
+
+(ert-deftest vulpea-ui-test-sidebar-open-noop-while-rendering ()
+  "Test that re-entrant opens during a render are ignored.
+Not even FORCE overrides this: the guard exists so a parse buffer
+entering `org-mode' mid-render cannot recurse into the machinery."
+  (let ((vulpea-ui--rendering t))
+    (vulpea-ui-sidebar-open)
+    (vulpea-ui-sidebar-open :force)
+    (should-not (vulpea-ui--get-sidebar-buffer))))
 
 
 ;;; Parse headings tests
