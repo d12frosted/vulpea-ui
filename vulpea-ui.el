@@ -56,6 +56,7 @@
 (require 'org-element)
 (require 'transient)
 (require 'vulpea)
+(require 'vulpea-mentions)
 (require 'vui)
 (require 'vui-components)
 
@@ -1622,8 +1623,7 @@ being available on `exec-path' and reports gracefully when it is not."
   :render
   (let ((note (use-vulpea-ui-note)))
     (when note
-      (let* ((path (vulpea-note-path note))
-             (last-ref (vui-use-ref nil))
+      (let* ((last-ref (vui-use-ref nil))
              (result (vui-use-async
                          (list (vulpea-note-id note)
                                vulpea-ui--refresh-generation)
@@ -1644,20 +1644,20 @@ being available on `exec-path' and reports gracefully when it is not."
           :children
           (lambda ()
             (pcase state
-              ('shown (vulpea-ui--render-unlinked-mentions-body data path))
+              ('shown (vulpea-ui--render-unlinked-mentions-body data note))
               ('error
                (vui-muted (format "Unavailable: %s"
                                   (plist-get result :error))))
               (_ (vui-muted "Searching…")))))))))
 
-(defun vulpea-ui--render-unlinked-mentions-body (data path)
-  "Render incoming mention DATA as grouped context lines for PATH."
+(defun vulpea-ui--render-unlinked-mentions-body (data note)
+  "Render incoming mention DATA as grouped context lines for NOTE."
   (let ((groups (vulpea-ui--group-mentions data)))
     (if groups
         (vui-vstack
          :spacing 1
          (seq-map (lambda (group)
-                    (vulpea-ui--render-mention-group group path))
+                    (vulpea-ui--render-mention-group group note))
                   groups))
       (vui-muted "No unlinked mentions"))))
 
@@ -1728,12 +1728,12 @@ first-encounter order, each with :note, :path, and :mentions - a list of
                       :mentions (nreverse (gethash id lists)))))
             (nreverse order))))
 
-(defun vulpea-ui--render-mention-group (group source-path)
+(defun vulpea-ui--render-mention-group (group source-note)
   "Render a mention GROUP: the mentioning note link and its context lines.
 
 For each note link, there is an ignore button, which adds the mentioning
 note id to the value of `vulpea-mentions-per-note-ignore-property-key'
-in SOURCE-PATH."
+in SOURCE-NOTE"
   (let ((note (plist-get group :note))
         (path (plist-get group :path))
         (mentions (plist-get group :mentions)))
@@ -1746,7 +1746,7 @@ in SOURCE-PATH."
       (vui-button "ignore"
         :face 'vulpea-ui-mention-action-face
         :on-click (lambda ()
-                    (vulpea-ui--ignore-mentions-from-note source-path note))
+                    (vulpea-ui--ignore-mentions-action source-note note))
         :help-echo "Ignore mentions from this note."))
      (vui-vstack
       :spacing 0
@@ -1776,27 +1776,13 @@ Clicking jumps to the mention's line in the main window."
         (org-fold-show-entry)
         (recenter)))))
 
-(defun vulpea-ui--ignore-mentions-from-note (path note)
-  "Add NOTE id to the per note mention ignore property of note file PATH."
-  (when-let ((buffer (find-buffer-visiting path))
-             (id (vulpea-note-id note)))
-    ;; Search for the property in the buffer
-    (with-current-buffer buffer
-      (goto-char (point-min))
-      ;; If the property already exists, append the note id if no duplicates.
-      (if (search-forward-regexp
-           (rx line-start
-               (eval (format ":%s:" vulpea-mentions-per-note-ignore-property-key)))
-           nil t)
-          (unless (search-forward (format "%s" id) nil t)
-            (goto-char (pos-eol))
-            (insert (format " %s" id)))
-        ;; If the property is absent, insert it after the file level ID property
-        (when (search-forward-regexp (rx line-start ":ID:") nil t)
-          (goto-char (pos-eol))
-          (insert (format "\n:%s: %s"
-                          vulpea-mentions-per-note-ignore-property-key
-                          id)))))))
+(defun vulpea-ui--ignore-mentions-action (note from-note)
+  "Ignore mentions of NOTE from FROM-NOTE.
+Intended as the \"ignore\" button action for an incoming-mention group."
+  (vulpea-mentions-ignore-from note from-note)
+  (message "Ignore mentions of note %s from note %s"
+           (vulpea-note-title note)
+           (vulpea-note-title from-note)))
 
 ;;; Outgoing mentions widget
 
