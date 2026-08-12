@@ -70,6 +70,21 @@ leak into the saved snapshot."
        (maphash (lambda (k v) (puthash k v vulpea-ui--widget-registry))
                 saved))))
 
+(defmacro vulpea-ui-test--without-db-updated-hook (&rest body)
+  "Run BODY as if vulpea had no `vulpea-db-updated-functions'.
+Temporarily unbinds the variable so the legacy code paths - save and
+worker-done driven refreshes - are exercised even when the loaded
+vulpea provides the data-changed hook."
+  (declare (indent 0) (debug t))
+  (let ((saved (make-symbol "saved")))
+    `(if (not (boundp 'vulpea-db-updated-functions))
+         (progn ,@body)
+       (let ((,saved (symbol-value 'vulpea-db-updated-functions)))
+         (unwind-protect
+             (progn (makunbound 'vulpea-db-updated-functions)
+                    ,@body)
+           (set 'vulpea-db-updated-functions ,saved))))))
+
 
 ;;; Configuration tests
 
@@ -2790,63 +2805,164 @@ Real DB, real fixer: `- name ::' must land between the two headings."
           (should (> name-at red-at))
           (should (< name-at white-at)))))))
 
-(ert-deftest vulpea-ui-worker-done-refreshes-when-idle ()
-  "A background extraction landing triggers a sidebar refresh.
-With vulpea's async extraction, the database changes when the worker
-applies results - not when the file is saved - so the sidebar must
-refresh on the done hook, once the worker is idle."
+(ert-deftest vulpea-ui-test-db-updated-refresh-sees-fresh-note ()
+  "The refresh triggered by a synchronous update reads post-update data.
+The vulpea-ui#62 shape: the save-triggered refresh ran before
+`vulpea-db-update-file' and captured the pre-update note, so a change
+only showed up on the next manual refresh.  Driven through a real
+database: the data-changed hook fires after the write commits, so
+the title the refresh reads here is the new one."
+  (skip-unless (boundp 'vulpea-db-updated-functions))
+  (vulpea-ui-test--with-indexed-wine-file
+    (let ((vulpea-db-updated-functions nil)
+          (vulpea-ui--db-refresh-pending nil)
+          (title-at-refresh nil))
+      (cl-letf (((symbol-function 'vulpea-ui--sidebar-visible-p)
+                 (lambda (&rest _) t))
+                ((symbol-function 'vulpea-ui-sidebar-refresh)
+                 (lambda ()
+                   (setq title-at-refresh
+                         (vulpea-note-title (vulpea-db-get-by-id file-id)))))
+                ((symbol-function 'lwarn) #'ignore))
+        (add-hook 'vulpea-db-updated-functions #'vulpea-ui--on-db-updated)
+        (with-temp-file file
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (search-forward "#+title: Journal")
+          (replace-match "#+title: Diary" t t))
+        (vulpea-db-update-file file)
+        (should (equal title-at-refresh "Diary"))))))
+
+(ert-deftest vulpea-ui-db-updated-refreshes-when-idle ()
+  "A database content change triggers a sidebar refresh.
+The data-changed hook runs after the write transaction commits, so
+the refresh reads the new content - unlike `after-save-hook', which
+fires before `vulpea-db-update-file' and read stale data
+\(vulpea-ui#62).  Removals (COUNT 0) refresh too: a deleted note must
+drop from backlinks and mentions."
   (let ((refreshed 0)
-        (vulpea-ui--worker-refresh-pending nil))
+        (vulpea-ui--db-refresh-pending nil))
     (cl-letf (((symbol-function 'vulpea-ui--sidebar-visible-p)
                (lambda (&rest _) t))
               ((symbol-function 'vulpea-ui-sidebar-refresh)
                (lambda () (cl-incf refreshed)))
               ((symbol-function 'vulpea-db-worker-busy-p)
                (lambda () nil)))
-      (vulpea-ui--on-worker-done "/tmp/a.org" 'applied 3)
+      (vulpea-ui--on-db-updated "/tmp/a.org" 3)
       (should (= 1 refreshed))
-      ;; unchanged results do not change data: no refresh
-      (vulpea-ui--on-worker-done "/tmp/b.org" 'unchanged nil)
-      (should (= 1 refreshed)))))
+      ;; a removal changes data as well
+      (vulpea-ui--on-db-updated "/tmp/b.org" 0)
+      (should (= 2 refreshed)))))
 
-(ert-deftest vulpea-ui-worker-done-coalesces-bulk-syncs ()
+(ert-deftest vulpea-ui-db-updated-coalesces-bulk-syncs ()
   "During a bulk sync, refreshes coalesce to one when the burst drains.
-Refreshing per applied file during a 10k-note rebuild would be a
-refresh storm; the pending flag defers to the end of the burst."
+Bulk operations run the data-changed hook once per file; refreshing
+per file during a 10k-note rebuild would be a refresh storm.  The
+pending flag defers the refresh while the extraction worker is busy,
+and the worker's done hook flushes it even when the burst's last
+reply changes no data."
   (let ((refreshed 0)
         (busy t)
-        (vulpea-ui--worker-refresh-pending nil))
+        (vulpea-ui--db-refresh-pending nil))
     (cl-letf (((symbol-function 'vulpea-ui--sidebar-visible-p)
                (lambda (&rest _) t))
               ((symbol-function 'vulpea-ui-sidebar-refresh)
                (lambda () (cl-incf refreshed)))
               ((symbol-function 'vulpea-db-worker-busy-p)
                (lambda () busy)))
-      ;; Burst in progress: applied results only mark pending
-      (vulpea-ui--on-worker-done "/tmp/a.org" 'applied 1)
-      (vulpea-ui--on-worker-done "/tmp/b.org" 'applied 1)
+      ;; Burst in progress: changes only mark pending
+      (vulpea-ui--on-db-updated "/tmp/a.org" 1)
+      (vulpea-ui--on-db-updated "/tmp/b.org" 1)
       (should (= 0 refreshed))
-      (should vulpea-ui--worker-refresh-pending)
-      ;; Last completion of the burst: worker idle, even an unchanged
-      ;; status flushes the pending refresh
+      (should vulpea-ui--db-refresh-pending)
+      ;; Last reply of the burst changes no data, so the data-changed
+      ;; hook stays silent: the done hook flushes the deferred refresh
       (setq busy nil)
       (vulpea-ui--on-worker-done "/tmp/c.org" 'unchanged nil)
       (should (= 1 refreshed))
-      (should-not vulpea-ui--worker-refresh-pending))))
+      (should-not vulpea-ui--db-refresh-pending))))
 
-(ert-deftest vulpea-ui-worker-done-ignores-when-sidebar-hidden ()
+(ert-deftest vulpea-ui-db-updated-ignores-when-sidebar-hidden ()
   "No sidebar, no refresh - but the pending flag must not leak."
   (let ((refreshed 0)
-        (vulpea-ui--worker-refresh-pending nil))
+        (vulpea-ui--db-refresh-pending nil))
     (cl-letf (((symbol-function 'vulpea-ui--sidebar-visible-p)
                (lambda (&rest _) nil))
               ((symbol-function 'vulpea-ui-sidebar-refresh)
                (lambda () (cl-incf refreshed)))
               ((symbol-function 'vulpea-db-worker-busy-p)
                (lambda () nil)))
-      (vulpea-ui--on-worker-done "/tmp/a.org" 'applied 1)
+      (vulpea-ui--on-db-updated "/tmp/a.org" 1)
       (should (= 0 refreshed))
-      (should-not vulpea-ui--worker-refresh-pending))))
+      (should-not vulpea-ui--db-refresh-pending))))
+
+(ert-deftest vulpea-ui-worker-done-does-not-drive-refresh ()
+  "With the data-changed hook available, worker done only flushes.
+An applied reply is announced on `vulpea-db-updated-functions' right
+before the done hook runs; if the done handler also marked data
+dirty, a single worker apply would refresh twice."
+  (skip-unless (boundp 'vulpea-db-updated-functions))
+  (let ((refreshed 0)
+        (vulpea-ui--db-refresh-pending nil))
+    (cl-letf (((symbol-function 'vulpea-ui--sidebar-visible-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'vulpea-ui-sidebar-refresh)
+               (lambda () (cl-incf refreshed)))
+              ((symbol-function 'vulpea-db-worker-busy-p)
+               (lambda () nil)))
+      (vulpea-ui--on-worker-done "/tmp/a.org" 'applied 1)
+      (should (= 0 refreshed)))))
+
+(ert-deftest vulpea-ui-worker-done-drives-refresh-on-legacy-vulpea ()
+  "Without the data-changed hook, worker done drives refreshes.
+On a vulpea before `vulpea-db-updated-functions', applied and missing
+replies are the only database change signal."
+  (vulpea-ui-test--without-db-updated-hook
+    (let ((refreshed 0)
+          (vulpea-ui--db-refresh-pending nil))
+      (cl-letf (((symbol-function 'vulpea-ui--sidebar-visible-p)
+                 (lambda (&rest _) t))
+                ((symbol-function 'vulpea-ui-sidebar-refresh)
+                 (lambda () (cl-incf refreshed)))
+                ((symbol-function 'vulpea-db-worker-busy-p)
+                 (lambda () nil)))
+        (vulpea-ui--on-worker-done "/tmp/a.org" 'applied 3)
+        (should (= 1 refreshed))
+        ;; unchanged results do not change data: no refresh
+        (vulpea-ui--on-worker-done "/tmp/b.org" 'unchanged nil)
+        (should (= 1 refreshed))))))
+
+(ert-deftest vulpea-ui-db-updated-hook-registration ()
+  "Hook setup registers on the data-changed hook and skips save refresh.
+With `vulpea-db-updated-functions' available, the database - not the
+save - is the refresh signal, so `after-save-hook' gets no handler."
+  (skip-unless (boundp 'vulpea-db-updated-functions))
+  (let ((vulpea-db-updated-functions nil)
+        (after-save-hook nil)
+        (vulpea-ui-auto-refresh t))
+    (cl-letf (((symbol-function 'vulpea-ui--start-idle-timer) #'ignore))
+      (vulpea-ui--setup-hooks)
+      (unwind-protect
+          (progn
+            (should (memq #'vulpea-ui--on-db-updated
+                          vulpea-db-updated-functions))
+            (should-not (memq #'vulpea-ui--on-save after-save-hook)))
+        (vulpea-ui--teardown-hooks))
+      (should-not (memq #'vulpea-ui--on-db-updated
+                        vulpea-db-updated-functions)))))
+
+(ert-deftest vulpea-ui-save-refresh-on-legacy-vulpea ()
+  "Without the data-changed hook, hook setup falls back to save refresh.
+An older vulpea gives no other signal for synchronous updates."
+  (vulpea-ui-test--without-db-updated-hook
+    (let ((after-save-hook nil)
+          (vulpea-ui-auto-refresh t))
+      (cl-letf (((symbol-function 'vulpea-ui--start-idle-timer) #'ignore))
+        (vulpea-ui--setup-hooks)
+        (unwind-protect
+            (should (memq #'vulpea-ui--on-save after-save-hook))
+          (vulpea-ui--teardown-hooks))
+        (should-not (memq #'vulpea-ui--on-save after-save-hook))))))
 
 (ert-deftest vulpea-ui-worker-hook-registration-guarded ()
   "Hook setup registers on the worker hook only when vulpea provides it.
@@ -4138,12 +4254,12 @@ single-note edits apply without asking."
   (vulpea-ui-test--with-collection-buffer
       (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
     (let ((refreshed 0)
-          (vulpea-ui-collection--worker-refresh-pending nil))
+          (vulpea-ui-collection--db-refresh-pending nil))
       (cl-letf (((symbol-function 'vulpea-ui-collection-refresh)
                  (lambda () (cl-incf refreshed)))
                 ((symbol-function 'vulpea-db-worker-busy-p) #'ignore))
         ;; the temp buffer is not displayed: no refresh, marked stale
-        (vulpea-ui-collection--on-worker-done "/tmp/a.org" 'applied 1)
+        (vulpea-ui-collection--on-db-updated "/tmp/a.org" 1)
         (should (= refreshed 0))
         (should vulpea-ui-collection--stale)
         ;; displaying it flushes the pending refresh
@@ -4153,6 +4269,28 @@ single-note edits apply without asking."
         ;; a second display does nothing
         (vulpea-ui-collection--on-displayed nil)
         (should (= refreshed 1))))))
+
+(ert-deftest vulpea-ui-collection-test-worker-done-does-not-drive-refresh ()
+  "With the data-changed hook available, worker done only flushes.
+Mirrors the sidebar split: data changes are announced on
+`vulpea-db-updated-functions', the done hook is a lifecycle signal."
+  (skip-unless (boundp 'vulpea-db-updated-functions))
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (let ((vulpea-ui-collection--db-refresh-pending nil))
+      (cl-letf (((symbol-function 'vulpea-db-worker-busy-p) #'ignore))
+        (vulpea-ui-collection--on-worker-done "/tmp/a.org" 'applied 1)
+        (should-not vulpea-ui-collection--stale)))))
+
+(ert-deftest vulpea-ui-collection-test-worker-done-legacy-vulpea ()
+  "Without the data-changed hook, worker done drives collection refreshes."
+  (vulpea-ui-test--without-db-updated-hook
+    (vulpea-ui-test--with-collection-buffer
+        (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+      (let ((vulpea-ui-collection--db-refresh-pending nil))
+        (cl-letf (((symbol-function 'vulpea-db-worker-busy-p) #'ignore))
+          (vulpea-ui-collection--on-worker-done "/tmp/a.org" 'applied 1)
+          (should vulpea-ui-collection--stale))))))
 
 (ert-deftest vulpea-ui-collection-test-save-captures-user-widths ()
   "Saving a view pins hand-resized widths, auto widths stay fluid."

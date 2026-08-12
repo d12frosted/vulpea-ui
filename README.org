@@ -179,7 +179,11 @@ list of types.
 ;; Start widgets collapsed
 (setq vulpea-ui-default-widget-collapsed nil)
 
-;; Auto-refresh sidebar on save and idle (enabled by default)
+;; Auto-refresh sidebar on database changes and idle (enabled by
+;; default). With a vulpea providing vulpea-db-updated-functions the
+;; sidebar refreshes when database content actually changes (sync
+;; updates, background extraction, removals); on older versions it
+;; falls back to refreshing on save.
 (setq vulpea-ui-auto-refresh t)
 
 ;; Idle delay before auto-refresh (in seconds)
@@ -402,10 +406,11 @@ when followed (the path is a saved view name or a query). Saved
 views are managed with =vulpea-ui-collection-rename-view= and
 =vulpea-ui-collection-delete-view= (also in the =?= menu).
 
-Like the sidebar, the view refreshes itself when vulpea's background
-extraction lands changes in the database (vulpea 2.6+), coalescing
-bulk syncs into a single refresh. Only visible buffers re-query
-immediately; hidden ones wait until they are shown again.
+Like the sidebar, the view refreshes itself when database content
+changes (vulpea's =vulpea-db-updated-functions=; on older vulpea
+versions, when background extraction lands), coalescing bulk syncs
+into a single refresh. Only visible buffers re-query immediately;
+hidden ones wait until they are shown again.
 
 Saved views also show up as a =Collections= widget in the sidebar
 (one click from any note to a view), and any view can be embedded in
@@ -554,8 +559,9 @@ convert that occurrence into an =id:= link in place. Each group also has a
 Linking re-checks the live buffer before editing, so a suggestion that has
 gone stale (the surrounding text changed, or you already linked it) is
 simply skipped. It keeps your place in the sidebar and does not re-scan,
-so the suggestion stays listed (and point stays put) until you refresh
-with =g= or save - which makes it easy to link several in a row. Which
+so the suggestion stays listed (and point stays put) until the sidebar
+refreshes (=g=, or the database picking up your edits) - which makes it
+easy to link several in a row. Which
 notes count as candidates is controlled by =vulpea-mentions-note-filter=
 (file-level notes by default).
 
