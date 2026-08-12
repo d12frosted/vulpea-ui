@@ -1401,6 +1401,30 @@ unlinked-mentions widget for the duration of the render."
   (vulpea-ui-test--render-mentions nil
     (should (string-match-p "No unlinked mentions" output))))
 
+(ert-deftest vulpea-ui-test-mentions-ignore-from ()
+  "Render a ignore button for each mention group.
+Check note arguments are passed to `vulpea-mentions-ignore-from' in the
+expected order.  The point should be placed at the Unmentioned Links
+group after the on-click function returns."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+        (b (vulpea-ui-test--make-mock-note "id-b" "Note B")))
+    (cl-letf (((symbol-function 'vulpea-mentions-ignore-from)
+               (lambda (note from-note)
+                 (should (equal "tgt" (vulpea-note-id note)))
+                 (should (equal "id-a" (vulpea-note-id from-note))))))
+      (vulpea-ui-test--render-mentions
+       (list (list :note a :path "/a.org" :line 3 :context "mentions Target here")
+             (list :note a :path "/a.org" :line 9 :context "Target again")
+             (list :note b :path "/b.org" :line 5 :context "a Target reference"))
+       (should (string-match-p "[Note A] [ignore]" output))
+       (should (string-match-p "[Note B] [ignore]" output))
+       (vulpea-ui--ignore-mentions-action note a)
+       (let ((unlinked-mentions
+              (seq-find
+               (lambda (w)
+                 (equal (vui-element-get w :vui-key) "Unlinked Mentions"))
+               (vui--collect-widgets))))
+         (should (= (point) (car (vui--widget-bounds unlinked-mentions)))))))))
 
 ;;; Schema health widget
 
