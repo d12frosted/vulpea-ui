@@ -850,6 +850,7 @@ CHILDREN (implicit) is a function returning the widget content."
       :title display-title
       :initially-expanded (not vulpea-ui-default-widget-collapsed)
       :title-face 'vulpea-ui-widget-header-face
+      :key title
       :indent 2
       (when children
         (funcall children)))))
@@ -1826,6 +1827,8 @@ Clicking jumps to the mention's line in the main window."
 (defun vulpea-ui--ignore-mentions-action (note from-note)
   "Ignore mentions of NOTE from FROM-NOTE.
 Intended as the \"ignore\" button action for an incoming-mention group."
+  (when (fboundp 'vui-goto-key)
+    (vui-goto-key "Unlinked Mentions"))
   (vulpea-mentions-ignore-from note from-note)
   (message "Ignored mentions of note %s from note %s"
            (vulpea-note-title note)
