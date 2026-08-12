@@ -1780,21 +1780,21 @@ first-encounter order, each with :note, :path, and :mentions - a list of
 
 For each note link, there is an ignore button, which adds the mentioning
 note id to the value of `vulpea-mentions-per-note-ignore-property-key'
-in SOURCE-NOTE"
+in SOURCE-NOTE."
   (let ((note (plist-get group :note))
         (path (plist-get group :path))
         (mentions (plist-get group :mentions)))
     (vui-vstack
      :spacing 0
-     (vui-hstack
-      (if note
+     (if note
+         (vui-hstack
           (vui-component 'vulpea-ui-note-link :note note)
-        (vui-muted (file-name-nondirectory path)))
-      (vui-button "ignore"
-        :face 'vulpea-ui-mention-action-face
-        :on-click (lambda ()
-                    (vulpea-ui--ignore-mentions-action source-note note))
-        :help-echo "Ignore mentions from this note."))
+          (vui-button "ignore"
+            :face 'vulpea-ui-mention-action-face
+            :on-click (lambda ()
+                        (vulpea-ui--ignore-mentions-action source-note note))
+            :help-echo "Ignore mentions from this note."))
+       (vui-muted (file-name-nondirectory path)))
      (vui-vstack
       :spacing 0
       :indent 2
