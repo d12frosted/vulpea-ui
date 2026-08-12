@@ -1827,7 +1827,7 @@ Clicking jumps to the mention's line in the main window."
   "Ignore mentions of NOTE from FROM-NOTE.
 Intended as the \"ignore\" button action for an incoming-mention group."
   (vulpea-mentions-ignore-from note from-note)
-  (message "Ignore mentions of note %s from note %s"
+  (message "Ignored mentions of note %s from note %s"
            (vulpea-note-title note)
            (vulpea-note-title from-note)))
 
