@@ -228,7 +228,9 @@ Disabled by default for safety."
 (defcustom vulpea-ui-auto-refresh t
   "Automatically refresh sidebar content.
 When non-nil, the sidebar will refresh:
-- After saving a buffer (full refresh for backlinks/links)
+- After database content changes (full refresh for backlinks/links;
+  on a vulpea without `vulpea-db-updated-functions', after saving a
+  buffer instead)
 - After idle time (stats and outline only)"
   :type 'boolean
   :group 'vulpea-ui)
@@ -616,8 +618,8 @@ risking deletion of a main or sole window."
     (when (and buf (not (vulpea-ui--sidebar-visible-p frame)))
       (vulpea-ui--create-sidebar-window buf))))
 
-(defvar vulpea-ui--worker-refresh-pending nil
-  "Non-nil when background extraction changed data during a busy burst.
+(defvar vulpea-ui--db-refresh-pending nil
+  "Non-nil when the database changed while the extraction worker was busy.
 Flushed into a single refresh when the worker goes idle, so a bulk
 sync produces one refresh instead of thousands.")
 
@@ -627,9 +629,20 @@ sync produces one refresh instead of thousands.")
   (add-hook 'window-selection-change-functions #'vulpea-ui--on-buffer-change)
   ;; Auto-refresh hooks
   (when vulpea-ui-auto-refresh
-    (add-hook 'after-save-hook #'vulpea-ui--on-save)
-    ;; Async extraction (vulpea 2.6+): refresh when background
-    ;; results actually land in the database
+    (if (boundp 'vulpea-db-updated-functions)
+        ;; vulpea with the data-changed hook: refresh when the
+        ;; database actually changes, which covers synchronous
+        ;; updates, worker applies and removals.  A save on its own
+        ;; changes no database content (the sync catches up later),
+        ;; and buffer-derived widgets ride the idle timer, so
+        ;; `after-save-hook' has nothing left to signal.
+        (add-hook 'vulpea-db-updated-functions #'vulpea-ui--on-db-updated)
+      ;; Older vulpea: a save is the only signal for synchronous
+      ;; updates, even though it fires before the database catches up
+      (add-hook 'after-save-hook #'vulpea-ui--on-save))
+    ;; Async extraction (vulpea 2.6+): flush deferred refreshes when
+    ;; the worker drains (and, without the data-changed hook, refresh
+    ;; when background results land in the database)
     (when (boundp 'vulpea-db-worker-done-functions)
       (add-hook 'vulpea-db-worker-done-functions
                 #'vulpea-ui--on-worker-done))
@@ -641,10 +654,12 @@ sync produces one refresh instead of thousands.")
   (remove-hook 'window-selection-change-functions #'vulpea-ui--on-buffer-change)
   ;; Auto-refresh hooks
   (remove-hook 'after-save-hook #'vulpea-ui--on-save)
+  (when (boundp 'vulpea-db-updated-functions)
+    (remove-hook 'vulpea-db-updated-functions #'vulpea-ui--on-db-updated))
   (when (boundp 'vulpea-db-worker-done-functions)
     (remove-hook 'vulpea-db-worker-done-functions
                  #'vulpea-ui--on-worker-done))
-  (setq vulpea-ui--worker-refresh-pending nil)
+  (setq vulpea-ui--db-refresh-pending nil)
   (vulpea-ui--stop-idle-timer))
 
 (defun vulpea-ui--start-idle-timer ()
@@ -661,26 +676,58 @@ sync produces one refresh instead of thousands.")
     (setq vulpea-ui--idle-timer nil)))
 
 (defun vulpea-ui--on-save ()
-  "Handle buffer save - refresh sidebar if visible."
+  "Handle buffer save - refresh sidebar if visible.
+Only installed on a vulpea without `vulpea-db-updated-functions': it
+fires before the database catches up with the save, so the refresh
+reads pre-save data.  With the data-changed hook available the
+refresh waits for `vulpea-ui--on-db-updated' instead."
   (when (and (vulpea-ui--sidebar-visible-p)
              (vulpea-ui--get-note-from-buffer (current-buffer)))
     (vulpea-ui-sidebar-refresh)))
 
-(defun vulpea-ui--on-worker-done (_path status _count)
-  "Refresh the sidebar when background extraction lands data.
+(defun vulpea-ui--on-db-updated (_path _count)
+  "Refresh the sidebar after database content for a file changed.
+Runs on `vulpea-db-updated-functions', vulpea's single data-changed
+signal: synchronous updates (`vulpea-db-update-file', including saves
+through `vulpea-utils-with-note-sync'), results landing from the
+extraction worker, and removals.  The hook runs after the write
+transaction commits, so the refresh reads the new content - unlike
+`after-save-hook', which fires before the database update and showed
+stale data (vulpea-ui#62).
 
-With vulpea's async extraction, the database changes when the worker
-applies results - not when a file is saved - so the save-triggered
-refresh shows data from before the save.  This handler runs on
-vulpea's worker done hook: STATUS `applied' and `missing' mean the
-database changed; the refresh is deferred while the worker is busy
-\(bulk syncs) and flushed once when the burst drains."
-  (when (memq status '(applied missing))
-    (setq vulpea-ui--worker-refresh-pending t))
-  (when (and vulpea-ui--worker-refresh-pending
+PATH is ignored: a change in any file can affect what the sidebar
+shows for the displayed note (backlinks, mentions), so the refresh is
+not filtered by path.  Bulk operations run the hook once per file;
+the refresh is deferred while the extraction worker is busy and
+flushed once when the burst drains."
+  (setq vulpea-ui--db-refresh-pending t)
+  (vulpea-ui--flush-db-refresh))
+
+(defun vulpea-ui--on-worker-done (_path status _count)
+  "Flush a deferred sidebar refresh when the extraction worker drains.
+On a vulpea with `vulpea-db-updated-functions' this is purely a
+lifecycle signal: data changes mark the refresh pending in
+`vulpea-ui--on-db-updated', and this handler only flushes it when
+the burst that deferred it ends with a reply that changes no
+data (stamped, stale) and thus announces nothing.  On an older
+vulpea without the data-changed hook, replies with STATUS `applied'
+or `missing' are also the only database change signal, so they mark
+the refresh pending here."
+  (unless (boundp 'vulpea-db-updated-functions)
+    (when (memq status '(applied missing))
+      (setq vulpea-ui--db-refresh-pending t)))
+  (vulpea-ui--flush-db-refresh))
+
+(defun vulpea-ui--flush-db-refresh ()
+  "Refresh the sidebar for a pending database change, unless deferred.
+While the extraction worker is busy the refresh stays pending - a
+bulk sync coalesces into a single refresh when the burst drains.
+The pending flag clears even when no sidebar is visible, so it does
+not leak a stale refresh into the next database change."
+  (when (and vulpea-ui--db-refresh-pending
              (or (not (fboundp 'vulpea-db-worker-busy-p))
                  (not (vulpea-db-worker-busy-p))))
-    (setq vulpea-ui--worker-refresh-pending nil)
+    (setq vulpea-ui--db-refresh-pending nil)
     (when (vulpea-ui--sidebar-visible-p)
       (vulpea-ui-sidebar-refresh))))
 
@@ -3361,6 +3408,9 @@ dired-style marks and bulk actions on the selection.
               #'vulpea-ui-collection--bookmark-record)
   (add-hook 'window-buffer-change-functions
             #'vulpea-ui-collection--on-displayed nil t)
+  (when (boundp 'vulpea-db-updated-functions)
+    (add-hook 'vulpea-db-updated-functions
+              #'vulpea-ui-collection--on-db-updated))
   (when (boundp 'vulpea-db-worker-done-functions)
     (add-hook 'vulpea-db-worker-done-functions
               #'vulpea-ui-collection--on-worker-done)))
@@ -3596,27 +3646,45 @@ tabulated-list support that arrived in Emacs 30."
                             "\\[vulpea-ui-collection-menu] lists every command."))
                    'face 'shadow)))))))
 
-(defvar vulpea-ui-collection--worker-refresh-pending nil
-  "Non-nil when background extraction changed data during a busy burst.")
+(defvar vulpea-ui-collection--db-refresh-pending nil
+  "Non-nil when the database changed while the extraction worker was busy.")
 
 (defvar-local vulpea-ui-collection--stale nil
   "Non-nil when the database changed while this buffer was not displayed.
 The buffer re-queries when it is shown again instead of on every
 change nobody sees.")
 
+(defun vulpea-ui-collection--on-db-updated (_path _count)
+  "Refresh visible collection buffers after database content changed.
+Mirrors `vulpea-ui--on-db-updated': runs on vulpea's data-changed
+hook, after the write transaction commits, so the re-query reads the
+new content.  The refresh is deferred while the extraction worker is
+busy (bulk syncs) and flushed once when the burst drains."
+  (setq vulpea-ui-collection--db-refresh-pending t)
+  (vulpea-ui-collection--flush-db-refresh))
+
 (defun vulpea-ui-collection--on-worker-done (_path status _count)
-  "Refresh visible collection buffers when background extraction lands.
-Mirrors `vulpea-ui--on-worker-done': STATUS `applied' and `missing'
-mark the database dirty; the refresh is deferred while the worker is
-busy (bulk syncs) and flushed once when the burst drains.  Buffers
+  "Flush a deferred collection refresh when the extraction worker drains.
+Mirrors `vulpea-ui--on-worker-done': with vulpea's data-changed hook
+available this only flushes what `vulpea-ui-collection--on-db-updated'
+marked pending; on an older vulpea, replies with STATUS `applied' or
+`missing' are also the only database change signal, so they mark the
+refresh pending here."
+  (unless (boundp 'vulpea-db-updated-functions)
+    (when (memq status '(applied missing))
+      (setq vulpea-ui-collection--db-refresh-pending t)))
+  (vulpea-ui-collection--flush-db-refresh))
+
+(defun vulpea-ui-collection--flush-db-refresh ()
+  "Re-query collection buffers for a pending change, unless deferred.
+While the extraction worker is busy the refresh stays pending, so a
+bulk sync coalesces into one refresh when the burst drains.  Buffers
 not shown in any window are only marked stale - they re-query when
 displayed, so a bulk sync does not run one query per hidden view."
-  (when (memq status '(applied missing))
-    (setq vulpea-ui-collection--worker-refresh-pending t))
-  (when (and vulpea-ui-collection--worker-refresh-pending
+  (when (and vulpea-ui-collection--db-refresh-pending
              (or (not (fboundp 'vulpea-db-worker-busy-p))
                  (not (vulpea-db-worker-busy-p))))
-    (setq vulpea-ui-collection--worker-refresh-pending nil)
+    (setq vulpea-ui-collection--db-refresh-pending nil)
     (dolist (buf (buffer-list))
       (with-current-buffer buf
         (when (derived-mode-p 'vulpea-ui-collection-mode)
