@@ -1402,29 +1402,53 @@ unlinked-mentions widget for the duration of the render."
     (should (string-match-p "No unlinked mentions" output))))
 
 (ert-deftest vulpea-ui-test-mentions-ignore-from ()
-  "Render a ignore button for each mention group.
-Check note arguments are passed to `vulpea-mentions-ignore-from' in the
-expected order.  The point should be placed at the Unmentioned Links
-group after the on-click function returns."
+  "Render an ignore button for each mention group.
+Pressing the button passes the note arguments to
+`vulpea-mentions-ignore-from' in the expected order.  The point should
+be placed at the Unlinked Mentions group after the on-click function
+returns."
   (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
         (b (vulpea-ui-test--make-mock-note "id-b" "Note B")))
-    (cl-letf (((symbol-function 'vulpea-mentions-ignore-from)
-               (lambda (note from-note)
-                 (should (equal "tgt" (vulpea-note-id note)))
-                 (should (equal "id-a" (vulpea-note-id from-note))))))
-      (vulpea-ui-test--render-mentions
-       (list (list :note a :path "/a.org" :line 3 :context "mentions Target here")
-             (list :note a :path "/a.org" :line 9 :context "Target again")
-             (list :note b :path "/b.org" :line 5 :context "a Target reference"))
-       (should (string-match-p "[Note A] [ignore]" output))
-       (should (string-match-p "[Note B] [ignore]" output))
-       (vulpea-ui--ignore-mentions-action note a)
-       (let ((unlinked-mentions
-              (seq-find
-               (lambda (w)
-                 (equal (vui-element-get w :vui-key) "Unlinked Mentions"))
-               (vui--collect-widgets))))
-         (should (= (point) (car (vui--widget-bounds unlinked-mentions)))))))))
+    (vulpea-ui-test--render-mentions
+        (list (list :note a :path "/a.org" :line 3 :context "mentions Target here")
+              (list :note a :path "/a.org" :line 9 :context "Target again")
+              (list :note b :path "/b.org" :line 5 :context "a Target reference"))
+      (should (string-match-p (regexp-quote "[Note A] [ignore]") output))
+      (should (string-match-p (regexp-quote "[Note B] [ignore]") output))
+      (with-current-buffer buf-name
+        (let ((calls nil)
+              (last-message nil))
+          (cl-letf (((symbol-function 'vulpea-mentions-ignore-from)
+                     (lambda (note from-note)
+                       (push (list (vulpea-note-id note)
+                                   (vulpea-note-id from-note))
+                             calls)))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (when fmt
+                         (setq last-message (apply #'format fmt args)))
+                       nil)))
+            ;; Press Note A's ignore button (the first one in the buffer),
+            ;; going through the button's own :on-click wiring.
+            (let ((ignore-buttons
+                   (seq-filter
+                    (lambda (w)
+                      (equal (vui-element-get w :vui-tag) "ignore"))
+                    (vui--collect-widgets))))
+              (should (= (length ignore-buttons) 2))
+              (should (vui-activate
+                       (car (vui--widget-bounds (car ignore-buttons)))))))
+          ;; The viewed note comes first, the mentioning note second.
+          (should (equal calls '(("tgt" "id-a"))))
+          (should (equal last-message
+                         "vulpea-ui: ignored mentions of Target from Note A")))
+        (let ((unlinked-mentions
+               (seq-find
+                (lambda (w)
+                  (equal (vui-element-get w :vui-key)
+                         vulpea-ui--unlinked-mentions-title))
+                (vui--collect-widgets))))
+          (should (= (point) (car (vui--widget-bounds unlinked-mentions)))))))))
 
 ;;; Schema health widget
 

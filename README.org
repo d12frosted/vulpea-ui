@@ -507,7 +507,12 @@ Shows notes that link to the current note, grouped by file with:
 Shows notes that mention the current note's title or one of its aliases
 as plain text, *without* an =id:= link pointing back - the notes you may
 want to link. Mentions are grouped by the mentioning note; click a
-context line to jump to it.
+context line to jump to it. Each group has an =ignore= button next to
+the note link: it writes the mentioning note's file-level id to the
+=vulpea-mentions-per-note-ignore-property-key= property of the current
+note (via =vulpea-mentions-ignore-from=), and the sidebar refresh that
+follows the edit drops the group. Mentions from that note stay hidden
+until you undo it with =vulpea-mentions-unignore-from=.
 
 Unlike the other widgets, this one loads *asynchronously*: scanning the
 whole collection for a note's title is expensive, so the search is

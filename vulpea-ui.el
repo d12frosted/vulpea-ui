@@ -1656,6 +1656,12 @@ Returns a list of plists with :note and :count, sorted by title."
 
 ;;; Unlinked mentions widget
 
+(defconst vulpea-ui--unlinked-mentions-title "Unlinked Mentions"
+  "Title of the unlinked mentions widget.
+`vulpea-ui-widget' keys its collapsible by title, so this string is
+also the cursor anchor that `vulpea-ui--ignore-mentions-action' jumps
+to; sharing one constant keeps the two from drifting apart.")
+
 (vui-defcomponent vulpea-ui-widget-unlinked-mentions ()
   "Widget displaying notes that mention the current note without linking.
 
@@ -1687,7 +1693,7 @@ being available on `exec-path' and reports gracefully when it is not."
              (state (car decision))
              (data (cdr decision)))
         (vui-component 'vulpea-ui-widget
-          :title "Unlinked Mentions"
+          :title vulpea-ui--unlinked-mentions-title
           :count (when (eq state 'shown) (length data))
           :children
           (lambda ()
@@ -1828,9 +1834,9 @@ Clicking jumps to the mention's line in the main window."
   "Ignore mentions of NOTE from FROM-NOTE.
 Intended as the \"ignore\" button action for an incoming-mention group."
   (when (fboundp 'vui-goto-key)
-    (vui-goto-key "Unlinked Mentions"))
+    (vui-goto-key vulpea-ui--unlinked-mentions-title))
   (vulpea-mentions-ignore-from note from-note)
-  (message "Ignored mentions of note %s from note %s"
+  (message "vulpea-ui: ignored mentions of %s from %s"
            (vulpea-note-title note)
            (vulpea-note-title from-note)))
 
