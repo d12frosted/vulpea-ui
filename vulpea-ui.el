@@ -56,6 +56,7 @@
 (require 'org-element)
 (require 'transient)
 (require 'vulpea)
+(require 'vulpea-mentions)
 (require 'vui)
 (require 'vui-components)
 
@@ -219,7 +220,7 @@ a particular tag, e.g.
 (defcustom vulpea-ui-fast-parse nil
   "Use fast `org-mode' initialization for parsing.
 When non-nil, skip mode hooks when parsing org files for headings
-and backlinks. This can significantly improve performance but may
+and backlinks.  This can significantly improve performance but may
 cause issues if your org-element parsing depends on mode hooks.
 Disabled by default for safety."
   :type 'boolean
@@ -849,6 +850,7 @@ CHILDREN (implicit) is a function returning the widget content."
       :title display-title
       :initially-expanded (not vulpea-ui-default-widget-collapsed)
       :title-face 'vulpea-ui-widget-header-face
+      :key title
       :indent 2
       (when children
         (funcall children)))))
@@ -1690,19 +1692,21 @@ being available on `exec-path' and reports gracefully when it is not."
           :children
           (lambda ()
             (pcase state
-              ('shown (vulpea-ui--render-unlinked-mentions-body data))
+              ('shown (vulpea-ui--render-unlinked-mentions-body data note))
               ('error
                (vui-muted (format "Unavailable: %s"
                                   (plist-get result :error))))
               (_ (vui-muted "Searching…")))))))))
 
-(defun vulpea-ui--render-unlinked-mentions-body (data)
-  "Render incoming mention DATA as grouped context lines."
+(defun vulpea-ui--render-unlinked-mentions-body (data note)
+  "Render incoming mention DATA as grouped context lines for NOTE."
   (let ((groups (vulpea-ui--group-mentions data)))
     (if groups
         (vui-vstack
          :spacing 1
-         (seq-map #'vulpea-ui--render-mention-group groups))
+         (seq-map (lambda (group)
+                    (vulpea-ui--render-mention-group group note))
+                  groups))
       (vui-muted "No unlinked mentions"))))
 
 (defun vulpea-ui--filter-mentions (mentions filter)
@@ -1772,15 +1776,25 @@ first-encounter order, each with :note, :path, and :mentions - a list of
                       :mentions (nreverse (gethash id lists)))))
             (nreverse order))))
 
-(defun vulpea-ui--render-mention-group (group)
-  "Render a mention GROUP: the mentioning note link and its context lines."
+(defun vulpea-ui--render-mention-group (group source-note)
+  "Render a mention GROUP: the mentioning note link and its context lines.
+
+For each note link, there is an ignore button, which adds the mentioning
+note id to the value of `vulpea-mentions-per-note-ignore-property-key'
+in SOURCE-NOTE."
   (let ((note (plist-get group :note))
         (path (plist-get group :path))
         (mentions (plist-get group :mentions)))
     (vui-vstack
      :spacing 0
      (if note
-         (vui-component 'vulpea-ui-note-link :note note)
+         (vui-hstack
+          (vui-component 'vulpea-ui-note-link :note note)
+          (vui-button "ignore"
+            :face 'vulpea-ui-mention-action-face
+            :on-click (lambda ()
+                        (vulpea-ui--ignore-mentions-action source-note note))
+            :help-echo "Ignore mentions from this note."))
        (vui-muted (file-name-nondirectory path)))
      (vui-vstack
       :spacing 0
@@ -1810,6 +1824,15 @@ Clicking jumps to the mention's line in the main window."
         (org-fold-show-entry)
         (recenter)))))
 
+(defun vulpea-ui--ignore-mentions-action (note from-note)
+  "Ignore mentions of NOTE from FROM-NOTE.
+Intended as the \"ignore\" button action for an incoming-mention group."
+  (when (fboundp 'vui-goto-key)
+    (vui-goto-key "Unlinked Mentions"))
+  (vulpea-mentions-ignore-from note from-note)
+  (message "Ignored mentions of note %s from note %s"
+           (vulpea-note-title note)
+           (vulpea-note-title from-note)))
 
 ;;; Outgoing mentions widget
 
