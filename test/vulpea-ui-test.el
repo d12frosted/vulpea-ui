@@ -552,6 +552,223 @@ vulpea versions that predate list support."
         (should (equal captured '("id" "denote")))))))
 
 
+;;; Narrowing scope tests
+
+(defconst vulpea-ui-test--narrowing-content
+  ":PROPERTIES:
+:ID: file-id
+:END:
+#+title: Narrow Test
+
+* Heading A
+:PROPERTIES:
+:ID: id-a
+:END:
+Alpha body with a few words.
+* Heading B
+:PROPERTIES:
+:ID: id-b
+:END:
+Beta body.
+** Child B1
+:PROPERTIES:
+:ID: id-b-child
+:END:
+Child body.
+* Heading C
+Plain heading without an id.
+"
+  "Org file content used by the narrowing tests.")
+
+(defmacro vulpea-ui-test--with-narrowing-buffer (&rest body)
+  "Visit a temp org file with the narrowing fixture and run BODY.
+BODY runs with the visiting buffer current and `path' bound to the
+file.  The buffer and file are cleaned up afterwards."
+  (declare (indent 0))
+  `(let ((path (make-temp-file "vulpea-ui-test-narrow" nil ".org")))
+     (unwind-protect
+         (progn
+           (with-temp-file path
+             (insert vulpea-ui-test--narrowing-content))
+           (let ((buf (find-file-noselect path)))
+             (unwind-protect
+                 (with-current-buffer buf
+                   ,@body)
+               (kill-buffer buf))))
+       (delete-file path))))
+
+(defun vulpea-ui-test--narrow-to-heading-b ()
+  "Narrow the current buffer to the Heading B subtree."
+  (goto-char (point-min))
+  (re-search-forward "^\\* Heading B")
+  (org-narrow-to-subtree))
+
+(defun vulpea-ui-test--narrowing-note (path)
+  "Make a file-level note for the narrowing fixture at PATH."
+  (make-vulpea-note
+   :id "file-id" :path path :level 0 :pos 1
+   :title "Narrow Test" :primary-title "Narrow Test"))
+
+(ert-deftest vulpea-ui-test-respect-narrowing-default ()
+  "Narrowing awareness is on by default."
+  (should (eq vulpea-ui-respect-narrowing t)))
+
+(ert-deftest vulpea-ui-test-narrowing-scope-widened ()
+  "A widened buffer yields no narrowing scope."
+  (vulpea-ui-test--with-narrowing-buffer
+    (should (null (vulpea-ui--narrowing-scope
+                   (vulpea-ui-test--narrowing-note path))))))
+
+(ert-deftest vulpea-ui-test-narrowing-scope-subtree ()
+  "Narrowing to a subtree scopes to its IDs, in document order.
+The file-level ID and sibling IDs stay out; headings without an ID
+contribute nothing."
+  (vulpea-ui-test--with-narrowing-buffer
+    (vulpea-ui-test--narrow-to-heading-b)
+    (let ((scope (vulpea-ui--narrowing-scope
+                  (vulpea-ui-test--narrowing-note path))))
+      (should scope)
+      (should (equal (plist-get scope :ids) '("id-b" "id-b-child")))
+      (should (= (plist-get scope :beg) (point-min)))
+      (should (= (plist-get scope :end) (point-max))))))
+
+(ert-deftest vulpea-ui-test-narrowing-scope-disabled ()
+  "Disabling `vulpea-ui-respect-narrowing' turns the scope off."
+  (vulpea-ui-test--with-narrowing-buffer
+    (vulpea-ui-test--narrow-to-heading-b)
+    (let ((vulpea-ui-respect-narrowing nil))
+      (should (null (vulpea-ui--narrowing-scope
+                     (vulpea-ui-test--narrowing-note path)))))))
+
+(ert-deftest vulpea-ui-test-narrowing-scope-no-buffer ()
+  "A note whose file is not visited yields no scope."
+  (should (null (vulpea-ui--narrowing-scope
+                 (vulpea-ui-test--narrowing-note
+                  "/tmp/vulpea-ui-test-not-visited.org")))))
+
+(ert-deftest vulpea-ui-test-grouped-backlinks-scoped ()
+  "A narrowing scope restricts backlinks to in-scope target IDs.
+Only scoped IDs are queried, and mentions targeting a scoped heading
+keep their :target-title annotation."
+  (let* ((target (vulpea-ui-test--make-linked-note
+                  "file-id" "Narrow Test" "/tmp/vulpea-ui-test-target.org" nil))
+         (heading-a (make-vulpea-note
+                     :id "id-a" :path "/tmp/vulpea-ui-test-target.org"
+                     :level 1 :pos 50 :title "Heading A" :primary-title "Heading A"))
+         (heading-b (make-vulpea-note
+                     :id "id-b" :path "/tmp/vulpea-ui-test-target.org"
+                     :level 1 :pos 100 :title "Heading B" :primary-title "Heading B"))
+         (bl (vulpea-ui-test--make-linked-note
+              "bl" "Backlinker" "/tmp/vulpea-ui-test-bl.org"
+              '((:type "id" :dest "file-id" :pos 10)
+                (:type "id" :dest "id-a" :pos 20)
+                (:type "id" :dest "id-b" :pos 30))))
+         (queried-ids nil))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-file-path)
+               (lambda (&rest _) (list target heading-a heading-b)))
+              ((symbol-function 'vulpea-db-query-by-links-some)
+               (lambda (ids &rest _) (setq queried-ids ids) (list bl)))
+              ((symbol-function 'vulpea-db-query-by-file-paths)
+               (lambda (&rest _) (list bl)))
+              ((symbol-function 'vulpea-ui--enrich-backlink-mentions)
+               (lambda (_path mentions) mentions)))
+      (let* ((scope (list :beg 100 :end 200 :ids '("id-b")))
+             (result (vulpea-ui--get-grouped-backlinks target scope))
+             (group (car (plist-get result :groups)))
+             (mentions (plist-get group :mentions)))
+        (should (equal queried-ids '("id-b")))
+        (should (= (plist-get result :total-count) 1))
+        (should (= (plist-get result :filtered-count) 1))
+        (should (equal (plist-get (car mentions) :target-id) "id-b"))
+        (should (equal (plist-get (car mentions) :target-title) "Heading B"))))))
+
+(ert-deftest vulpea-ui-test-grouped-backlinks-scope-empty ()
+  "A scope without IDs yields an empty result and queries nothing."
+  (let ((target (vulpea-ui-test--make-linked-note
+                 "file-id" "Narrow Test" "/tmp/vulpea-ui-test-target.org" nil))
+        (queried nil))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-file-path)
+               (lambda (&rest _) (list target)))
+              ((symbol-function 'vulpea-db-query-by-links-some)
+               (lambda (&rest _) (setq queried t) nil)))
+      (let ((result (vulpea-ui--get-grouped-backlinks
+                     target (list :beg 100 :end 200 :ids nil))))
+        (should-not queried)
+        (should (null (plist-get result :groups)))
+        (should (= (plist-get result :total-count) 0))
+        (should (= (plist-get result :filtered-count) 0))))))
+
+(ert-deftest vulpea-ui-test-grouped-backlinks-nil-scope-unscoped ()
+  "Without a scope the whole file's IDs are queried, as before."
+  (let* ((target (vulpea-ui-test--make-linked-note
+                  "file-id" "Narrow Test" "/tmp/vulpea-ui-test-target.org" nil))
+         (heading-b (make-vulpea-note
+                     :id "id-b" :path "/tmp/vulpea-ui-test-target.org"
+                     :level 1 :pos 100 :title "Heading B" :primary-title "Heading B"))
+         (queried-ids nil))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-file-path)
+               (lambda (&rest _) (list target heading-b)))
+              ((symbol-function 'vulpea-db-query-by-links-some)
+               (lambda (ids &rest _) (setq queried-ids ids) nil)))
+      (vulpea-ui--get-grouped-backlinks target)
+      (should (member "file-id" queried-ids))
+      (should (member "id-b" queried-ids)))))
+
+(ert-deftest vulpea-ui-test-backlinks-count-display ()
+  "The count display marks a narrowed view."
+  (should (equal (vulpea-ui--backlinks-count-display 3 3 nil) "3"))
+  (should (equal (vulpea-ui--backlinks-count-display 1 3 nil) "1/3"))
+  (should (equal (vulpea-ui--backlinks-count-display 2 2 '(:ids ("id-b")))
+                 "2 · narrowed"))
+  (should (equal (vulpea-ui--backlinks-count-display 1 2 '(:ids ("id-b")))
+                 "1/2 · narrowed")))
+
+(ert-deftest vulpea-ui-test-compute-stats-respects-narrowing ()
+  "Stats cover only the restriction while narrowed.
+Chars and words come from the accessible portion; links are filtered
+by position.  Disabling `vulpea-ui-respect-narrowing' restores the
+whole-file numbers."
+  (vulpea-ui-test--with-narrowing-buffer
+    (vulpea-ui-test--narrow-to-heading-b)
+    (let* ((narrow-size (- (point-max) (point-min)))
+           (in-pos (+ (point-min) 5))
+           (note (make-vulpea-note
+                  :id "file-id" :path path :level 0 :pos 1
+                  :title "Narrow Test" :primary-title "Narrow Test"
+                  :links (list (list :type "id" :dest "x" :pos 10)
+                               (list :type "id" :dest "y" :pos in-pos)))))
+      (let ((stats (vulpea-ui--compute-stats note)))
+        (should (= (plist-get stats :chars) narrow-size))
+        (should (= (plist-get stats :links) 1)))
+      (let ((vulpea-ui-respect-narrowing nil))
+        (let ((stats (vulpea-ui--compute-stats note)))
+          (should (= (plist-get stats :chars)
+                     (length vulpea-ui-test--narrowing-content)))
+          (should (= (plist-get stats :links) 2)))))))
+
+(ert-deftest vulpea-ui-test-parse-headings-respects-narrowing ()
+  "The outline follows the restriction and keeps file positions.
+While narrowed to a subtree only its headings appear, and their :pos
+values point into the widened file, so jumping from the sidebar lands
+on the right heading.  Disabling `vulpea-ui-respect-narrowing'
+restores the whole-file outline."
+  (vulpea-ui-test--with-narrowing-buffer
+    (let ((heading-b-pos (save-excursion
+                           (goto-char (point-min))
+                           (re-search-forward "^\\* Heading B")
+                           (match-beginning 0)))
+          (note (vulpea-ui-test--narrowing-note path)))
+      (vulpea-ui-test--narrow-to-heading-b)
+      (let ((headings (vulpea-ui--parse-headings note)))
+        (should (equal (mapcar (lambda (h) (plist-get h :title)) headings)
+                       '("Heading B" "Child B1")))
+        (should (= (plist-get (car headings) :pos) heading-b-pos)))
+      (let ((vulpea-ui-respect-narrowing nil))
+        (let ((headings (vulpea-ui--parse-headings note)))
+          (should (equal (mapcar (lambda (h) (plist-get h :title)) headings)
+                         '("Heading A" "Heading B" "Child B1" "Heading C"))))))))
+
+
 ;;; Note preview tests
 
 (ert-deftest vulpea-ui-test-get-preview-nil ()
