@@ -1205,7 +1205,7 @@ narrowed marker."
              (groups (plist-get result :groups))
              (filtered-count (plist-get result :filtered-count))
              (total-count (plist-get result :total-count))
-             (count-display (vulpea-ui--backlinks-count-display
+             (count-display (vulpea-ui--scoped-count-display
                              filtered-count total-count scope)))
         (vui-component 'vulpea-ui-widget
           :title "Backlinks"
@@ -1218,12 +1218,12 @@ narrowed marker."
                  (seq-map #'vulpea-ui--render-backlink-group groups))
               (vui-muted "No backlinks"))))))))
 
-(defun vulpea-ui--backlinks-count-display (filtered total scope)
-  "Format the backlinks header count.
-FILTERED and TOTAL are the mention counts after and before
-`vulpea-ui-backlinks-note-filter' and context-type filtering.  A
-non-nil SCOPE (see `vulpea-ui--narrowing-scope') appends a narrowed
-marker so a shrunken list reads as scoped, not as missing backlinks."
+(defun vulpea-ui--scoped-count-display (filtered total scope)
+  "Format a widget header count that may be narrowing-scoped.
+FILTERED and TOTAL are the item counts after and before presentation
+filtering; widgets without such filtering pass the same number twice.
+A non-nil SCOPE (see `vulpea-ui-narrowing-scope') appends a narrowed
+marker so a shrunken list reads as scoped, not as missing items."
   (let ((base (if (= filtered total)
                   (format "%d" filtered)
                 (format "%d/%d" filtered total))))
@@ -1737,15 +1737,20 @@ indicating which heading of the current note the mention targets."
 ;;; Forward links widget
 
 (vui-defcomponent vulpea-ui-widget-links ()
-  "Widget displaying notes that the current note links to."
+  "Widget displaying notes that the current note links to.
+When the note's buffer is narrowed (and `vulpea-ui-respect-narrowing'
+is enabled), only links positioned inside the restriction are shown,
+and the header count carries a narrowed marker."
   :render
   (let ((note (use-vulpea-ui-note)))
     (when note
-      (let ((forward-links (vui-use-memo (note)
-                             (vulpea-ui--get-forward-links note))))
+      (let* ((scope (use-vulpea-ui-scope))
+             (forward-links (vui-use-memo (note scope)
+                              (vulpea-ui--get-forward-links note scope))))
         (vui-component 'vulpea-ui-widget
           :title "Links"
-          :count (length forward-links)
+          :count (vulpea-ui--scoped-count-display
+                  (length forward-links) (length forward-links) scope)
           :children
           (lambda ()
             (if forward-links
@@ -1763,9 +1768,14 @@ indicating which heading of the current note the mention targets."
                   forward-links))
               (vui-muted "No links"))))))))
 
-(defun vulpea-ui--get-forward-links (note)
+(defun vulpea-ui--get-forward-links (note &optional scope)
   "Get all notes linked from NOTE's file with counts.
-Collects links from all headings in the file, not just the current note.
+Collects links from all headings in the file, not just the current
+note.  A non-nil SCOPE (a narrowing scope plist, see
+`vulpea-ui-narrowing-scope') keeps only links whose position falls
+inside the restriction, so a narrowed buffer shows only what the
+accessible portion links to.  Positions come from the database, so
+unsaved edits can shift them until the next sync.
 Returns a list of plists with :note and :count, sorted by title."
   (when note
     (let* ((path (vulpea-note-path note))
@@ -1775,6 +1785,14 @@ Returns a list of plists with :note and :count, sorted by title."
            (all-links (seq-mapcat #'vulpea-note-links file-notes))
            ;; Filter to note-to-note links (see `vulpea-ui-link-types')
            (id-links (seq-filter #'vulpea-ui--note-link-p all-links))
+           (id-links (if scope
+                         (let ((beg (plist-get scope :beg))
+                               (end (plist-get scope :end)))
+                           (seq-filter (lambda (link)
+                                         (let ((pos (plist-get link :pos)))
+                                           (and pos (>= pos beg) (< pos end))))
+                                       id-links))
+                       id-links))
            ;; Count occurrences of each destination ID
            (id-counts (make-hash-table :test 'equal)))
       (dolist (link id-links)
