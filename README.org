@@ -194,6 +194,13 @@ list of types.
 
 ;; Idle delay before auto-refresh (in seconds)
 (setq vulpea-ui-auto-refresh-delay 1.5)
+
+;; Follow narrowing in the note's buffer (enabled by default). When
+;; the buffer is narrowed (e.g. org-narrow-to-subtree), the backlinks
+;; widget shows only links targeting IDs inside the restriction, and
+;; outline/stats cover only the accessible portion. Set to nil to
+;; always see the whole file.
+(setq vulpea-ui-respect-narrowing t)
 #+end_src
 
 * Commands
@@ -474,6 +481,8 @@ schema.
 #+end_html
 
 Displays the heading structure of the note. Click headings to navigate.
+When the buffer is narrowed, only the accessible headings are shown
+(see =vulpea-ui-respect-narrowing=).
 
 ** Backlinks widget
 
@@ -497,6 +506,12 @@ Shows notes that link to the current note, grouped by file with:
   - =λ= code
   - =†= footnote
   - (no indicator) prose
+
+When the buffer is narrowed to a subtree, the widget shows only
+backlinks targeting IDs inside the restriction and marks the header
+count as narrowed (see =vulpea-ui-respect-narrowing=). Links to the
+file-level ID or to headings outside the restriction reappear on
+widen.
 
 ** Unlinked mentions widget
 

@@ -237,7 +237,8 @@ When non-nil, the sidebar will refresh:
 - After database content changes (full refresh for backlinks/links;
   on a vulpea without `vulpea-db-updated-functions', after saving a
   buffer instead)
-- After idle time (stats and outline only)"
+- After idle time (buffer-derived state: stats, outline, and
+  narrowing changes, see `vulpea-ui-respect-narrowing')"
   :type 'boolean
   :group 'vulpea-ui)
 
@@ -245,6 +246,20 @@ When non-nil, the sidebar will refresh:
   "Delay in seconds before auto-refreshing on idle.
 Only used when `vulpea-ui-auto-refresh' is non-nil."
   :type 'number
+  :group 'vulpea-ui)
+
+(defcustom vulpea-ui-respect-narrowing t
+  "Whether the sidebar follows narrowing in the displayed note's buffer.
+When non-nil and the buffer visiting the note is narrowed (for
+example with `org-narrow-to-subtree'), buffer-derived widgets (outline,
+stats) cover only the accessible portion, and the backlinks widget
+shows only links targeting IDs inside the restriction.  When nil, the
+sidebar always reflects the whole file.
+
+Narrowing has no change hook, so the sidebar notices a narrow or widen
+on the next refresh - the idle timer when `vulpea-ui-auto-refresh' is
+enabled, or a manual `vulpea-ui-sidebar-refresh'."
+  :type 'boolean
   :group 'vulpea-ui)
 
 
@@ -932,6 +947,49 @@ STRIP-METADATA removes org metadata lines when non-nil."
             (string-join (nreverse lines) "\n")))))))
 
 
+;;; Narrowing scope
+
+(defun vulpea-ui--restriction-key (buf)
+  "Return BUF's active restriction as a (BEG . END) cons, or nil.
+Nil when BUF is not narrowed, not live, or when
+`vulpea-ui-respect-narrowing' is disabled.  Used as a memo dependency
+so buffer-derived widgets recompute when the restriction changes."
+  (when (and vulpea-ui-respect-narrowing (buffer-live-p buf))
+    (with-current-buffer buf
+      (when (buffer-narrowed-p)
+        (cons (point-min) (point-max))))))
+
+(defun vulpea-ui--narrowing-scope (note)
+  "Return the narrowing scope for NOTE's visiting buffer, or nil.
+Non-nil only when `vulpea-ui-respect-narrowing' is enabled and an
+org buffer visiting NOTE's file is narrowed.  The scope is a plist
+with :beg and :end (the restriction bounds) and :ids, the IDs of the
+entries inside the restriction in document order: the entry at the
+restriction start plus every heading below it.  IDs outside the
+restriction never enter the scope - narrowing to a subtree drops the
+file-level ID, so links targeting the file as a whole fall out of a
+subtree-scoped view."
+  (when (and vulpea-ui-respect-narrowing note (vulpea-note-path note))
+    (let ((buf (find-buffer-visiting (vulpea-note-path note))))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (when (and (buffer-narrowed-p) (derived-mode-p 'org-mode))
+            (let (ids)
+              (save-excursion
+                (goto-char (point-min))
+                ;; The entry containing the restriction start.  When
+                ;; the restriction starts mid-entry its heading sits
+                ;; outside the accessible portion and no ID is found -
+                ;; the scope then holds only the headings below.
+                (when-let* ((id (ignore-errors (org-entry-get nil "ID"))))
+                  (push id ids))
+                (while (outline-next-heading)
+                  (when-let* ((id (org-entry-get nil "ID")))
+                    (push id ids))))
+              (list :beg (point-min) :end (point-max)
+                    :ids (delete-dups (nreverse ids))))))))))
+
+
 ;;; Stats widget
 
 (vui-defcomponent vulpea-ui-widget-stats ()
@@ -942,7 +1000,8 @@ STRIP-METADATA removes org metadata lines when non-nil."
       (let* ((note-buf (when (vulpea-note-path note)
                          (find-buffer-visiting (vulpea-note-path note))))
              (tick (when note-buf (buffer-modified-tick note-buf)))
-             (stats (vui-use-memo (note tick)
+             (restriction (vulpea-ui--restriction-key note-buf))
+             (stats (vui-use-memo (note tick restriction)
                       (vulpea-ui--compute-stats note)))
              (chars (plist-get stats :chars))
              (words (plist-get stats :words))
@@ -961,19 +1020,34 @@ STRIP-METADATA removes org metadata lines when non-nil."
 (defun vulpea-ui--compute-stats (note)
   "Compute statistics for NOTE.
 Returns a plist with :chars, :words, and :links.
-If the note's file is open in a buffer, reads from buffer for live stats.
-Otherwise reads from disk."
+If the note's file is open in a buffer, reads from buffer for live
+stats; a narrowed buffer contributes only its accessible portion (see
+`vulpea-ui-respect-narrowing'), with the link count filtered by
+position to match.  Otherwise reads from disk."
   (if (and note (vulpea-note-path note))
       (let ((path (vulpea-note-path note))
             (links (seq-filter #'vulpea-ui--note-link-p
                                (vulpea-note-links note)))
             (existing-buf (find-buffer-visiting (vulpea-note-path note))))
-        (let* ((content (if existing-buf
+        (let* ((restriction (vulpea-ui--restriction-key existing-buf))
+               (content (if existing-buf
                             (with-current-buffer existing-buf
-                              (buffer-substring-no-properties (point-min) (point-max)))
+                              (if restriction
+                                  (buffer-substring-no-properties (point-min) (point-max))
+                                (save-restriction
+                                  (widen)
+                                  (buffer-substring-no-properties (point-min) (point-max)))))
                           (with-temp-buffer
                             (insert-file-contents path)
                             (buffer-substring-no-properties (point-min) (point-max)))))
+               (links (if restriction
+                          (seq-filter (lambda (link)
+                                        (let ((pos (plist-get link :pos)))
+                                          (and pos
+                                               (>= pos (car restriction))
+                                               (< pos (cdr restriction)))))
+                                      links)
+                        links))
                (chars (length content))
                (words (length (split-string content "\\W+" t))))
           (list :chars chars :words words :links (length links))))
@@ -1004,7 +1078,8 @@ Otherwise reads from disk."
       (let* ((note-buf (when (vulpea-note-path note)
                          (find-buffer-visiting (vulpea-note-path note))))
              (tick (when note-buf (buffer-modified-tick note-buf)))
-             (headings (vui-use-memo (note tick)
+             (restriction (vulpea-ui--restriction-key note-buf))
+             (headings (vui-use-memo (note tick restriction)
                          (vulpea-ui--parse-headings note))))
         (vui-component 'vulpea-ui-widget
           :title "Outline"
@@ -1030,15 +1105,27 @@ Otherwise reads from disk."
 
 (defun vulpea-ui--parse-headings (note)
   "Parse headings from NOTE using org-element.
-Returns a list of plists with :title, :level, and :pos."
+Returns a list of plists with :title, :level, and :pos.
+When the buffer visiting NOTE's file is narrowed (and
+`vulpea-ui-respect-narrowing' is enabled), only the accessible
+portion is parsed; :pos values always point into the widened file, so
+jumping from the outline lands on the heading regardless of
+narrowing."
   (when (and note (vulpea-note-path note))
     (let ((path (vulpea-note-path note))
           (max-depth vulpea-ui-outline-max-depth)
-          (existing-buf (find-buffer-visiting (vulpea-note-path note))))
+          (existing-buf (find-buffer-visiting (vulpea-note-path note)))
+          (offset 0))
       (with-temp-buffer
         (if existing-buf
             (insert (with-current-buffer existing-buf
-                      (buffer-substring-no-properties (point-min) (point-max))))
+                      (if (vulpea-ui--restriction-key existing-buf)
+                          (progn
+                            (setq offset (1- (point-min)))
+                            (buffer-substring-no-properties (point-min) (point-max)))
+                        (save-restriction
+                          (widen)
+                          (buffer-substring-no-properties (point-min) (point-max))))))
           (insert-file-contents path))
         (vulpea-ui--setup-org-mode)
         (let ((headings nil)
@@ -1051,7 +1138,8 @@ Returns a list of plists with :title, :level, and :pos."
                     (pos (org-element-property :begin hl)))
                 (when (and (not (vulpea-ui--heading-archived-p hl archive-tag))
                            (or (null max-depth) (<= level max-depth)))
-                  (push (list :title title :level level :pos pos) headings)))))
+                  (push (list :title title :level level :pos (+ offset pos))
+                        headings)))))
           (nreverse headings))))))
 
 (defun vulpea-ui--render-outline-heading (heading note)
@@ -1087,18 +1175,22 @@ NOTE is the parent note for navigation."
 
 (vui-defcomponent vulpea-ui-widget-backlinks ()
   "Widget displaying notes that link to the current note.
-Groups backlinks by file and shows heading context with optional previews."
+Groups backlinks by file and shows heading context with optional
+previews.  When the note's buffer is narrowed (and
+`vulpea-ui-respect-narrowing' is enabled), only backlinks targeting
+IDs inside the restriction are shown, and the header count carries a
+narrowed marker."
   :render
   (let ((note (use-vulpea-ui-note)))
     (when note
-      (let* ((result (vui-use-memo (note)
-                       (vulpea-ui--get-grouped-backlinks note)))
+      (let* ((scope (vulpea-ui--narrowing-scope note))
+             (result (vui-use-memo (note scope)
+                       (vulpea-ui--get-grouped-backlinks note scope)))
              (groups (plist-get result :groups))
              (filtered-count (plist-get result :filtered-count))
              (total-count (plist-get result :total-count))
-             (count-display (if (= filtered-count total-count)
-                                filtered-count
-                              (format "%d/%d" filtered-count total-count))))
+             (count-display (vulpea-ui--backlinks-count-display
+                             filtered-count total-count scope)))
         (vui-component 'vulpea-ui-widget
           :title "Backlinks"
           :count count-display
@@ -1110,11 +1202,24 @@ Groups backlinks by file and shows heading context with optional previews."
                  (seq-map #'vulpea-ui--render-backlink-group groups))
               (vui-muted "No backlinks"))))))))
 
-(defun vulpea-ui--get-grouped-backlinks (note)
+(defun vulpea-ui--backlinks-count-display (filtered total scope)
+  "Format the backlinks header count.
+FILTERED and TOTAL are the mention counts after and before
+`vulpea-ui-backlinks-note-filter' and context-type filtering.  A
+non-nil SCOPE (see `vulpea-ui--narrowing-scope') appends a narrowed
+marker so a shrunken list reads as scoped, not as missing backlinks."
+  (let ((base (if (= filtered total)
+                  (format "%d" filtered)
+                (format "%d/%d" filtered total))))
+    (if scope (concat base " · narrowed") base)))
+
+(defun vulpea-ui--get-grouped-backlinks (note &optional scope)
   "Get backlinks to NOTE grouped by file.
 Backlinks may target any ID living in NOTE's file: the file-level ID
 or a heading-level one, so links to a heading show up alongside links
-to the file itself.
+to the file itself.  A non-nil SCOPE (a narrowing scope plist, see
+`vulpea-ui--narrowing-scope') restricts the targets to its :ids, so a
+narrowed buffer shows only backlinks into the accessible portion.
 Returns a plist with :groups, :filtered-count, and :total-count.
 Each group has :file-note, :path, and :mentions.
 Each mention has :heading-path, :pos, :preview, and - when the link
@@ -1124,6 +1229,8 @@ Applies `vulpea-ui-backlinks-note-filter' and
   (if (null note)
       (list :groups nil :filtered-count 0 :total-count 0)
     (let* ((target-id (vulpea-note-id note))
+           (scope-ids (plist-get scope :ids))
+           (in-scope (lambda (id) (or (null scope) (member id scope-ids))))
            ;; Every note in the file - the file-level note plus any
            ;; heading carrying its own ID - is a valid link target.
            (file-notes (when (vulpea-note-path note)
@@ -1131,12 +1238,15 @@ Applies `vulpea-ui-backlinks-note-filter' and
                           (vulpea-note-path note))))
            (titles-by-id (make-hash-table :test 'equal)))
       (dolist (fn file-notes)
-        (puthash (vulpea-note-id fn) (vulpea-note-title fn) titles-by-id))
+        (when (funcall in-scope (vulpea-note-id fn))
+          (puthash (vulpea-note-id fn) (vulpea-note-title fn) titles-by-id)))
       ;; The anchor note is a target even when the DB has not indexed
       ;; its file yet (or the path query returns nothing).
-      (puthash target-id (vulpea-note-title note) titles-by-id)
-      (let* ((backlinks (vulpea-db-query-by-links-some
-                         (hash-table-keys titles-by-id)))
+      (when (funcall in-scope target-id)
+        (puthash target-id (vulpea-note-title note) titles-by-id))
+      (let* ((backlinks (when (> (hash-table-count titles-by-id) 0)
+                          (vulpea-db-query-by-links-some
+                           (hash-table-keys titles-by-id))))
              ;; Group backlinks by file path
              (by-path (make-hash-table :test 'equal))
              (total-count 0))
