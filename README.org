@@ -197,10 +197,25 @@ list of types.
 
 ;; Follow narrowing in the note's buffer (enabled by default). When
 ;; the buffer is narrowed (e.g. org-narrow-to-subtree), the backlinks
-;; widget shows only links targeting IDs inside the restriction, and
+;; widget shows only links targeting IDs inside the restriction, the
+;; links widget shows only links positioned inside it, and
 ;; outline/stats cover only the accessible portion. Set to nil to
 ;; always see the whole file.
 (setq vulpea-ui-respect-narrowing t)
+#+end_src
+
+Emacs has no narrowing hook, so the sidebar notices a narrow or widen
+on the next idle refresh. If you want it instantly, refresh right
+after toggling:
+
+#+begin_src emacs-lisp
+(defun my/org-toggle-narrow-and-sidebar ()
+  "Toggle subtree narrowing and refresh the sidebar immediately."
+  (interactive)
+  (org-toggle-narrow-to-subtree)
+  (vulpea-ui-sidebar-refresh))
+
+(define-key org-mode-map (kbd "M-<insert>") #'my/org-toggle-narrow-and-sidebar)
 #+end_src
 
 * Commands
@@ -561,6 +576,11 @@ affecting both mention widgets), customise =vulpea-mentions-note-filter=.
 #+end_html
 
 Shows notes that the current note links to.
+
+When the buffer is narrowed, only links positioned inside the
+restriction are counted, and the header count is marked as narrowed
+(see =vulpea-ui-respect-narrowing=). Link positions come from the
+database, so unsaved edits can shift them until the next sync.
 
 ** Outgoing mentions widget
 

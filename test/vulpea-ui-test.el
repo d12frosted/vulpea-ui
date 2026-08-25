@@ -714,14 +714,43 @@ keep their :target-title annotation."
       (should (member "file-id" queried-ids))
       (should (member "id-b" queried-ids)))))
 
-(ert-deftest vulpea-ui-test-backlinks-count-display ()
+(ert-deftest vulpea-ui-test-scoped-count-display ()
   "The count display marks a narrowed view."
-  (should (equal (vulpea-ui--backlinks-count-display 3 3 nil) "3"))
-  (should (equal (vulpea-ui--backlinks-count-display 1 3 nil) "1/3"))
-  (should (equal (vulpea-ui--backlinks-count-display 2 2 '(:ids ("id-b")))
+  (should (equal (vulpea-ui--scoped-count-display 3 3 nil) "3"))
+  (should (equal (vulpea-ui--scoped-count-display 1 3 nil) "1/3"))
+  (should (equal (vulpea-ui--scoped-count-display 2 2 '(:ids ("id-b")))
                  "2 · narrowed"))
-  (should (equal (vulpea-ui--backlinks-count-display 1 2 '(:ids ("id-b")))
+  (should (equal (vulpea-ui--scoped-count-display 1 2 '(:ids ("id-b")))
                  "1/2 · narrowed")))
+
+(ert-deftest vulpea-ui-test-forward-links-scoped ()
+  "A narrowing scope keeps only links positioned inside the restriction."
+  (let* ((src (vulpea-ui-test--make-linked-note
+               "src" "Source" "/tmp/vulpea-ui-test-src.org"
+               '((:type "id" :dest "a" :pos 10)
+                 (:type "id" :dest "b" :pos 150)
+                 (:type "id" :dest "c" :pos 250))))
+         (note-a (vulpea-ui-test--make-linked-note
+                  "a" "A" "/tmp/vulpea-ui-test-a.org" nil))
+         (note-b (vulpea-ui-test--make-linked-note
+                  "b" "B" "/tmp/vulpea-ui-test-b.org" nil))
+         (note-c (vulpea-ui-test--make-linked-note
+                  "c" "C" "/tmp/vulpea-ui-test-c.org" nil)))
+    (cl-letf (((symbol-function 'vulpea-db-query-by-file-paths)
+               (lambda (&rest _) (list src)))
+              ((symbol-function 'vulpea-db-query-by-ids)
+               (lambda (ids)
+                 (seq-filter (lambda (n) (member (vulpea-note-id n) ids))
+                             (list note-a note-b note-c)))))
+      ;; Scoped: only the link inside [100, 200) survives
+      (should (equal (mapcar (lambda (r) (vulpea-note-id (plist-get r :note)))
+                             (vulpea-ui--get-forward-links
+                              src '(:beg 100 :end 200 :ids ("id-x"))))
+                     '("b")))
+      ;; No scope: everything, as before
+      (should (equal (mapcar (lambda (r) (vulpea-note-id (plist-get r :note)))
+                             (vulpea-ui--get-forward-links src))
+                     '("a" "b" "c"))))))
 
 (ert-deftest vulpea-ui-test-compute-stats-respects-narrowing ()
   "Stats cover only the restriction while narrowed.
@@ -857,6 +886,27 @@ carries the narrowed marker."
         (vulpea-ui-test--mount-sidebar-root note
           (should (equal seen marker))
           (should (string-match-p "Backlinks (0 · narrowed)" output)))))))
+
+(ert-deftest vulpea-ui-test-links-widget-consumes-scope-context ()
+  "The links widget takes its scope from the context.
+The provided scope reaches the collection function and the header
+count carries the narrowed marker."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'links
+                               :component 'vulpea-ui-widget-links
+                               :order 100)
+    (let ((note (vulpea-ui-test--make-mock-note "scoped" "Scoped"))
+          (marker '(:beg 10 :end 20 :ids ("id-x")))
+          (seen 'unset))
+      (cl-letf (((symbol-function 'vulpea-ui-narrowing-scope)
+                 (lambda (_note) marker))
+                ((symbol-function 'vulpea-ui--get-forward-links)
+                 (lambda (_note &optional scope)
+                   (setq seen scope)
+                   nil)))
+        (vulpea-ui-test--mount-sidebar-root note
+          (should (equal seen marker))
+          (should (string-match-p "Links (0 · narrowed)" output)))))))
 
 (ert-deftest vulpea-ui-test-stats-widget-narrowed-through-context ()
   "A narrowed buffer flows through the context into the stats widget."
