@@ -268,6 +268,18 @@ enabled, or a manual `vulpea-ui-sidebar-refresh'."
 (vui-defcontext vulpea-ui-note nil
   "The current vulpea note being displayed in the sidebar.")
 
+(vui-defcontext vulpea-ui-scope nil
+  "The narrowing scope of the displayed note's buffer, or nil.
+Computed once per render pass by the sidebar root (from
+`vulpea-ui-narrowing-scope') and provided to every widget, so widgets
+share one scope instead of each rescanning the buffer.  Nil when the
+buffer is widened or `vulpea-ui-respect-narrowing' is disabled.
+
+Custom widgets consume it with `use-vulpea-ui-scope' and should
+include the value in their `vui-use-memo' dependencies, so their data
+recomputes when the user narrows or widens; see the README for a
+recipe.")
+
 
 ;;; Widget Registry
 
@@ -959,7 +971,7 @@ so buffer-derived widgets recompute when the restriction changes."
       (when (buffer-narrowed-p)
         (cons (point-min) (point-max))))))
 
-(defun vulpea-ui--narrowing-scope (note)
+(defun vulpea-ui-narrowing-scope (note)
   "Return the narrowing scope for NOTE's visiting buffer, or nil.
 Non-nil only when `vulpea-ui-respect-narrowing' is enabled and an
 org buffer visiting NOTE's file is narrowed.  The scope is a plist
@@ -968,7 +980,11 @@ entries inside the restriction in document order: the entry at the
 restriction start plus every heading below it.  IDs outside the
 restriction never enter the scope - narrowing to a subtree drops the
 file-level ID, so links targeting the file as a whole fall out of a
-subtree-scoped view."
+subtree-scoped view.
+
+The sidebar root calls this once per render pass and provides the
+result as the `vulpea-ui-scope' context; widgets should consume the
+context via `use-vulpea-ui-scope' rather than calling this directly."
   (when (and vulpea-ui-respect-narrowing note (vulpea-note-path note))
     (let ((buf (find-buffer-visiting (vulpea-note-path note))))
       (when (buffer-live-p buf)
@@ -1000,8 +1016,8 @@ subtree-scoped view."
       (let* ((note-buf (when (vulpea-note-path note)
                          (find-buffer-visiting (vulpea-note-path note))))
              (tick (when note-buf (buffer-modified-tick note-buf)))
-             (restriction (vulpea-ui--restriction-key note-buf))
-             (stats (vui-use-memo (note tick restriction)
+             (scope (use-vulpea-ui-scope))
+             (stats (vui-use-memo (note tick scope)
                       (vulpea-ui--compute-stats note)))
              (chars (plist-get stats :chars))
              (words (plist-get stats :words))
@@ -1078,8 +1094,8 @@ position to match.  Otherwise reads from disk."
       (let* ((note-buf (when (vulpea-note-path note)
                          (find-buffer-visiting (vulpea-note-path note))))
              (tick (when note-buf (buffer-modified-tick note-buf)))
-             (restriction (vulpea-ui--restriction-key note-buf))
-             (headings (vui-use-memo (note tick restriction)
+             (scope (use-vulpea-ui-scope))
+             (headings (vui-use-memo (note tick scope)
                          (vulpea-ui--parse-headings note))))
         (vui-component 'vulpea-ui-widget
           :title "Outline"
@@ -1183,7 +1199,7 @@ narrowed marker."
   :render
   (let ((note (use-vulpea-ui-note)))
     (when note
-      (let* ((scope (vulpea-ui--narrowing-scope note))
+      (let* ((scope (use-vulpea-ui-scope))
              (result (vui-use-memo (note scope)
                        (vulpea-ui--get-grouped-backlinks note scope)))
              (groups (plist-get result :groups))
@@ -2234,10 +2250,13 @@ all\" button action for an outgoing-mention group."
       (vui-muted "No vulpea note selected"))))
 
 (vui-defcomponent vulpea-ui-sidebar-root (note)
-  "Root component for the sidebar with NOTE context."
+  "Root component for the sidebar with NOTE and narrowing scope context.
+The narrowing scope is computed here, once per render pass, and shared
+with every widget through the `vulpea-ui-scope' context."
   :render
   (vulpea-ui-note-provider note
-    (vui-component 'vulpea-ui-sidebar-content)))
+    (vulpea-ui-scope-provider (vulpea-ui-narrowing-scope note)
+      (vui-component 'vulpea-ui-sidebar-content))))
 
 
 ;;; Rendering

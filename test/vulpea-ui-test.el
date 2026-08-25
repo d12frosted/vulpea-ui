@@ -616,7 +616,7 @@ file.  The buffer and file are cleaned up afterwards."
 (ert-deftest vulpea-ui-test-narrowing-scope-widened ()
   "A widened buffer yields no narrowing scope."
   (vulpea-ui-test--with-narrowing-buffer
-    (should (null (vulpea-ui--narrowing-scope
+    (should (null (vulpea-ui-narrowing-scope
                    (vulpea-ui-test--narrowing-note path))))))
 
 (ert-deftest vulpea-ui-test-narrowing-scope-subtree ()
@@ -625,7 +625,7 @@ The file-level ID and sibling IDs stay out; headings without an ID
 contribute nothing."
   (vulpea-ui-test--with-narrowing-buffer
     (vulpea-ui-test--narrow-to-heading-b)
-    (let ((scope (vulpea-ui--narrowing-scope
+    (let ((scope (vulpea-ui-narrowing-scope
                   (vulpea-ui-test--narrowing-note path))))
       (should scope)
       (should (equal (plist-get scope :ids) '("id-b" "id-b-child")))
@@ -637,12 +637,12 @@ contribute nothing."
   (vulpea-ui-test--with-narrowing-buffer
     (vulpea-ui-test--narrow-to-heading-b)
     (let ((vulpea-ui-respect-narrowing nil))
-      (should (null (vulpea-ui--narrowing-scope
+      (should (null (vulpea-ui-narrowing-scope
                      (vulpea-ui-test--narrowing-note path)))))))
 
 (ert-deftest vulpea-ui-test-narrowing-scope-no-buffer ()
   "A note whose file is not visited yields no scope."
-  (should (null (vulpea-ui--narrowing-scope
+  (should (null (vulpea-ui-narrowing-scope
                  (vulpea-ui-test--narrowing-note
                   "/tmp/vulpea-ui-test-not-visited.org")))))
 
@@ -767,6 +767,110 @@ restores the whole-file outline."
         (let ((headings (vulpea-ui--parse-headings note)))
           (should (equal (mapcar (lambda (h) (plist-get h :title)) headings)
                          '("Heading A" "Heading B" "Child B1" "Heading C"))))))))
+
+
+;;; Narrowing scope context tests
+
+(defvar vulpea-ui-test--seen-scope 'unset
+  "Scope captured by `vulpea-ui-test--scope-probe' during render.")
+
+(vui-defcomponent vulpea-ui-test--scope-probe ()
+  "Probe widget capturing the narrowing scope context."
+  :render
+  (progn
+    (setq vulpea-ui-test--seen-scope (use-vulpea-ui-scope))
+    (vui-text "scope probe")))
+
+(defmacro vulpea-ui-test--mount-sidebar-root (note &rest body)
+  "Mount `vulpea-ui-sidebar-root' with NOTE and run BODY.
+BODY runs with `output' bound to the rendered buffer text.  The
+sidebar buffer is cleaned up afterwards.  Widgets must already be
+registered (use `vulpea-ui-test--with-clean-registry' around this)."
+  (declare (indent 1))
+  `(let ((buf-name "*vulpea-ui-scope-test*"))
+     (with-current-buffer (get-buffer-create buf-name)
+       (vulpea-ui-sidebar-mode))
+     (unwind-protect
+         (progn
+           (vui-mount (vui-component 'vulpea-ui-sidebar-root :note ,note)
+                      buf-name)
+           (let ((output (with-current-buffer buf-name
+                           (buffer-substring-no-properties
+                            (point-min) (point-max)))))
+             (ignore output)
+             ,@body))
+       (when (get-buffer buf-name)
+         (kill-buffer buf-name)))))
+
+(ert-deftest vulpea-ui-test-narrowing-scope-is-public ()
+  "The narrowing scope entry point is public API for custom widgets."
+  (should (fboundp 'vulpea-ui-narrowing-scope))
+  (should-not (fboundp 'vulpea-ui--narrowing-scope)))
+
+(ert-deftest vulpea-ui-test-scope-context-provided ()
+  "The sidebar root provides the narrowing scope as context."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'scope-probe
+                               :component 'vulpea-ui-test--scope-probe
+                               :order 100)
+    (let ((note (vulpea-ui-test--make-mock-note "scoped" "Scoped"))
+          (marker '(:beg 10 :end 20 :ids ("id-x"))))
+      (setq vulpea-ui-test--seen-scope 'unset)
+      (cl-letf (((symbol-function 'vulpea-ui-narrowing-scope)
+                 (lambda (_note) marker)))
+        (vulpea-ui-test--mount-sidebar-root note
+          (should (equal vulpea-ui-test--seen-scope marker)))))))
+
+(ert-deftest vulpea-ui-test-scope-context-computed-once ()
+  "The scope is computed once per render pass, however many widgets consume it."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'probe-a
+                               :component 'vulpea-ui-test--scope-probe
+                               :order 100)
+    (vulpea-ui-register-widget 'probe-b
+                               :component 'vulpea-ui-test--scope-probe
+                               :order 200)
+    (let ((note (vulpea-ui-test--make-mock-note "scoped" "Scoped"))
+          (calls 0))
+      (cl-letf (((symbol-function 'vulpea-ui-narrowing-scope)
+                 (lambda (_note) (cl-incf calls) nil)))
+        (vulpea-ui-test--mount-sidebar-root note
+          (should (= calls 1)))))))
+
+(ert-deftest vulpea-ui-test-backlinks-widget-consumes-scope-context ()
+  "The backlinks widget takes its scope from the context.
+The provided scope reaches the grouping function and the header count
+carries the narrowed marker."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'backlinks
+                               :component 'vulpea-ui-widget-backlinks
+                               :order 100)
+    (let ((note (vulpea-ui-test--make-mock-note "scoped" "Scoped"))
+          (marker '(:beg 10 :end 20 :ids ("id-x")))
+          (seen 'unset))
+      (cl-letf (((symbol-function 'vulpea-ui-narrowing-scope)
+                 (lambda (_note) marker))
+                ((symbol-function 'vulpea-ui--get-grouped-backlinks)
+                 (lambda (_note &optional scope)
+                   (setq seen scope)
+                   (list :groups nil :filtered-count 0 :total-count 0))))
+        (vulpea-ui-test--mount-sidebar-root note
+          (should (equal seen marker))
+          (should (string-match-p "Backlinks (0 · narrowed)" output)))))))
+
+(ert-deftest vulpea-ui-test-stats-widget-narrowed-through-context ()
+  "A narrowed buffer flows through the context into the stats widget."
+  (vulpea-ui-test--with-narrowing-buffer
+    (vulpea-ui-test--narrow-to-heading-b)
+    (let ((narrow-size (- (point-max) (point-min)))
+          (note (vulpea-ui-test--narrowing-note path)))
+      (vulpea-ui-test--with-clean-registry
+        (vulpea-ui-register-widget 'stats
+                                   :component 'vulpea-ui-widget-stats
+                                   :order 100)
+        (vulpea-ui-test--mount-sidebar-root note
+          (should (string-match-p (format "%d chars" narrow-size)
+                                  output)))))))
 
 
 ;;; Note preview tests
