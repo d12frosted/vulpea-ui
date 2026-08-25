@@ -630,6 +630,41 @@ vulpea-ui registers these widgets by default:
   :order 150)                      ; optional: default 100
 #+end_src
 
+** Narrowing-aware widgets
+
+There is no narrowing hook in Emacs, so widgets never receive a
+"narrowing changed" event. Instead the sidebar root computes the
+narrowing scope once per render pass and provides it as context: nil
+when the buffer is widened (or =vulpea-ui-respect-narrowing= is off),
+otherwise a plist with =:beg= and =:end= (the restriction bounds) and
+=:ids= (IDs of the entries inside the restriction, in document
+order).
+
+A custom widget that wants to follow narrowing reads the scope with
+=use-vulpea-ui-scope=, puts it in its =vui-use-memo= dependencies,
+and scopes its data by it:
+
+#+begin_src emacs-lisp
+(vui-defcomponent my-custom-widget-component ()
+  "Some widget that follows narrowing."
+  :render
+  (let ((note (use-vulpea-ui-note))
+        (scope (use-vulpea-ui-scope)))
+    (when note
+      (let ((data (vui-use-memo (note scope)
+                    (my-compute-data note scope))))
+        (vui-component 'vulpea-ui-widget
+          :title "My Widget"
+          :children (lambda () (my-render data)))))))
+#+end_src
+
+Because the scope is a memo dependency, the expensive computation
+reruns only when the restriction actually changes; the change is
+picked up on the next idle refresh (see
+=vulpea-ui-auto-refresh-delay=) or a manual
+=vulpea-ui-sidebar-refresh=. A widget that ignores the scope simply
+stays file-scoped - nothing else changes for it.
+
 ** Modifying widget properties
 
 =vulpea-ui-widget-set= updates a single property on an already-registered widget. This works for any widget, including the built-in ones, so you can customise them without redefining anything.
