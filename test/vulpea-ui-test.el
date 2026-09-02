@@ -5002,5 +5002,488 @@ Mirrors the sidebar split: data changes are announced on
   (should (equal (vulpea-ui-collection--format-time "2025-01-02T10:00:00")
                  "2025-01-02")))
 
+;;; Backlink count overlays
+
+(defconst vulpea-ui-test--heading-only-content
+  "* Only Heading
+:PROPERTIES:
+:ID: only-id
+:END:
+Body.
+"
+  "Org content for a file whose nodes are all heading-level.")
+
+(defconst vulpea-ui-test--untitled-content
+  ":PROPERTIES:
+:ID: untitled-file-id
+:END:
+Body without a title keyword.
+
+* Heading A
+:PROPERTIES:
+:ID: id-a
+:END:
+"
+  "Org content for a file-level note without a `#+title:' keyword.")
+
+(defconst vulpea-ui-test--linked-content
+  ":PROPERTIES:
+:ID: file-id
+:END:
+#+title: Linking Note
+
+Poured [[id:person-a][a riesling]] and [[id:person-b][a chablis]] today.
+Also [[https://example.com][a website]] and [[id:person-a][the riesling again]].
+
+* Heading A
+:PROPERTIES:
+:ID: id-a
+:END:
+See [[denote:20250828T131843][a denote note]].
+"
+  "Org content carrying note links of several types.")
+
+(defvar vulpea-ui-test--count-queries nil
+  "Link-type arguments of the backlink count queries made by a test.")
+
+(defvar vulpea-ui-test--worker-busy nil
+  "Value `vulpea-db-worker-busy-p' reports inside a test.")
+
+(defun vulpea-ui-test--counts (&rest pairs)
+  "Return an ID -> backlink count table built from PAIRS."
+  (let ((table (make-hash-table :test 'equal)))
+    (while pairs
+      (puthash (pop pairs) (pop pairs) table))
+    table))
+
+(defmacro vulpea-ui-test--with-org-buffer (content &rest body)
+  "Visit a temp org file holding CONTENT and run BODY in its buffer.
+BODY runs with `path' bound to the file, which is removed afterwards."
+  (declare (indent 1) (debug t))
+  `(let ((path (make-temp-file "vulpea-ui-test-count" nil ".org")))
+     (unwind-protect
+         (progn
+           (with-temp-file path
+             (insert ,content))
+           (let ((buf (find-file-noselect path)))
+             (unwind-protect
+                 (with-current-buffer buf ,@body)
+               (with-current-buffer buf
+                 (set-buffer-modified-p nil))
+               (kill-buffer buf))))
+       (delete-file path))))
+
+(defmacro vulpea-ui-test--with-backlink-counts (table &rest body)
+  "Run BODY with the database serving backlink counts from TABLE.
+TABLE is evaluated once and bound to `counts', so BODY can change what
+the next query returns.  Each query pushes its link-type argument onto
+`vulpea-ui-test--count-queries', the worker reports busy according to
+`vulpea-ui-test--worker-busy', and the counts cache and the pending
+refresh flag are isolated from the rest of the suite."
+  (declare (indent 1) (debug t))
+  `(let ((vulpea-ui-test--count-queries nil)
+         (vulpea-ui-test--worker-busy nil)
+         (vulpea-ui--backlink-count-cache nil)
+         (vulpea-ui--backlink-count-refresh-pending nil)
+         (counts ,table))
+     (cl-letf (((symbol-function 'vulpea-db-query-backlink-counts)
+                (lambda (&optional link-type)
+                  (push link-type vulpea-ui-test--count-queries)
+                  counts))
+               ((symbol-function 'vulpea-db-worker-busy-p)
+                (lambda () vulpea-ui-test--worker-busy)))
+       ,@body)))
+
+(defmacro vulpea-ui-test--with-saved-global-hooks (&rest body)
+  "Run BODY, restoring the global hooks the count mode installs."
+  (declare (indent 0) (debug t))
+  `(let ((saved-save (default-value 'after-save-hook))
+         (saved-updated (when (boundp 'vulpea-db-updated-functions)
+                          (default-value 'vulpea-db-updated-functions)))
+         (saved-worker (when (boundp 'vulpea-db-worker-done-functions)
+                         (default-value 'vulpea-db-worker-done-functions))))
+     (unwind-protect
+         (progn ,@body)
+       (setq-default after-save-hook saved-save)
+       (when (boundp 'vulpea-db-updated-functions)
+         (set-default 'vulpea-db-updated-functions saved-updated))
+       (when (boundp 'vulpea-db-worker-done-functions)
+         (set-default 'vulpea-db-worker-done-functions saved-worker)))))
+
+(defun vulpea-ui-test--anchor-prefixes (&optional anchors)
+  "Return (LINE-PREFIX . ID) for every anchor in ANCHORS.
+ANCHORS defaults to every count anchor of this buffer.  LINE-PREFIX is
+the text between the start of the anchor\='s line and the anchor,
+which shows where the count would be drawn."
+  (save-restriction
+    (widen)
+    (mapcar (lambda (anchor)
+              (cons (buffer-substring-no-properties
+                     (save-excursion
+                       (goto-char (car anchor))
+                       (line-beginning-position))
+                     (car anchor))
+                    (cdr anchor)))
+            (or anchors (vulpea-ui--backlink-count-anchors)))))
+
+(defun vulpea-ui-test--end-of (text)
+  "Return the position just after the first occurrence of TEXT."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward text)
+    (point)))
+
+(defun vulpea-ui-test--count-overlays ()
+  "Return (POSITION . LABEL) for each count overlay, in document order."
+  (save-restriction
+    (widen)
+    (sort (delq nil
+                (mapcar (lambda (ov)
+                          (when (overlay-get ov 'vulpea-ui-backlink-count)
+                            (cons (overlay-start ov)
+                                  (substring-no-properties
+                                   (overlay-get ov 'after-string)))))
+                        (overlays-in (point-min) (point-max))))
+          (lambda (a b) (< (car a) (car b))))))
+
+(defun vulpea-ui-test--count-labels ()
+  "Return the labels of the count overlays, in document order."
+  (mapcar #'cdr (vulpea-ui-test--count-overlays)))
+
+(ert-deftest vulpea-ui-test-backlink-count-superscript ()
+  "Counts render as Unicode superscript digits."
+  (should (equal (vulpea-ui-backlink-count-superscript 0) "⁰"))
+  (should (equal (vulpea-ui-backlink-count-superscript 7) "⁷"))
+  (should (equal (vulpea-ui-backlink-count-superscript 42) "⁴²"))
+  (should (equal (vulpea-ui-backlink-count-superscript 1024) "¹⁰²⁴")))
+
+(ert-deftest vulpea-ui-test-backlink-count-is-opt-in ()
+  "Nothing draws counts until the user turns a mode on."
+  (should-not (default-value 'vulpea-ui-backlink-count-mode))
+  (should-not vulpea-ui-backlink-count-global-mode)
+  (should (eq vulpea-ui-backlink-count-format
+              #'vulpea-ui-backlink-count-superscript)))
+
+(ert-deftest vulpea-ui-test-backlink-count-anchors ()
+  "Every ID-carrying node anchors a count after its title.
+The file-level count follows the `#+title:' value, a heading count
+follows the heading text, and headings without an ID are skipped."
+  (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+    (should (equal (vulpea-ui-test--anchor-prefixes)
+                   '(("#+title: Narrow Test" . "file-id")
+                     ("* Heading A" . "id-a")
+                     ("* Heading B" . "id-b")
+                     ("** Child B1" . "id-b-child"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-anchors-ignore-narrowing ()
+  "Anchors cover the whole file even when the buffer is narrowed."
+  (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+    (vulpea-ui-test--narrow-to-heading-b)
+    (should (equal (mapcar #'cdr (vulpea-ui--backlink-count-anchors))
+                   '("file-id" "id-a" "id-b" "id-b-child")))))
+
+(ert-deftest vulpea-ui-test-backlink-count-anchors-heading-only-file ()
+  "A file opening on a heading gets no file-level anchor.
+The heading's own ID must not be mistaken for a file-level one."
+  (vulpea-ui-test--with-org-buffer vulpea-ui-test--heading-only-content
+    (should (equal (vulpea-ui-test--anchor-prefixes)
+                   '(("* Only Heading" . "only-id"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-anchors-last-line-heading ()
+  "A heading on an unterminated last line is still annotated."
+  (vulpea-ui-test--with-org-buffer
+      "* First\n:PROPERTIES:\n:ID: first-id\n:END:\n* Last"
+    (should (equal (vulpea-ui-test--anchor-prefixes)
+                   '(("* First" . "first-id"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-anchors-untitled-file ()
+  "A file-level note without a `#+title:' has nowhere to put its count.
+Its headings are still annotated."
+  (vulpea-ui-test--with-org-buffer vulpea-ui-test--untitled-content
+    (should (equal (vulpea-ui-test--anchor-prefixes)
+                   '(("* Heading A" . "id-a"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-anchors-heading-with-tags ()
+  "A count sits after the heading text, before its tags."
+  (vulpea-ui-test--with-org-buffer
+      "* TODO [#A] Tagged heading    :work:urgent:
+:PROPERTIES:
+:ID: tagged-id
+:END:
+"
+    (should (equal (vulpea-ui-test--anchor-prefixes)
+                   '(("* TODO [#A] Tagged heading" . "tagged-id"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-link-anchors ()
+  "Every note link anchors a count right after it.
+Links of a type outside `vulpea-ui-link-types' are skipped, and two
+links to the same note each get their own count."
+  (vulpea-ui-test--with-org-buffer vulpea-ui-test--linked-content
+    (should (equal (vulpea-ui--backlink-count-link-anchors)
+                   (list (cons (vulpea-ui-test--end-of
+                                "[[id:person-a][a riesling]]")
+                               "person-a")
+                         (cons (vulpea-ui-test--end-of
+                                "[[id:person-b][a chablis]]")
+                               "person-b")
+                         (cons (vulpea-ui-test--end-of
+                                "[[id:person-a][the riesling again]]")
+                               "person-a"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-link-anchors-link-types ()
+  "Link anchors follow `vulpea-ui-link-types'."
+  (vulpea-ui-test--with-org-buffer vulpea-ui-test--linked-content
+    (let ((vulpea-ui-link-types '("id" "denote")))
+      (should (equal (mapcar #'cdr (vulpea-ui--backlink-count-link-anchors))
+                     '("person-a" "person-b" "person-a" "20250828T131843"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-link-anchors-ignore-narrowing ()
+  "Link anchors cover the whole file even when the buffer is narrowed."
+  (vulpea-ui-test--with-org-buffer vulpea-ui-test--linked-content
+    (goto-char (point-min))
+    (re-search-forward "^\\* Heading A")
+    (org-narrow-to-subtree)
+    (should (equal (mapcar #'cdr (vulpea-ui--backlink-count-link-anchors))
+                   '("person-a" "person-b" "person-a")))))
+
+(ert-deftest vulpea-ui-test-backlink-count-targets ()
+  "`vulpea-ui-backlink-count-targets' picks what gets a count.
+Notes and links are annotated by default, and either half can be
+turned off on its own."
+  (vulpea-ui-test--with-org-buffer vulpea-ui-test--linked-content
+    (should (equal vulpea-ui-backlink-count-targets '(notes links)))
+    (should (equal (mapcar #'cdr (vulpea-ui--backlink-count-anchors))
+                   '("file-id" "person-a" "person-b" "person-a" "id-a")))
+    (let ((vulpea-ui-backlink-count-targets '(notes)))
+      (should (equal (mapcar #'cdr (vulpea-ui--backlink-count-anchors))
+                     '("file-id" "id-a"))))
+    (let ((vulpea-ui-backlink-count-targets '(links)))
+      (should (equal (mapcar #'cdr (vulpea-ui--backlink-count-anchors))
+                     '("person-a" "person-b" "person-a"))))
+    (let ((vulpea-ui-backlink-count-targets nil))
+      (should-not (vulpea-ui--backlink-count-anchors)))))
+
+(ert-deftest vulpea-ui-test-backlink-count-apply-annotates-links ()
+  "A link carries the count of the note it points at."
+  (vulpea-ui-test--with-backlink-counts
+      (vulpea-ui-test--counts "person-a" 2 "person-b" 5 "id-a" 1)
+    (vulpea-ui-test--with-org-buffer vulpea-ui-test--linked-content
+      (vulpea-ui--backlink-count-apply counts)
+      (should (equal (vulpea-ui-test--count-labels) '("²" "⁵" "²" "¹")))
+      (should (equal (car (vulpea-ui-test--count-overlays))
+                     (cons (vulpea-ui-test--end-of
+                            "[[id:person-a][a riesling]]")
+                           "²"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-apply-annotates-linked-nodes ()
+  "Only nodes something links to are annotated."
+  (vulpea-ui-test--with-backlink-counts
+      (vulpea-ui-test--counts "file-id" 3 "id-a" 0 "id-b-child" 11)
+    (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+      (vulpea-ui--backlink-count-apply counts)
+      (should (equal (vulpea-ui-test--count-labels) '("³" "¹¹"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-apply-is-idempotent ()
+  "Redrawing replaces the counts instead of stacking new ones."
+  (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 3)
+    (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+      (vulpea-ui--backlink-count-apply counts)
+      (puthash "file-id" 4 counts)
+      (vulpea-ui--backlink-count-apply counts)
+      (should (equal (vulpea-ui-test--count-labels) '("⁴"))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-apply-uses-format ()
+  "`vulpea-ui-backlink-count-format' decides how a count reads."
+  (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 3)
+    (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+      (let ((vulpea-ui-backlink-count-format
+             (lambda (count) (format " [%d]" count))))
+        (vulpea-ui--backlink-count-apply counts)
+        (should (equal (vulpea-ui-test--count-labels) '(" [3]"))))
+      (let ((vulpea-ui-backlink-count-format #'ignore))
+        (vulpea-ui--backlink-count-apply counts)
+        (should-not (vulpea-ui-test--count-labels))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-overlay-carries-face ()
+  "The label is drawn in `vulpea-ui-backlink-count-face'."
+  (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 3)
+    (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+      (vulpea-ui--backlink-count-apply counts)
+      (let* ((ov (seq-find (lambda (ov) (overlay-get ov 'vulpea-ui-backlink-count))
+                           (overlays-in (point-min) (point-max))))
+             (label (overlay-get ov 'after-string)))
+        (should (memq 'vulpea-ui-backlink-count-face
+                      (ensure-list (get-text-property 0 'face label))))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-remove-keeps-other-overlays ()
+  "Removing counts leaves overlays owned by anything else alone."
+  (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 3)
+    (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+      (let ((foreign (make-overlay (point-min) (point-max))))
+        (overlay-put foreign 'someone-else t)
+        (vulpea-ui--backlink-count-apply counts)
+        (vulpea-ui--backlink-count-remove-overlays)
+        (should-not (vulpea-ui-test--count-labels))
+        (should (overlay-buffer foreign))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-mode-draws-and-clears ()
+  "Turning the mode on draws the counts, turning it off clears them."
+  (vulpea-ui-test--with-saved-global-hooks
+    (vulpea-ui-test--with-backlink-counts
+        (vulpea-ui-test--counts "file-id" 2 "id-b" 5)
+      (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+        (vulpea-ui-backlink-count-mode 1)
+        (should (equal (vulpea-ui-test--count-labels) '("²" "⁵")))
+        (vulpea-ui-backlink-count-mode -1)
+        (should-not (vulpea-ui-test--count-labels))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-mode-requires-org ()
+  "The mode refuses to run outside org buffers."
+  (with-temp-buffer
+    (fundamental-mode)
+    (should-error (vulpea-ui-backlink-count-mode 1) :type 'user-error)
+    (should-not vulpea-ui-backlink-count-mode)))
+
+(ert-deftest vulpea-ui-test-backlink-count-hooks-follow-the-last-buffer ()
+  "The database hooks live exactly as long as some buffer shows counts."
+  (vulpea-ui-test--with-saved-global-hooks
+    (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts)
+      (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+        (let ((first-buffer (current-buffer)))
+          (vulpea-ui-backlink-count-mode 1)
+          (should (memq #'vulpea-ui--backlink-count-on-db-updated
+                        (default-value 'vulpea-db-updated-functions)))
+          (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+            (vulpea-ui-backlink-count-mode 1)
+            (with-current-buffer first-buffer
+              (vulpea-ui-backlink-count-mode -1))
+            ;; a second buffer still shows counts, so the hooks stay
+            (should (memq #'vulpea-ui--backlink-count-on-db-updated
+                          (default-value 'vulpea-db-updated-functions)))
+            (vulpea-ui-backlink-count-mode -1))
+          (should-not (memq #'vulpea-ui--backlink-count-on-db-updated
+                            (default-value 'vulpea-db-updated-functions)))
+          (should-not (memq #'vulpea-ui--backlink-count-on-worker-done
+                            (default-value 'vulpea-db-worker-done-functions))))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-database-change-redraws-buffers ()
+  "A database change redraws the counts of every buffer showing them."
+  (vulpea-ui-test--with-saved-global-hooks
+    (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 1)
+      (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+        (let ((first-buffer (current-buffer)))
+          (vulpea-ui-backlink-count-mode 1)
+          (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+            (vulpea-ui-backlink-count-mode 1)
+            (should (equal (vulpea-ui-test--count-labels) '("¹")))
+            (puthash "file-id" 12 counts)
+            (puthash "id-a" 2 counts)
+            (vulpea-ui--backlink-count-on-db-updated "/tmp/other.org" 1)
+            (should (equal (vulpea-ui-test--count-labels) '("¹²" "²")))
+            (with-current-buffer first-buffer
+              (should (equal (vulpea-ui-test--count-labels) '("¹²" "²"))))
+            (vulpea-ui-backlink-count-mode -1))
+          (vulpea-ui-backlink-count-mode -1))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-refresh-waits-for-the-worker ()
+  "A bulk sync coalesces into one redraw when the worker drains."
+  (vulpea-ui-test--with-saved-global-hooks
+    (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 1)
+      (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+        (vulpea-ui-backlink-count-mode 1)
+        (setq vulpea-ui-test--worker-busy t)
+        (puthash "file-id" 9 counts)
+        (vulpea-ui--backlink-count-on-db-updated "/tmp/other.org" 1)
+        (vulpea-ui--backlink-count-on-db-updated "/tmp/another.org" 1)
+        (should (equal (vulpea-ui-test--count-labels) '("¹")))
+        (setq vulpea-ui-test--worker-busy nil)
+        (vulpea-ui--backlink-count-on-worker-done "/tmp/other.org" 'applied 1)
+        (should (equal (vulpea-ui-test--count-labels) '("⁹")))
+        (vulpea-ui-backlink-count-mode -1)))))
+
+(ert-deftest vulpea-ui-test-backlink-count-legacy-vulpea-refreshes-on-save ()
+  "Without the data-changed hook a save is the only refresh signal."
+  (vulpea-ui-test--with-saved-global-hooks
+    (vulpea-ui-test--without-db-updated-hook
+      (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 1)
+        (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+          (vulpea-ui-backlink-count-mode 1)
+          (should (memq #'vulpea-ui--backlink-count-on-save
+                        (default-value 'after-save-hook)))
+          (puthash "file-id" 4 counts)
+          (vulpea-ui--backlink-count-on-save)
+          (should (equal (vulpea-ui-test--count-labels) '("⁴")))
+          (vulpea-ui-backlink-count-mode -1)
+          (should-not (memq #'vulpea-ui--backlink-count-on-save
+                            (default-value 'after-save-hook))))))))
+
+(ert-deftest vulpea-ui-test-backlink-count-survives-revert ()
+  "Reverting the buffer, which drops overlays, redraws the counts."
+  (vulpea-ui-test--with-saved-global-hooks
+    (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 3)
+      (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+        (vulpea-ui-backlink-count-mode 1)
+        (should (equal (vulpea-ui-test--count-labels) '("³")))
+        ;; a revert that really replaces the text: the file changed
+        ;; under the buffer, as after a checkout or an external edit
+        (with-temp-file path
+          (insert vulpea-ui-test--narrowing-content)
+          (insert "* Heading D\nAppended on disk.\n"))
+        (revert-buffer :ignore-auto :noconfirm)
+        (should vulpea-ui-backlink-count-mode)
+        (should (equal (vulpea-ui-test--count-labels) '("³")))
+        (should (equal (vulpea-ui-test--anchor-prefixes)
+                       '(("#+title: Narrow Test" . "file-id")
+                         ("* Heading A" . "id-a")
+                         ("* Heading B" . "id-b")
+                         ("** Child B1" . "id-b-child"))))
+        (vulpea-ui-backlink-count-mode -1)))))
+
+(ert-deftest vulpea-ui-test-backlink-count-table-is-queried-once ()
+  "The whole count table is read in one query and reused."
+  (vulpea-ui-test--with-saved-global-hooks
+    (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 1)
+      (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+        (vulpea-ui-backlink-count-mode 1)
+        (should (= (length vulpea-ui-test--count-queries) 1))
+        (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+          (vulpea-ui-backlink-count-mode 1)
+          (should (= (length vulpea-ui-test--count-queries) 1))
+          (vulpea-ui-backlink-count-mode -1))
+        (vulpea-ui-backlink-count-refresh)
+        (should (= (length vulpea-ui-test--count-queries) 2))
+        (vulpea-ui-backlink-count-mode -1)))))
+
+(ert-deftest vulpea-ui-test-backlink-count-respects-link-types ()
+  "Counts cover `vulpea-ui-link-types', and changing it re-queries."
+  (vulpea-ui-test--with-saved-global-hooks
+    (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts "file-id" 1)
+      (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+        (vulpea-ui-backlink-count-mode 1)
+        (should (equal (car vulpea-ui-test--count-queries) "id"))
+        (let ((vulpea-ui-link-types '("id" "denote")))
+          (vulpea-ui--backlink-count-refresh-buffers)
+          (should (equal (car vulpea-ui-test--count-queries) '("id" "denote")))
+          (should (= (length vulpea-ui-test--count-queries) 2)))
+        (vulpea-ui-backlink-count-mode -1)))))
+
+(ert-deftest vulpea-ui-test-backlink-count-global-mode-targets-org-files ()
+  "The global mode picks up file-visiting org buffers, and nothing else."
+  (vulpea-ui-test--with-saved-global-hooks
+    (vulpea-ui-test--with-backlink-counts (vulpea-ui-test--counts)
+      (with-temp-buffer
+        (fundamental-mode)
+        (vulpea-ui--backlink-count-turn-on)
+        (should-not vulpea-ui-backlink-count-mode))
+      (with-temp-buffer
+        (let ((org-mode-hook nil))
+          (org-mode))
+        (vulpea-ui--backlink-count-turn-on)
+        (should-not vulpea-ui-backlink-count-mode))
+      (vulpea-ui-test--with-org-buffer vulpea-ui-test--narrowing-content
+        (vulpea-ui--backlink-count-turn-on)
+        (should vulpea-ui-backlink-count-mode)
+        (vulpea-ui-backlink-count-mode -1)))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here

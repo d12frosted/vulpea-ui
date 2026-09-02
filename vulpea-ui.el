@@ -2450,6 +2450,340 @@ inert."
       (vui-update instance (list :note note)))))
 
 
+;;; Backlink count overlays
+
+;; The idea comes from `org-roam-count-overlay-mode' by agzam:
+;; https://github.com/agzam/.doom.d/blob/0553149b3a290dfd2382d8da4a5ce4c09824e5e6/modules/custom/org/autoload/org-roam-helpers.el#L151
+
+(defconst vulpea-ui--superscript-digits
+  ["⁰" "¹" "²" "³" "⁴" "⁵" "⁶" "⁷" "⁸" "⁹"]
+  "Unicode superscript digits, indexed by the digit they render.")
+
+(defun vulpea-ui-backlink-count-superscript (count)
+  "Render COUNT, a non-negative integer, as Unicode superscript digits."
+  (mapconcat (lambda (char)
+               (aref vulpea-ui--superscript-digits (- char ?0)))
+             (number-to-string count) ""))
+
+(defcustom vulpea-ui-backlink-count-format
+  #'vulpea-ui-backlink-count-superscript
+  "Function rendering a backlink count for display in a note buffer.
+Called with the count, a positive integer, and returns the string to
+show right after the node title, or nil to leave that node
+unannotated.  The result is displayed in
+`vulpea-ui-backlink-count-face'; faces the function applies itself
+take precedence."
+  :type 'function
+  :group 'vulpea-ui)
+
+(defcustom vulpea-ui-backlink-count-targets '(notes links)
+  "What `vulpea-ui-backlink-count-mode' annotates with a count.
+A list of symbols.  `notes' annotates the notes of the buffer itself,
+after the `#+title:' value and after each ID-carrying heading, with
+the number of links pointing at them.  `links' annotates every note
+link with the count of the note it points at, so a mention shows how
+connected the thing mentioned is."
+  :type '(set (const :tag "Notes in this buffer" notes)
+              (const :tag "Links to other notes" links))
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-backlink-count-face
+  '((t :inherit shadow))
+  "Face for backlink counts shown in a note buffer."
+  :group 'vulpea-ui)
+
+(defvar vulpea-ui--backlink-count-cache nil
+  "Cached backlink counts as a cons of link types and a count table.
+Nil when nothing is cached.  Dropped whenever the database changes,
+and rebuilt when `vulpea-ui-link-types' no longer matches the types
+the table was built with.")
+
+(defvar vulpea-ui--backlink-count-refresh-pending nil
+  "Non-nil when a database change still owes the counts a redraw.")
+
+(defun vulpea-ui--backlink-counts ()
+  "Return the note ID -> backlink count table, reading the cache first.
+The counts cover `vulpea-ui-link-types'.  The whole table comes from a
+single query, which is what makes annotating a buffer full of nodes
+cheap.  On a vulpea without `vulpea-db-query-backlink-counts' the
+table is empty, so no counts are shown."
+  (let ((types (vulpea-ui--link-types-query-arg)))
+    (unless (equal (car-safe vulpea-ui--backlink-count-cache) types)
+      (setq vulpea-ui--backlink-count-cache nil))
+    (unless vulpea-ui--backlink-count-cache
+      (setq vulpea-ui--backlink-count-cache
+            (cons types
+                  (if (fboundp 'vulpea-db-query-backlink-counts)
+                      (vulpea-db-query-backlink-counts types)
+                    (make-hash-table :test 'equal)))))
+    (cdr vulpea-ui--backlink-count-cache)))
+
+(defun vulpea-ui--backlink-count-title-anchor (limit)
+  "Return the position after the `#+title:' value before LIMIT, or nil.
+Trailing whitespace stays out, so the count sits right after the last
+character of the title."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search t))
+      (when (re-search-forward "^[ \t]*#\\+title:[ \t]*\\(.*?\\)[ \t]*$"
+                               limit t)
+        (match-end 1)))))
+
+(defun vulpea-ui--backlink-count-heading-anchor ()
+  "Return the position after the title of the heading at point, or nil.
+Tags stay to the right of the count, and so do the keyword and
+priority to its left."
+  (when (org-match-line org-complex-heading-regexp)
+    (or (match-end 4)
+        (match-beginning 5)
+        (line-end-position))))
+
+(defun vulpea-ui--backlink-count-note-anchors ()
+  "Return where a backlink count attaches for each node in this buffer.
+The result is a list of (POSITION . ID) conses in document order: the
+file-level node, when the file carries both an ID and a `#+title:',
+followed by every heading carrying an ID.  The whole file is walked,
+so narrowing hides no counts."
+  (when (derived-mode-p 'org-mode)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let ((anchors nil)
+              (first-heading (save-excursion
+                               (goto-char (point-min))
+                               (if (outline-next-heading)
+                                   (point)
+                                 (point-max)))))
+          ;; File-level node.  A file opening on a heading has none:
+          ;; reading an ID at `point-min' would pick up the heading's.
+          (goto-char (point-min))
+          (unless (org-at-heading-p)
+            (when-let* ((id (org-entry-get nil "ID"))
+                        (pos (vulpea-ui--backlink-count-title-anchor
+                              first-heading)))
+              (push (cons pos id) anchors)))
+          ;; Heading-level nodes.  A file can open on a heading, so
+          ;; the walk starts at point-min rather than at the next
+          ;; heading below it.
+          (goto-char (point-min))
+          (unless (org-at-heading-p)
+            (outline-next-heading))
+          (while (and (not (eobp)) (org-at-heading-p))
+            (when-let* ((id (org-entry-get nil "ID"))
+                        (pos (vulpea-ui--backlink-count-heading-anchor)))
+              (push (cons pos id) anchors))
+            (outline-next-heading))
+          (nreverse anchors))))))
+
+(defun vulpea-ui--backlink-count-link-anchors ()
+  "Return where a backlink count attaches for each link in this buffer.
+The result is a list of (POSITION . ID) conses in document order, one
+per link of a type in `vulpea-ui-link-types', anchored right after the
+link so the count follows its description.  A note mentioned twice is
+annotated twice, and the whole file is walked, so narrowing hides no
+counts."
+  (when (derived-mode-p 'org-mode)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (let ((anchors nil))
+          (while (re-search-forward org-link-bracket-re nil t)
+            (let* ((link (match-string-no-properties 1))
+                   (colon (string-search ":" link)))
+              (when (and colon
+                         (member (substring link 0 colon)
+                                 vulpea-ui-link-types))
+                (push (cons (match-end 0) (substring link (1+ colon)))
+                      anchors))))
+          (nreverse anchors))))))
+
+(defun vulpea-ui--backlink-count-anchors ()
+  "Return every backlink count anchor of this buffer, in document order.
+What is collected follows `vulpea-ui-backlink-count-targets'."
+  (sort (append (when (memq 'notes vulpea-ui-backlink-count-targets)
+                  (vulpea-ui--backlink-count-note-anchors))
+                (when (memq 'links vulpea-ui-backlink-count-targets)
+                  (vulpea-ui--backlink-count-link-anchors)))
+        #'car-less-than-car))
+
+(defun vulpea-ui--backlink-count-remove-overlays ()
+  "Delete every backlink count overlay in the current buffer."
+  (save-restriction
+    (widen)
+    (dolist (ov (overlays-in (point-min) (point-max)))
+      (when (overlay-get ov 'vulpea-ui-backlink-count)
+        (delete-overlay ov)))))
+
+(defun vulpea-ui--backlink-count-make-overlay (pos count)
+  "Show COUNT at POS and return the overlay, or nil when nothing is drawn.
+`vulpea-ui-backlink-count-format' may render COUNT as nil or an empty
+string to leave the node unannotated.  The overlay is empty and its
+front advances, so text typed at the end of the title lands before the
+count rather than inside it."
+  (when-let* ((label (funcall vulpea-ui-backlink-count-format count))
+              ((not (string-empty-p label))))
+    (let ((label (copy-sequence label))
+          (ov (make-overlay pos pos nil t nil)))
+      (add-face-text-property 0 (length label)
+                              'vulpea-ui-backlink-count-face t label)
+      (overlay-put ov 'vulpea-ui-backlink-count count)
+      (overlay-put ov 'priority 1)
+      (overlay-put ov 'after-string label)
+      ov)))
+
+(defun vulpea-ui--backlink-count-apply (counts)
+  "Rebuild the backlink count overlays of this buffer from COUNTS.
+COUNTS is a note ID -> count table.  Nodes nothing links to, and nodes
+missing from the table, are left unannotated."
+  (vulpea-ui--backlink-count-remove-overlays)
+  (pcase-dolist (`(,pos . ,id) (vulpea-ui--backlink-count-anchors))
+    (let ((count (gethash id counts 0)))
+      (when (> count 0)
+        (vulpea-ui--backlink-count-make-overlay pos count)))))
+
+(defun vulpea-ui--backlink-count-buffers ()
+  "Return the live buffers with `vulpea-ui-backlink-count-mode' on."
+  (seq-filter (lambda (buffer)
+                (buffer-local-value 'vulpea-ui-backlink-count-mode buffer))
+              (buffer-list)))
+
+(defun vulpea-ui--backlink-count-refresh-buffers ()
+  "Redraw the counts of every buffer showing them, from one count table.
+Nothing is queried while no buffer shows counts."
+  (when-let* ((buffers (vulpea-ui--backlink-count-buffers))
+              (counts (vulpea-ui--backlink-counts)))
+    (dolist (buffer buffers)
+      (with-current-buffer buffer
+        (vulpea-ui--backlink-count-apply counts)))))
+
+;;;###autoload
+(defun vulpea-ui-backlink-count-refresh ()
+  "Re-read the backlink counts from the database and redraw them.
+An escape hatch: the counts follow database changes on their own."
+  (interactive)
+  (setq vulpea-ui--backlink-count-cache nil)
+  (vulpea-ui--backlink-count-refresh-buffers))
+
+(defun vulpea-ui--backlink-count-flush ()
+  "Redraw the counts for a pending database change, unless deferred.
+While the extraction worker is busy the redraw stays pending, so a
+bulk sync coalesces into a single redraw when the burst drains."
+  (when (and vulpea-ui--backlink-count-refresh-pending
+             (or (not (fboundp 'vulpea-db-worker-busy-p))
+                 (not (vulpea-db-worker-busy-p))))
+    (setq vulpea-ui--backlink-count-refresh-pending nil)
+    (vulpea-ui-backlink-count-refresh)))
+
+(defun vulpea-ui--backlink-count-on-db-updated (_path _count)
+  "Redraw the counts after database content changed.
+PATH is ignored: a link written anywhere changes the count of the note
+it points at, whichever file that note lives in."
+  (setq vulpea-ui--backlink-count-refresh-pending t)
+  (vulpea-ui--backlink-count-flush))
+
+(defun vulpea-ui--backlink-count-on-worker-done (_path status _count)
+  "Flush a deferred count redraw when the extraction worker drains.
+On a vulpea with `vulpea-db-updated-functions' this is a lifecycle
+signal only.  Without it, replies with STATUS `applied' or `missing'
+are themselves the database change signal."
+  (unless (boundp 'vulpea-db-updated-functions)
+    (when (memq status '(applied missing))
+      (setq vulpea-ui--backlink-count-refresh-pending t)))
+  (vulpea-ui--backlink-count-flush))
+
+(defun vulpea-ui--backlink-count-on-save ()
+  "Redraw the counts after a save.
+Only installed on a vulpea without `vulpea-db-updated-functions': it
+fires before the database catches up with the save, so the counts can
+lag one save behind."
+  (vulpea-ui-backlink-count-refresh))
+
+(defun vulpea-ui--backlink-count-setup-hooks ()
+  "Install the hooks keeping the counts in sync with the database."
+  (if (boundp 'vulpea-db-updated-functions)
+      ;; What links to a note is decided by other files, so the
+      ;; database - not a save of this buffer - is the signal.
+      (add-hook 'vulpea-db-updated-functions
+                #'vulpea-ui--backlink-count-on-db-updated)
+    (add-hook 'after-save-hook #'vulpea-ui--backlink-count-on-save))
+  (when (boundp 'vulpea-db-worker-done-functions)
+    (add-hook 'vulpea-db-worker-done-functions
+              #'vulpea-ui--backlink-count-on-worker-done))
+  (add-hook 'after-revert-hook #'vulpea-ui--backlink-count-on-revert nil t))
+
+(defun vulpea-ui--backlink-count-teardown-hooks ()
+  "Remove the count hooks, once no buffer is left showing counts."
+  (remove-hook 'after-save-hook #'vulpea-ui--backlink-count-on-save)
+  (when (boundp 'vulpea-db-updated-functions)
+    (remove-hook 'vulpea-db-updated-functions
+                 #'vulpea-ui--backlink-count-on-db-updated))
+  (when (boundp 'vulpea-db-worker-done-functions)
+    (remove-hook 'vulpea-db-worker-done-functions
+                 #'vulpea-ui--backlink-count-on-worker-done))
+  (setq vulpea-ui--backlink-count-refresh-pending nil))
+
+;;;###autoload
+(define-minor-mode vulpea-ui-backlink-count-mode
+  "Annotate the notes of this buffer, and its links, with backlink counts.
+
+The count of the file-level note is drawn after its `#+title:' value
+and the count of each ID-carrying heading after the heading text; every
+link to a note is followed by the count of the note it points at, so a
+mention shows how connected the thing mentioned is.  See
+`vulpea-ui-backlink-count-targets' to annotate only one of the two.
+
+Counts are overlays - the file on disk is untouched.  Only notes
+something links to are annotated, and narrowing hides no counts.
+
+Counts follow the database rather than saves of this buffer, since
+what links to a note is decided by other files.  See
+`vulpea-ui-backlink-count-format' and `vulpea-ui-backlink-count-face'
+for how a count reads, `vulpea-ui-link-types' for which links are
+counted, and `vulpea-ui-backlink-count-refresh' to redraw by hand.
+
+Use `vulpea-ui-backlink-count-global-mode' to turn this on in every
+note.
+
+The idea comes from `org-roam-count-overlay-mode' by agzam."
+  :lighter nil
+  :group 'vulpea-ui
+  (cond
+   ((not vulpea-ui-backlink-count-mode)
+    (vulpea-ui--backlink-count-remove-overlays)
+    (remove-hook 'after-revert-hook #'vulpea-ui--backlink-count-on-revert t)
+    (unless (vulpea-ui--backlink-count-buffers)
+      (vulpea-ui--backlink-count-teardown-hooks)))
+   ((not (derived-mode-p 'org-mode))
+    (setq vulpea-ui-backlink-count-mode nil)
+    (user-error "Backlink counts are only shown in `org-mode' buffers"))
+   (t
+    (vulpea-ui--backlink-count-setup-hooks)
+    (vulpea-ui--backlink-count-apply (vulpea-ui--backlink-counts)))))
+
+(defun vulpea-ui--backlink-count-on-revert ()
+  "Redraw the counts of this buffer after it was reverted.
+Reverting re-runs the major mode, which drops every buffer-local
+value; the mode variable and this hook entry are permanent locals so
+the counts come back instead of being left behind at stale positions."
+  (when vulpea-ui-backlink-count-mode
+    (vulpea-ui--backlink-count-apply (vulpea-ui--backlink-counts))))
+
+(put 'vulpea-ui-backlink-count-mode 'permanent-local t)
+(put 'vulpea-ui--backlink-count-on-revert 'permanent-local-hook t)
+
+(defun vulpea-ui--backlink-count-turn-on ()
+  "Turn `vulpea-ui-backlink-count-mode' on in a file-visiting note buffer."
+  (when (and (derived-mode-p 'org-mode) buffer-file-name)
+    (vulpea-ui-backlink-count-mode 1)))
+
+;;;###autoload
+(define-globalized-minor-mode vulpea-ui-backlink-count-global-mode
+  vulpea-ui-backlink-count-mode
+  vulpea-ui--backlink-count-turn-on
+  :group 'vulpea-ui)
+
+
 ;;; Schema health widget
 
 (defcustom vulpea-ui-schema-health-ok-glyph "✓"

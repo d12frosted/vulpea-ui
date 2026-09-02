@@ -23,6 +23,7 @@ Visual tools for [[https://github.com/d12frosted/vulpea][vulpea]] notes: a per-n
 - Built-in widgets: outline, backlinks, unlinked mentions, forward links, outgoing mentions, stats, schema health
 - Schema dashboard: a collection-wide view of how every note measures up to its schema
 - Collection view: a sortable table over a filtered set of notes, with dired-style marks and bulk actions (tags, metadata, delete, your own function)
+- Backlink counts in the note buffer itself: an opt-in minor mode annotating every note with how many links point at it
 - Built on [[https://github.com/d12frosted/vui.el][vui]] components, with an easy API for your own widgets
 
 * Installation
@@ -220,14 +221,17 @@ after toggling:
 
 * Commands
 
-| Command                      | Description               |
-|------------------------------+---------------------------|
-| =vulpea-ui-sidebar-open=     | Open the sidebar          |
-| =vulpea-ui-sidebar-close=    | Close the sidebar         |
-| =vulpea-ui-sidebar-toggle=   | Toggle sidebar visibility |
-| =vulpea-ui-sidebar-refresh=  | Force refresh content     |
-| =vulpea-ui-schema-dashboard= | Open the schema dashboard |
-| =vulpea-ui-collection=       | Open a collection view    |
+| Command                                | Description                          |
+|----------------------------------------+--------------------------------------|
+| =vulpea-ui-sidebar-open=               | Open the sidebar                     |
+| =vulpea-ui-sidebar-close=              | Close the sidebar                    |
+| =vulpea-ui-sidebar-toggle=             | Toggle sidebar visibility            |
+| =vulpea-ui-sidebar-refresh=            | Force refresh content                |
+| =vulpea-ui-schema-dashboard=           | Open the schema dashboard            |
+| =vulpea-ui-collection=                 | Open a collection view               |
+| =vulpea-ui-backlink-count-mode=        | Show backlink counts in this buffer  |
+| =vulpea-ui-backlink-count-global-mode= | Show backlink counts in every note   |
+| =vulpea-ui-backlink-count-refresh=     | Re-read the counts from the database |
 
 * Sidebar keybindings
 
@@ -441,6 +445,56 @@ a note as an org dynamic block:
 
 =C-c C-x x= (=org-dynamic-block-insert=) offers the block; titles
 render as =id:= links, and =:view "name"= reuses a saved view.
+
+* Backlink counts
+
+=M-x vulpea-ui-backlink-count-mode= annotates the notes of the current
+buffer, and its links, with the number of links pointing at them: the
+file-level note after its =#+title:= value, each ID-carrying heading
+after the heading text, and every link after its description.
+
+#+begin_src org
+,#+title: Sparkling wine³
+
+,* Champagne⁷
+poured at [[id:tasting-2026][the March tasting]]¹ last week
+#+end_src
+
+A count on a note says how connected that note is; a count on a link
+says the same about the thing you just mentioned.
+=vulpea-ui-backlink-count-targets= (=(notes links)= by default) drops
+either half.
+
+The counts are overlays, so the file on disk is untouched, and only
+notes something links to are annotated. Narrowing hides no counts.
+
+The mode is opt-in and off by default. Turn it on everywhere:
+
+#+begin_src emacs-lisp
+(vulpea-ui-backlink-count-global-mode 1)
+#+end_src
+
+The global mode covers every file-visiting org buffer. To limit it to
+your notes, turn the buffer-local mode on from your own hook instead.
+
+Counts follow the database rather than saves of the buffer, since
+what links to a note is decided by other files. The whole count table
+comes from a single query, so a buffer full of nodes costs one query,
+not one per node. =M-x vulpea-ui-backlink-count-refresh= redraws by
+hand if you ever need it.
+
+Which links count is =vulpea-ui-link-types=, same as everywhere else.
+How a count reads is =vulpea-ui-backlink-count-format=, a function of
+the count returning the string to show (or nil to show nothing). The
+default renders Unicode superscript digits; for something more
+explicit:
+
+#+begin_src emacs-lisp
+(setq vulpea-ui-backlink-count-format
+      (lambda (count) (format " [%d]" count)))
+#+end_src
+
+The idea comes from =org-roam-count-overlay-mode= by [[https://github.com/agzam/.doom.d/blob/0553149b3a290dfd2382d8da4a5ce4c09824e5e6/modules/custom/org/autoload/org-roam-helpers.el#L151][agzam]].
 
 * Default widgets
 
@@ -789,19 +843,20 @@ Useful for rendering previews in custom widgets.
 
 * Faces
 
-| Face                                 | Description             |
-|--------------------------------------+-------------------------|
-| =vulpea-ui-widget-header-face=       | Widget header text      |
-| =vulpea-ui-widget-count-face=        | Widget count numbers    |
-| =vulpea-ui-outline-heading-face=     | Outline headings        |
-| =vulpea-ui-stats-face=               | Statistics text         |
-| =vulpea-ui-backlink-preview-face=    | Backlink preview text   |
-| =vulpea-ui-backlink-heading-face=    | Backlink heading path   |
-| =vulpea-ui-backlink-meta-key-face=   | Meta block keys         |
-| =vulpea-ui-backlink-meta-value-face= | Meta block values       |
-| =vulpea-ui-backlink-context-face=    | Context type indicators |
-| =vulpea-ui-mention-context-face=     | Mention context line    |
-| =vulpea-ui-mention-action-face=      | Link action buttons     |
+| Face                                 | Description              |
+|--------------------------------------+--------------------------|
+| =vulpea-ui-widget-header-face=       | Widget header text       |
+| =vulpea-ui-widget-count-face=        | Widget count numbers     |
+| =vulpea-ui-outline-heading-face=     | Outline headings         |
+| =vulpea-ui-stats-face=               | Statistics text          |
+| =vulpea-ui-backlink-preview-face=    | Backlink preview text    |
+| =vulpea-ui-backlink-heading-face=    | Backlink heading path    |
+| =vulpea-ui-backlink-meta-key-face=   | Meta block keys          |
+| =vulpea-ui-backlink-meta-value-face= | Meta block values        |
+| =vulpea-ui-backlink-context-face=    | Context type indicators  |
+| =vulpea-ui-mention-context-face=     | Mention context line     |
+| =vulpea-ui-mention-action-face=      | Link action buttons      |
+| =vulpea-ui-backlink-count-face=      | Backlink counts in notes |
 
 * Related Projects
 
