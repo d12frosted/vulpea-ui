@@ -535,6 +535,105 @@ the anchor note itself carries none ([[https://github.com/d12frosted/vulpea-ui/i
                  (format "%S" (vulpea-ui--render-preview-button
                                preview "/tmp/f.org" 1 nil))))))
 
+;;; Header-type backlink previews (issue #73)
+
+(defmacro vulpea-ui-test--with-org-buffer (content &rest body)
+  "Run BODY in a temporary org buffer holding CONTENT."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (insert ,content)
+     (vulpea-ui--setup-org-mode)
+     (goto-char (point-min))
+     ,@body))
+
+(defun vulpea-ui-test--header-preview (content &optional chars)
+  "Extract the preview for the link inside the first heading of CONTENT.
+CHARS overrides `vulpea-ui-backlinks-header-body-chars' when non-nil."
+  (vulpea-ui-test--with-org-buffer content
+    (let ((vulpea-ui-backlinks-header-body-chars
+           (or chars vulpea-ui-backlinks-header-body-chars)))
+      (search-forward "[[id:target]")
+      (vulpea-ui--extract-preview (match-beginning 0) "target"))))
+
+(ert-deftest vulpea-ui-test-header-preview-shows-body ()
+  "A link inside a heading previews the heading's body, not its title.
+The title already appears as the heading group label, so repeating it
+as the preview adds nothing ([[https://github.com/d12frosted/vulpea-ui/issues/73][#73]])."
+  (let ((preview (vulpea-ui-test--header-preview
+                  "* Call with [[id:target][vendor]] about renewal\nWe agreed on a 2 year term.\nPricing stays flat.\n")))
+    (should (eq (plist-get preview :type) 'header))
+    (should (equal (plist-get preview :text)
+                   "We agreed on a 2 year term. Pricing stays flat."))))
+
+(ert-deftest vulpea-ui-test-header-preview-truncates-body ()
+  "The body excerpt is cut at the configured length with an ellipsis."
+  (let ((preview (vulpea-ui-test--header-preview
+                  "* Call with [[id:target][vendor]]\nThe quick brown fox jumps over the lazy dog again and again.\n"
+                  19)))
+    (should (equal (plist-get preview :text) "The quick brown fox..."))))
+
+(ert-deftest vulpea-ui-test-header-preview-cleans-body-links ()
+  "Links inside the body excerpt are reduced to their descriptions."
+  (let ((preview (vulpea-ui-test--header-preview
+                  "* Call with [[id:target][vendor]]\nSee [[id:other][the contract]] for details.\n")))
+    (should (equal (plist-get preview :text)
+                   "See the contract for details."))))
+
+(ert-deftest vulpea-ui-test-header-preview-skips-metadata ()
+  "Planning lines and drawers under the heading are not part of the body."
+  (let ((preview (vulpea-ui-test--header-preview
+                  (concat "* Call with [[id:target][vendor]]\n"
+                          "SCHEDULED: <2026-03-14 Sat>\n"
+                          ":PROPERTIES:\n:ID: abc\n:END:\n"
+                          ":LOGBOOK:\nCLOCK: [2026-03-14 Sat 10:00]--[2026-03-14 Sat 11:00] =>  1:00\n:END:\n"
+                          "Actual notes start here.\n"))))
+    (should (equal (plist-get preview :text) "Actual notes start here."))))
+
+(ert-deftest vulpea-ui-test-header-preview-stops-at-subheading ()
+  "The excerpt covers the heading's own section and never its children."
+  (let ((preview (vulpea-ui-test--header-preview
+                  "* Call with [[id:target][vendor]]\nShort body.\n** Child\nChild content that must not leak.\n")))
+    (should (equal (plist-get preview :text) "Short body."))))
+
+(ert-deftest vulpea-ui-test-header-preview-empty-body-falls-back ()
+  "With no body text the preview keeps the heading title.
+Content of child headings is not pulled up to fill the gap."
+  (let ((preview (vulpea-ui-test--header-preview
+                  "* Call with [[id:target][vendor]]\n:PROPERTIES:\n:ID: abc\n:END:\n** Child\nChild content.\n")))
+    (should (eq (plist-get preview :type) 'header))
+    (should (equal (plist-get preview :text) "Call with vendor")))
+  (let ((preview (vulpea-ui-test--header-preview
+                  "* Call with [[id:target][vendor]]\n* Next heading\nOther content.\n")))
+    (should (equal (plist-get preview :text) "Call with vendor"))))
+
+(ert-deftest vulpea-ui-test-header-preview-disabled ()
+  "A nil `vulpea-ui-backlinks-header-body-chars' keeps the old title preview."
+  (let ((preview (vulpea-ui-test--with-org-buffer
+                     "* Call with [[id:target][vendor]]\nBody text.\n"
+                   (let ((vulpea-ui-backlinks-header-body-chars nil))
+                     (search-forward "[[id:target]")
+                     (vulpea-ui--extract-preview (match-beginning 0) "target")))))
+    (should (equal (plist-get preview :text) "Call with vendor"))))
+
+(ert-deftest vulpea-ui-test-enrich-header-mentions-preview-body ()
+  "Enrichment previews the body for header mentions and still dedups.
+Two links to the same note inside one heading collapse to one mention."
+  (let ((temp-file (make-temp-file "vulpea-ui-test" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file temp-file
+            (insert "* Call with [[id:target][vendor]] and [[id:target][them]]\nWe agreed on terms.\n"))
+          (let* ((mentions (list (list :pos 13 :target-id "target")
+                                 (list :pos 36 :target-id "target")))
+                 (enriched (vulpea-ui--enrich-backlink-mentions
+                            temp-file mentions)))
+            (should (= (length enriched) 1))
+            (should (equal (plist-get (car enriched) :heading-path)
+                           '("Call with [[id:target][vendor]] and [[id:target][them]]")))
+            (should (equal (plist-get (plist-get (car enriched) :preview) :text)
+                           "We agreed on terms."))))
+      (delete-file temp-file))))
+
 (ert-deftest vulpea-ui-test-collection-context-respects-link-types ()
   "Collection backlink counts query the configured link types.
 A single type is passed as a plain string for compatibility with

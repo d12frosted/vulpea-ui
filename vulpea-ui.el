@@ -155,6 +155,19 @@ When non-nil, shows a snippet of text around each backlink mention."
   :type 'integer
   :group 'vulpea-ui)
 
+(defcustom vulpea-ui-backlinks-header-body-chars 80
+  "Number of characters of body text to show for header previews.
+A link inside a heading line is previewed with an excerpt of the text
+under that heading rather than the heading title, since the title is
+already shown as the group label above the mention.  The excerpt
+covers the heading's own section only (planning lines and drawers are
+skipped, child headings are never included) and is cut at this many
+characters.  When the section has no body text the heading title is
+shown as before.  Set to nil to always show the heading title."
+  :type '(choice (const :tag "Heading title only" nil)
+          (integer :tag "Characters of body text"))
+  :group 'vulpea-ui)
+
 (defcustom vulpea-ui-backlinks-note-filter #'identity
   "Function to filter which notes appear in backlinks.
 Called with a vulpea-note and should return non-nil to include it."
@@ -1469,7 +1482,7 @@ Returns a plist with :type and type-specific content:
            (context-type (vulpea-ui--detect-context-type pos line)))
       (pcase context-type
         ('meta (vulpea-ui--extract-meta pos line))
-        ('header (vulpea-ui--extract-header line))
+        ('header (vulpea-ui--extract-header pos line))
         ('table (vulpea-ui--extract-table pos))
         ('list (vulpea-ui--extract-list line))
         ('quote (vulpea-ui--extract-quote line))
@@ -1519,11 +1532,47 @@ Returns a plist with :type and type-specific content:
           (value (vulpea-ui--clean-org-links (match-string 2 line))))
       (list :type 'meta :key key :value value))))
 
-(defun vulpea-ui--extract-header (line)
-  "Extract header info from LINE."
+(defun vulpea-ui--extract-header (pos line)
+  "Extract header info for a link at POS inside heading LINE.
+The preview text is an excerpt of the heading's body (see
+`vulpea-ui-backlinks-header-body-chars'), falling back to the heading
+title when the body is empty or excerpts are disabled."
   (when (string-match "^\\*+ \\(.*\\)$" line)
-    (list :type 'header
-          :text (vulpea-ui--clean-org-links (match-string 1 line)))))
+    ;; Read the title before the excerpt search clobbers match data.
+    (let ((title (vulpea-ui--clean-org-links (match-string 1 line))))
+      (list :type 'header
+            :text (or (when vulpea-ui-backlinks-header-body-chars
+                        (vulpea-ui--heading-body-excerpt
+                         pos vulpea-ui-backlinks-header-body-chars))
+                      title)))))
+
+(defun vulpea-ui--heading-body-excerpt (pos chars)
+  "Return up to CHARS characters of body text of the heading at POS.
+The body is the text between the heading's metadata (planning line,
+property and other drawers) and its first child heading or the next
+heading, whichever comes first, collapsed to a single line.  Returns
+nil when there is no body text."
+  (save-excursion
+    (goto-char pos)
+    (when (org-at-heading-p)
+      (org-end-of-meta-data t)
+      (let* ((start (point))
+             ;; Metadata skipping stops on the next heading line when
+             ;; the section has no body; that heading is not body text.
+             (end (if (org-at-heading-p)
+                      start
+                    (save-excursion
+                      (or (outline-next-heading) (point-max)))))
+             (raw (buffer-substring-no-properties start (max start end)))
+             (text (string-trim
+                    (replace-regexp-in-string
+                     "[ \t\n]+" " "
+                     (or (vulpea-ui--clean-org-links raw) "")))))
+        (cond
+         ((string-empty-p text) nil)
+         ((> (length text) chars)
+          (concat (string-trim (substring text 0 chars)) "..."))
+         (t text))))))
 
 (defun vulpea-ui--extract-table (pos)
   "Extract table cell info around POS."

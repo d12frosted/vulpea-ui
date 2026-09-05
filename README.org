@@ -145,6 +145,11 @@ The faces =vulpea-ui-schema-health-ok-face= / =-error-face= /
 (setq vulpea-ui-backlinks-prose-chars-before 30)
 (setq vulpea-ui-backlinks-prose-chars-after 50)
 
+;; Characters of body text shown for links that sit inside a heading
+;; line (the heading title is already the group label, so the preview
+;; shows what is written under it; nil to show the title instead)
+(setq vulpea-ui-backlinks-header-body-chars 80)
+
 ;; Filter which notes appear in backlinks
 ;; (function receiving vulpea-note, return non-nil to include)
 (setq vulpea-ui-backlinks-note-filter
