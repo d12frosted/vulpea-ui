@@ -616,43 +616,94 @@ file-level ID, so files with one behave exactly as before."
                    (when vulpea-ui--current-note
                      (vulpea-note-id vulpea-ui--current-note))))))
 
-(defun vulpea-ui--on-buffer-change (&optional _frame)
-  "Handle buffer change events and update sidebar if needed.
-Called from `window-buffer-change-functions'."
+(defvar vulpea-ui--scheduled-syncs (make-hash-table :test 'eq)
+  "Frames with a sidebar sync waiting for the command loop, mapped to the timer.
+See `vulpea-ui--schedule-sync'.")
+
+(defun vulpea-ui--on-buffer-change (&optional frame)
+  "Schedule a sidebar sync for FRAME once redisplay is done.
+Called from `window-buffer-change-functions' and
+`window-selection-change-functions' with the frame whose windows
+changed.  The hook only schedules; `vulpea-ui--sync-sidebar' does the
+work when the command loop runs the timer.
+
+The sync creates or deletes the side window, which resizes the main
+windows.  Done here, inside the window change functions, that resize
+would be folded into the state Emacs records at the end of the same
+run, so no later redisplay would notice it: any mode laying itself
+out from those hooks (visual-fill-column sizing its margins, say)
+would stay one layout behind on every switch (vulpea-ui#75).  From a
+timer, the resize is an ordinary change the next redisplay reports to
+every hook.  One timer per frame, so a redisplay calling this hook
+twice (it sits on two hooks) still yields a single sync."
   ;; Skip minibuffer interactions and re-entry during render
   (unless (or (minibufferp) vulpea-ui--rendering)
-    (let* ((frame (selected-frame))
-           (sidebar-buf (vulpea-ui--get-sidebar-buffer frame))
-           (auto-hidden-p (gethash frame vulpea-ui--sidebar-auto-hidden)))
-      (when sidebar-buf
-        (let* ((main-win (vulpea-ui--get-main-window frame))
-               (main-buf (when main-win (window-buffer main-win)))
-               (note (vulpea-ui--get-note-from-buffer main-buf))
-               ;; Only auto-hide if we previously had a note displayed
-               (had-note (buffer-local-value 'vulpea-ui--current-note sidebar-buf))
-               (visible (vulpea-ui--sidebar-visible-p frame))
-               ;; Compare IDs directly (had-note is from sidebar buffer)
-               (same-note (and note had-note
-                               (equal (vulpea-note-id note)
-                                      (vulpea-note-id had-note)))))
-          (cond
-           ;; Non-vulpea buffer: auto-hide if enabled AND we had a note before
-           ((and (null note)
-                 had-note
-                 vulpea-ui-sidebar-auto-hide
-                 visible)
-            (vulpea-ui--hide-sidebar-window frame)
-            (puthash frame t vulpea-ui--sidebar-auto-hidden))
-           ;; Vulpea buffer and was auto-hidden: show again
-           ((and note auto-hidden-p)
-            (remhash frame vulpea-ui--sidebar-auto-hidden)
-            (vulpea-ui--show-sidebar-window frame)
-            ;; Only re-render if note actually changed
-            (unless same-note
-              (vulpea-ui--render-sidebar note frame)))
-           ;; Vulpea buffer and visible: update if needed
-           ((and note visible (not same-note))
-            (vulpea-ui--render-sidebar note frame))))))))
+    (let ((frame (if (frame-live-p frame) frame (selected-frame))))
+      ;; The hook is global once any frame has a sidebar; frames
+      ;; without one have nothing to sync.
+      (when (vulpea-ui--get-sidebar-buffer frame)
+        (vulpea-ui--schedule-sync frame)))))
+
+(defun vulpea-ui--schedule-sync (frame)
+  "Arrange for `vulpea-ui--sync-sidebar' to run for FRAME after redisplay.
+A frame with a sync already pending is left alone."
+  (unless (gethash frame vulpea-ui--scheduled-syncs)
+    (puthash frame
+             (run-with-timer 0 nil #'vulpea-ui--run-scheduled-sync frame)
+             vulpea-ui--scheduled-syncs)))
+
+(defun vulpea-ui--run-scheduled-sync (frame)
+  "Timer function for `vulpea-ui--schedule-sync': sync FRAME's sidebar.
+Everything is recomputed here rather than decided at hook time; the
+frame or its sidebar may be gone by now."
+  (remhash frame vulpea-ui--scheduled-syncs)
+  (when (and (frame-live-p frame) (not vulpea-ui--rendering))
+    (vulpea-ui--sync-sidebar frame)))
+
+(defun vulpea-ui--cancel-scheduled-syncs ()
+  "Drop every pending sidebar sync."
+  (maphash (lambda (_frame timer) (cancel-timer timer))
+           vulpea-ui--scheduled-syncs)
+  (clrhash vulpea-ui--scheduled-syncs))
+
+(defun vulpea-ui--sync-sidebar (frame)
+  "Bring FRAME's sidebar in line with the buffer in its main window.
+Auto-hides the sidebar when the main window left a note for a
+non-note buffer, shows it again when a note is back, and re-renders
+when the note changed.  Runs from the timer armed by
+`vulpea-ui--on-buffer-change', never from the window change functions
+themselves; see there for why."
+  (let* ((sidebar-buf (vulpea-ui--get-sidebar-buffer frame))
+         (auto-hidden-p (gethash frame vulpea-ui--sidebar-auto-hidden)))
+    (when sidebar-buf
+      (let* ((main-win (vulpea-ui--get-main-window frame))
+             (main-buf (when main-win (window-buffer main-win)))
+             (note (vulpea-ui--get-note-from-buffer main-buf))
+             ;; Only auto-hide if we previously had a note displayed
+             (had-note (buffer-local-value 'vulpea-ui--current-note sidebar-buf))
+             (visible (vulpea-ui--sidebar-visible-p frame))
+             ;; Compare IDs directly (had-note is from sidebar buffer)
+             (same-note (and note had-note
+                             (equal (vulpea-note-id note)
+                                    (vulpea-note-id had-note)))))
+        (cond
+         ;; Non-vulpea buffer: auto-hide if enabled AND we had a note before
+         ((and (null note)
+               had-note
+               vulpea-ui-sidebar-auto-hide
+               visible)
+          (vulpea-ui--hide-sidebar-window frame)
+          (puthash frame t vulpea-ui--sidebar-auto-hidden))
+         ;; Vulpea buffer and was auto-hidden: show again
+         ((and note auto-hidden-p)
+          (remhash frame vulpea-ui--sidebar-auto-hidden)
+          (vulpea-ui--show-sidebar-window frame)
+          ;; Only re-render if note actually changed
+          (unless same-note
+            (vulpea-ui--render-sidebar note frame)))
+         ;; Vulpea buffer and visible: update if needed
+         ((and note visible (not same-note))
+          (vulpea-ui--render-sidebar note frame)))))))
 
 (defun vulpea-ui--hide-sidebar-window (&optional frame)
   "Hide the sidebar window in FRAME without killing the buffer.
@@ -705,6 +756,7 @@ sync produces one refresh instead of thousands.")
   "Remove hooks for sidebar content tracking."
   (remove-hook 'window-buffer-change-functions #'vulpea-ui--on-buffer-change)
   (remove-hook 'window-selection-change-functions #'vulpea-ui--on-buffer-change)
+  (vulpea-ui--cancel-scheduled-syncs)
   ;; Auto-refresh hooks
   (remove-hook 'after-save-hook #'vulpea-ui--on-save)
   (when (boundp 'vulpea-db-updated-functions)
@@ -2398,18 +2450,30 @@ Added buffer-locally to `window-buffer-change-functions' by
 `vulpea-ui-sidebar-open' when called from a buffer that no main
 window displays; redisplay then calls it with each window newly
 showing the buffer.  A side or minibuffer window (a preview) keeps
-the open parked; a main window performs it, in that window's frame.
-Because the hook is buffer-local, a parked buffer costs nothing while
-it stays hidden, and the deferral simply dies with the buffer."
+the open parked; a main window unparks it and performs it, in that
+window's frame, once the command loop runs the timer.  Because the
+hook is buffer-local, a parked buffer costs nothing while it stays
+hidden, and the deferral simply dies with the buffer.
+
+The open itself is not done here: creating the side window resizes
+the frame's main windows, and a resize made inside the window change
+functions is invisible to every other hook on them (see
+`vulpea-ui--on-buffer-change')."
   (when (vulpea-ui--main-window-p window)
     (with-current-buffer (window-buffer window)
       (remove-hook 'window-buffer-change-functions
                    #'vulpea-ui--open-on-display t))
-    ;; When the frame already has a sidebar, the tracking machinery
-    ;; (`vulpea-ui--on-buffer-change') picks the note up from this
-    ;; same event; opening again would render twice.
-    (unless (vulpea-ui--get-sidebar-buffer (window-frame window))
-      (vulpea-ui--open-sidebar-in-frame (window-frame window)))))
+    (run-with-timer 0 nil #'vulpea-ui--open-deferred (window-frame window))))
+
+(defun vulpea-ui--open-deferred (frame)
+  "Timer function for `vulpea-ui--open-on-display': open the sidebar in FRAME.
+When FRAME has grown a sidebar in the meantime, the tracking machinery
+\(`vulpea-ui--on-buffer-change') picks the note up from the same
+redisplay; opening again would render twice."
+  (when (and (frame-live-p frame)
+             (not vulpea-ui--rendering)
+             (not (vulpea-ui--get-sidebar-buffer frame)))
+    (vulpea-ui--open-sidebar-in-frame frame)))
 
 ;;;###autoload
 (defun vulpea-ui-sidebar-open (&optional force)

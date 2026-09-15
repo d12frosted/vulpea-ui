@@ -1632,6 +1632,19 @@ buffer."
   (memq #'vulpea-ui--open-on-display
         (buffer-local-value 'window-buffer-change-functions buffer)))
 
+(defun vulpea-ui-test--deferred-timers ()
+  "Return the pending vulpea-ui layout timers."
+  (seq-filter (lambda (timer)
+                (memq (timer--function timer)
+                      '(vulpea-ui--run-scheduled-sync
+                        vulpea-ui--open-deferred)))
+              timer-list))
+
+(defun vulpea-ui-test--flush-deferred ()
+  "Run every pending vulpea-ui layout timer now, as the command loop would."
+  (dolist (timer (vulpea-ui-test--deferred-timers))
+    (timer-event-handler timer)))
+
 (ert-deftest vulpea-ui-test-main-window-p ()
   "Test the main-window predicate on ordinary and minibuffer windows."
   (should (vulpea-ui--main-window-p (frame-selected-window)))
@@ -1680,9 +1693,13 @@ buffer."
           ;; hook with it, as redisplay would.
           (set-window-buffer (frame-selected-window) buf)
           (vulpea-ui--open-on-display (frame-selected-window))
-          (should (vulpea-ui--get-sidebar-buffer))
-          ;; The deferral is one-shot.
-          (should-not (vulpea-ui-test--deferred-p buf)))
+          ;; The deferral is one-shot, and it unparks right away...
+          (should-not (vulpea-ui-test--deferred-p buf))
+          ;; ...but the open itself waits for the command loop, so the
+          ;; window change functions never see the layout change.
+          (should-not (vulpea-ui--get-sidebar-buffer))
+          (vulpea-ui-test--flush-deferred)
+          (should (vulpea-ui--get-sidebar-buffer)))
       (vulpea-ui-sidebar-close)
       (set-window-buffer (frame-selected-window) original)
       (kill-buffer buf))))
@@ -1749,6 +1766,156 @@ entering `org-mode' mid-render cannot recurse into the machinery."
     (vulpea-ui-sidebar-open)
     (vulpea-ui-sidebar-open :force)
     (should-not (vulpea-ui--get-sidebar-buffer))))
+
+
+(ert-deftest vulpea-ui-test-sidebar-open-deferred-skips-existing-sidebar ()
+  "Test that a parked open does nothing once the frame has a sidebar.
+The buffer-change hook that fires the parked open also drives the
+tracking machinery, which picks the note up on its own; a second open
+would render twice."
+  (let ((buf (generate-new-buffer "vulpea-ui-test-defer.org"))
+        (original (window-buffer (frame-selected-window)))
+        (opens 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (vulpea-ui-sidebar-open))
+          ;; The frame gets a sidebar before the parked open fires.
+          (get-buffer-create (vulpea-ui--sidebar-buffer-name))
+          (set-window-buffer (frame-selected-window) buf)
+          (cl-letf (((symbol-function 'vulpea-ui--open-sidebar-in-frame)
+                     (lambda (_frame) (cl-incf opens))))
+            (vulpea-ui--open-on-display (frame-selected-window))
+            (vulpea-ui-test--flush-deferred))
+          (should (= opens 0))
+          (should-not (vulpea-ui-test--deferred-p buf)))
+      (set-window-buffer (frame-selected-window) original)
+      (vulpea-ui-sidebar-close)
+      (kill-buffer buf))))
+
+
+;;; Deferred sidebar layout (issue #75)
+
+(defmacro vulpea-ui-test--with-sidebar-buffer (note &rest body)
+  "Run BODY with a sidebar buffer for the selected frame showing NOTE.
+The buffer is created without a window; BODY decides whether to show
+it.  Everything is torn down afterwards, pending timers included."
+  (declare (indent 1))
+  `(let ((sidebar-buf (get-buffer-create (vulpea-ui--sidebar-buffer-name))))
+     (unwind-protect
+         (progn
+           (with-current-buffer sidebar-buf
+             (setq vulpea-ui--current-note ,note))
+           ,@body)
+       (let ((win (get-buffer-window sidebar-buf)))
+         (when (window-live-p win)
+           (ignore-errors (delete-window win))))
+       (vulpea-ui--teardown-hooks)
+       (remhash (selected-frame) vulpea-ui--sidebar-auto-hidden)
+       (kill-buffer sidebar-buf))))
+
+(ert-deftest vulpea-ui-test-on-buffer-change-defers-auto-hide ()
+  "Test that auto-hide leaves the window change functions untouched.
+`vulpea-ui--on-buffer-change' runs from the window change functions,
+and a window deleted there is folded into the state Emacs records at
+the end of the same run, so modes laying themselves out from those
+hooks (visual-fill-column) stay one layout behind (see
+https://github.com/d12frosted/vulpea-ui/issues/75).  The hook must
+only schedule; the sidebar window goes away once the command loop
+runs the timer."
+  (save-window-excursion
+    (let ((other (generate-new-buffer " *vulpea-ui-test-other*")))
+      (vulpea-ui-test--with-sidebar-buffer
+          (vulpea-ui-test--make-mock-note "issue-75" "Issue 75")
+        (unwind-protect
+            (let ((vulpea-ui-sidebar-auto-hide t)
+                  (frame (selected-frame)))
+              (delete-other-windows)
+              (switch-to-buffer other)
+              (vulpea-ui--create-sidebar-window sidebar-buf)
+              (should (vulpea-ui--sidebar-visible-p frame))
+              ;; As redisplay would call it: a non-note buffer is in
+              ;; the main window while the sidebar shows a note.
+              (vulpea-ui--on-buffer-change frame)
+              (should (vulpea-ui--sidebar-visible-p frame))
+              (should-not (gethash frame vulpea-ui--sidebar-auto-hidden))
+              (vulpea-ui-test--flush-deferred)
+              (should-not (vulpea-ui--sidebar-visible-p frame))
+              (should (gethash frame vulpea-ui--sidebar-auto-hidden))
+              (should-not (vulpea-ui-test--deferred-timers)))
+          (kill-buffer other))))))
+
+(ert-deftest vulpea-ui-test-on-buffer-change-defers-auto-show ()
+  "Test that re-showing an auto-hidden sidebar is deferred as well.
+Creating the side window resizes the main window just like deleting it
+does, so it has to wait for the command loop too."
+  (save-window-excursion
+    (let* ((note (vulpea-ui-test--make-mock-note "issue-75" "Issue 75"))
+           (note-buf (generate-new-buffer "vulpea-ui-test-note.org")))
+      (vulpea-ui-test--with-sidebar-buffer note
+        (unwind-protect
+            (let ((frame (selected-frame)))
+              (delete-other-windows)
+              (switch-to-buffer note-buf)
+              (puthash frame t vulpea-ui--sidebar-auto-hidden)
+              (cl-letf (((symbol-function 'vulpea-ui--get-note-from-buffer)
+                         (lambda (buf) (when (eq buf note-buf) note))))
+                (vulpea-ui--on-buffer-change frame)
+                (should-not (vulpea-ui--sidebar-visible-p frame))
+                (should (gethash frame vulpea-ui--sidebar-auto-hidden))
+                (vulpea-ui-test--flush-deferred))
+              (should (vulpea-ui--sidebar-visible-p frame))
+              (should-not (gethash frame vulpea-ui--sidebar-auto-hidden)))
+          (kill-buffer note-buf))))))
+
+(ert-deftest vulpea-ui-test-on-buffer-change-coalesces-per-frame ()
+  "Test that repeated hook calls arm a single timer per frame.
+The hook sits on both `window-buffer-change-functions' and
+`window-selection-change-functions', so one redisplay calls it twice."
+  (vulpea-ui-test--with-sidebar-buffer nil
+    (let ((frame (selected-frame)))
+      (vulpea-ui--on-buffer-change frame)
+      (vulpea-ui--on-buffer-change frame)
+      (vulpea-ui--on-buffer-change frame)
+      (should (= (length (vulpea-ui-test--deferred-timers)) 1))
+      (vulpea-ui-test--flush-deferred)
+      (should-not (vulpea-ui-test--deferred-timers))
+      ;; Once fired, the next change arms a new one.
+      (vulpea-ui--on-buffer-change frame)
+      (should (= (length (vulpea-ui-test--deferred-timers)) 1)))))
+
+(ert-deftest vulpea-ui-test-on-buffer-change-skips-frames-without-sidebar ()
+  "Test that the hook arms nothing for a frame that has no sidebar.
+The hook is global once any frame has a sidebar; frames without one
+must not pay a timer per window change."
+  (should-not (vulpea-ui--get-sidebar-buffer))
+  (vulpea-ui--on-buffer-change (selected-frame))
+  (should-not (vulpea-ui-test--deferred-timers)))
+
+(ert-deftest vulpea-ui-test-scheduled-sync-survives-closed-sidebar ()
+  "Test that a pending sync is harmless once the sidebar is gone.
+The sidebar can be closed between the hook and the timer; the timer
+must then do nothing rather than act on stale state."
+  (let ((frame (selected-frame))
+        (sidebar-buf (get-buffer-create (vulpea-ui--sidebar-buffer-name))))
+    (vulpea-ui--on-buffer-change frame)
+    (should (vulpea-ui-test--deferred-timers))
+    (kill-buffer sidebar-buf)
+    (vulpea-ui-test--flush-deferred)
+    (should-not (vulpea-ui--get-sidebar-buffer))
+    (should-not (vulpea-ui-test--deferred-timers))))
+
+(ert-deftest vulpea-ui-test-teardown-cancels-scheduled-sync ()
+  "Test that tearing the hooks down drops pending syncs with them."
+  (let ((frame (selected-frame))
+        (sidebar-buf (get-buffer-create (vulpea-ui--sidebar-buffer-name))))
+    (unwind-protect
+        (progn
+          (vulpea-ui--on-buffer-change frame)
+          (should (vulpea-ui-test--deferred-timers))
+          (vulpea-ui--teardown-hooks)
+          (should-not (vulpea-ui-test--deferred-timers)))
+      (kill-buffer sidebar-buf))))
 
 
 ;;; Parse headings tests
