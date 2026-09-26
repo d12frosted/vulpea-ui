@@ -3629,8 +3629,9 @@ plist with the keys:
   "Columns used by collection views that do not specify their own.
 The default, `adaptive', derives the columns from the notes being
 shown, so empty columns never appear: title always, context when
-heading-level notes are present, tags and todo when some note
-carries them, and the backlink count.  Set an explicit list of
+heading-level notes are present, a meta column for every key the
+filter conditions on, tags and todo when some note carries them, and
+the backlink count.  Set an explicit list of
 column descriptors to always use those instead."
   :type '(choice (const :tag "Derive from the data" adaptive)
                  (repeat sexp))
@@ -4191,15 +4192,18 @@ backlinks column is present."
 (defvar-local vulpea-ui-collection--adaptive-columns nil
   "Columns derived at the last refresh for a view without :columns.")
 
-(defun vulpea-ui-collection--adaptive-columns (notes)
+(defun vulpea-ui-collection--adaptive-columns (notes &optional filter)
   "Derive default columns from NOTES: only columns the data can fill.
 Title and the backlink count always show; context appears when
 heading-level notes are present, tags and todo when some note
-carries them."
+carries them.  Every meta key FILTER conditions on gets a column, so
+a view filtered by a field shows that field."
   (append '(title)
           (when (seq-some (lambda (note) (> (vulpea-note-level note) 0))
                           notes)
             '(context))
+          (mapcar (lambda (key) (list 'meta key))
+                  (seq-uniq (mapcar #'car (plist-get filter :meta))))
           (when (seq-some #'vulpea-note-tags notes) '(tags))
           (when (seq-some #'vulpea-note-todo notes) '(todo))
           '(backlinks)))
@@ -4317,7 +4321,10 @@ tabulated-list support that arrived in Emacs 30."
                                (not (plist-get vulpea-ui-collection--view
                                                :columns)))
                       (setq vulpea-ui-collection--adaptive-columns
-                            (vulpea-ui-collection--adaptive-columns notes)))
+                            (vulpea-ui-collection--adaptive-columns
+                             notes
+                             (plist-get vulpea-ui-collection--view
+                                        :filter))))
                     (vulpea-ui-collection--view-columns)))
          (ctx (vulpea-ui-collection--context columns)))
     (setq vulpea-ui-collection--ctx ctx)

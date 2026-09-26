@@ -3988,6 +3988,36 @@ FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
                          :tags '("wine") :todo "TODO")))
                  '(title context tags todo backlinks))))
 
+(ert-deftest vulpea-ui-collection-test-adaptive-columns-filter-meta ()
+  "Meta keys the filter conditions on become adaptive columns."
+  (should (equal (vulpea-ui-collection--adaptive-columns
+                  (list (vulpea-ui-test--collection-note
+                         :id "n1" :tags '("wine")))
+                  '(:meta (("country" . "France")
+                           ("rating" . t)
+                           ("country" . "Italy"))))
+                 '(title (meta "country") (meta "rating") tags backlinks)))
+  ;; a filter without meta conditions changes nothing
+  (should (equal (vulpea-ui-collection--adaptive-columns
+                  (list (vulpea-ui-test--collection-note :id "n1"))
+                  '(:tags-all ("wine")))
+                 '(title backlinks))))
+
+(ert-deftest vulpea-ui-collection-test-adaptive-refresh-filter-meta ()
+  "Refreshing an adaptive view shows the columns its meta filter names."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :filter (:meta (("rating" . t)))))
+    (let ((vulpea-ui-collection-default-columns 'adaptive))
+      (cl-letf (((symbol-function 'vulpea-ui-collection--query)
+                 (lambda (_filter)
+                   (list (vulpea-ui-test--collection-note
+                          :id "n1" :title "One")))))
+        (vulpea-ui-collection-refresh)
+        (should (equal (vulpea-ui-collection--view-columns)
+                       '(title (meta "rating") backlinks)))))))
+
 (ert-deftest vulpea-ui-collection-test-adaptive-refresh ()
   "A view without :columns derives them from the queried notes."
   (vulpea-ui-test--with-collection-buffer
