@@ -292,8 +292,8 @@ columns and familiar navigation for free.
 is parsed as a query, so =wine -beer #red? level:0 country:France=
 works straight from the prompt (bare words require a tag, =-tag=
 excludes one, =#tag?= means any-of, =level:=, =dir:=, =title:=,
-=body:= (file content), =todo:= and =KEY:VALUE= / =KEY:*= condition
-on the rest). The syntax
+=body:= (file content), =todo:=, =KEY:VALUE= / =KEY:*= condition on
+metadata and =prop:KEY=VALUE= / =prop:KEY=*= on the property drawer). The syntax
 is exactly what the mode line prints as the filter summary, so the
 description you see is a query you can type. Empty input opens the
 whole collection. Press =?= inside the view for a menu of everything
@@ -321,25 +321,43 @@ Views are plists. Save them in =vulpea-ui-collection-views= (or press
 The =:filter= plist supports =:tags-all=, =:tags-any=, =:tags-none=,
 =:level= (0 for file-level notes), =:directory= (absolute prefix or a
 relative path component), =:title= (regexp), =:meta= (alist of
-=(KEY . VALUE)= conditions, =(KEY . t)= for mere presence) and
-=:predicate= (any function on the note). The cheapest condition is
+=(KEY . VALUE)= conditions, =(KEY . t)= for mere presence),
+=:properties= (the same shape, over the =:PROPERTIES:= drawer; keys
+are case-insensitive like in org) and =:predicate= (any function on
+the note). The cheapest condition is
 pushed down to the database, the rest is applied in memory.
 
 Columns: =title=, =context= (file title and outline path of a heading
 note - tells apart a dozen rows all called "Tasks"), =tags=,
-=(meta KEY)=, =todo=, =priority=, =scheduled=, =deadline=, =created=,
-=modified=, =links= (outgoing link count), =backlinks= (incoming link
-count, one grouped query for the whole table), =aliases= and =file=.
-Any column takes =:name= and =:width= overrides, e.g.
-=(title :width 60)=. Widths fit the content by default (the defaults
+=(meta KEY)=, =(property KEY)= (a property drawer entry), =todo=,
+=priority=, =scheduled=, =deadline=, =created=, =modified=, =links=
+(outgoing link count), =backlinks= (incoming link count, one grouped
+query for the whole table), =aliases= and =file=. Any column takes
+=:name= and =:width= overrides, e.g. =(title :width 60)=.
+
+A computed column is =(fn NAME FUNCTION)=: FUNCTION gets each note
+and returns the cell (a string, or any value, which is formatted; nil
+leaves the cell empty). It sorts, groups and exports like any other
+column:
+
+#+begin_src emacs-lisp
+(setq vulpea-ui-collection-views
+      '(("commits" . (:filter (:properties (("COMMIT_ID" . t)))
+                      :columns (title
+                                (property "COMMIT_ID" :width 10)
+                                (property "CREATED_TS")
+                                (fn "Links out" (lambda (note)
+                                                  (length (vulpea-note-links note))))
+                                tags)))))
+#+end_src Widths fit the content by default (the defaults
 act as caps); a column you resize by hand keeps its width and is
 pinned into the view when you save it.
 
 A view without =:columns= gets *adaptive* defaults: columns are
 derived from the notes being shown, so empty ones never appear -
 title always, context when heading-level notes are present, a
-=(meta KEY)= column for every key the filter conditions on (filter by
-=rating:*= and you see the ratings), tags and todo when some note
+=(meta KEY)= or =(property KEY)= column for every key the filter
+conditions on (filter by =rating:*= and you see the ratings), tags and todo when some note
 carries them, plus the backlink count (sort by it to surface your hub
 notes). Ad-hoc views come sorted by title. Set
 =vulpea-ui-collection-default-columns= to an explicit list to opt
@@ -378,6 +396,7 @@ Keybindings:
 | =/ g= | Narrow by file content (ripgrep when available)   |
 | =/ d= | Scope to a directory                              |
 | =/ m= | Condition on a metadata field                     |
+| =/ p= | Condition on a property                           |
 | =/ l= | Filter by level                                   |
 | =/ k= | Remove a single filter condition                  |
 | =/ /= | Clear the filter                                  |
@@ -391,15 +410,16 @@ Keybindings:
 =e= is context-aware: on the tags column it rewrites the tags of the
 note at point (completion, prefilled); on a meta column it reads a
 value for that key - prefilled from the note at point - and sets it
-on the selection; anywhere else it prompts for the key. =T= sets a
+on the selection; a property column works the same way (empty input
+removes the property); anywhere else it prompts for a meta key. =T= sets a
 todo state on the selection's heading-level notes (empty input clears
 it). =Z= undoes the last batch edit precisely: adding a tag only
-strips it from notes that gained it, meta edits restore each note's
-previous values, and todo edits restore the old states.
+strips it from notes that gained it, meta and property edits restore
+each note's previous values, and todo edits restore the old states.
 
 === is the drill-down gesture: it adds a filter condition from the
-cell at point - a tag from the tags column, the value of a meta cell,
-a todo state, or the note's directory from the context and file
+cell at point - a tag from the tags column, the value of a meta or
+property cell, a todo state, or the note's directory from the context and file
 columns. See "France", press ===, see the wines. Hovering a truncated
 cell shows its full value, and =SPC= prints the whole row as
 =column: value= lines.

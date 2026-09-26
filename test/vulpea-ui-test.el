@@ -3829,14 +3829,15 @@ extraction."
     (&key (id "n1") (title "Note") (path "/notes/n1.org") (level 0)
           (pos 1) tags meta links created-at modified-at
           todo priority scheduled deadline aliases
-          file-title outline-path)
+          file-title outline-path properties)
   "Create a mock note for collection tests.
 ID, TITLE, PATH, LEVEL, POS, TAGS, META, LINKS, CREATED-AT,
 MODIFIED-AT, TODO, PRIORITY, SCHEDULED, DEADLINE, ALIASES,
-FILE-TITLE and OUTLINE-PATH map to the `vulpea-note' slots."
+FILE-TITLE, OUTLINE-PATH and PROPERTIES map to the `vulpea-note'
+slots."
   (make-vulpea-note
    :id id :title title :primary-title title :path path :level level
-   :pos pos :tags tags :meta meta :links links
+   :pos pos :tags tags :meta meta :links links :properties properties
    :created-at created-at :modified-at modified-at
    :todo todo :priority priority :scheduled scheduled
    :deadline deadline :aliases aliases
@@ -5780,6 +5781,188 @@ turned off on its own."
         (vulpea-ui--backlink-count-turn-on)
         (should vulpea-ui-backlink-count-mode)
         (vulpea-ui-backlink-count-mode -1)))))
+
+;;; Collection: property and computed columns
+
+(ert-deftest vulpea-ui-collection-test-matches-properties ()
+  "Property conditions match values or presence, keys case-insensitively."
+  (let ((note (vulpea-ui-test--collection-note
+               :properties '(("COMMIT_ID" . "abc") ("CREATED_TS" . "123")))))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:properties (("COMMIT_ID" . "abc")))))
+    (should (vulpea-ui-collection--note-matches-p
+             note '(:properties (("commit_id" . "abc") ("CREATED_TS" . t)))))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:properties (("COMMIT_ID" . "def")))))
+    (should-not (vulpea-ui-collection--note-matches-p
+                 note '(:properties (("MISSING" . t)))))))
+
+(ert-deftest vulpea-ui-collection-test-parse-query-properties ()
+  "prop:KEY=VALUE and prop:KEY=* parse into :properties and round-trip."
+  (let ((filter (vulpea-ui-collection--parse-query
+                 "wine prop:commit_id=abc prop:CREATED_TS=* country:France")))
+    (should (equal filter
+                   '(:tags-all ("wine")
+                     :meta (("country" . "France"))
+                     :properties (("COMMIT_ID" . "abc")
+                                  ("CREATED_TS" . t)))))
+    (should (equal (vulpea-ui-collection--filter-description filter)
+                   "#wine country:France prop:COMMIT_ID=abc prop:CREATED_TS=*"))
+    (should (equal (vulpea-ui-collection--parse-query
+                    (vulpea-ui-collection--filter-description filter))
+                   filter))))
+
+(ert-deftest vulpea-ui-collection-test-remove-property-condition ()
+  "A single property condition can be listed and removed."
+  (let* ((filter '(:properties (("A" . "1") ("B" . t))))
+         (conditions (vulpea-ui-collection--filter-conditions filter))
+         (condition (cdr (assoc "prop:A=1" conditions))))
+    (should (assoc "prop:B=*" conditions))
+    (should (equal (vulpea-ui-collection--filter-remove
+                    filter (car condition) (cdr condition))
+                   '(:properties (("B" . t)))))))
+
+(ert-deftest vulpea-ui-collection-test-query-properties-pushdown ()
+  "A property condition alone is pushed down to the property index."
+  (let ((hit (vulpea-ui-test--collection-note
+              :id "n1" :properties '(("COMMIT_ID" . "abc"))))
+        calls)
+    (cl-letf (((symbol-function 'vulpea-db-query-by-property)
+               (lambda (key value) (push (list key value) calls) (list hit)))
+              ((symbol-function 'vulpea-db-query-by-property-key)
+               (lambda (key) (push (list key) calls) (list hit)))
+              ((symbol-function 'vulpea-db-query)
+               (lambda (&rest _) (error "Full scan"))))
+      (should (equal (vulpea-ui-collection--query
+                      '(:properties (("COMMIT_ID" . "abc"))))
+                     (list hit)))
+      (should (equal (vulpea-ui-collection--query
+                      '(:properties (("COMMIT_ID" . t))))
+                     (list hit)))
+      (should (equal (nreverse calls) '(("COMMIT_ID" "abc") ("COMMIT_ID")))))))
+
+(ert-deftest vulpea-ui-collection-test-property-column ()
+  "A property column shows the value, named after the key as written."
+  (let ((note (vulpea-ui-test--collection-note
+               :properties '(("CREATED_TS" . "123"))))
+        (col (vulpea-ui-collection--normalize-column
+              '(property "created_ts"))))
+    (should (equal (plist-get col :name) "created_ts"))
+    (should (equal (vulpea-ui-collection--column-raw-value note col nil)
+                   "123"))
+    (should (equal (vulpea-ui-collection--column-raw-value
+                    (vulpea-ui-test--collection-note) col nil)
+                   ""))))
+
+(ert-deftest vulpea-ui-collection-test-fn-column ()
+  "A computed column calls its function with the note."
+  (let ((col (vulpea-ui-collection--normalize-column
+              `(fn "Len" ,(lambda (note) (length (vulpea-note-title note)))
+                   :width 5)))
+        (note (vulpea-ui-test--collection-note :title "Merlot")))
+    (should (equal (plist-get col :name) "Len"))
+    (should (equal (plist-get col :width) 5))
+    (should (equal (vulpea-ui-collection--column-raw-value note col nil)
+                   "6")))
+  (let ((col (vulpea-ui-collection--normalize-column
+              '(fn "Nothing" ignore))))
+    (should (equal (vulpea-ui-collection--column-raw-value
+                    (vulpea-ui-test--collection-note) col nil)
+                   ""))))
+
+(ert-deftest vulpea-ui-collection-test-adaptive-columns-filter-properties ()
+  "Property keys the filter conditions on become adaptive columns."
+  (should (equal (vulpea-ui-collection--adaptive-columns
+                  (list (vulpea-ui-test--collection-note :id "n1"))
+                  '(:meta (("rating" . t))
+                    :properties (("COMMIT_ID" . "abc"))))
+                 '(title (meta "rating") (property "COMMIT_ID") backlinks))))
+
+(ert-deftest vulpea-ui-collection-test-available-property-columns ()
+  "Property keys of the notes in view are offered as prop:KEY columns."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :properties '(("COMMIT_ID" . "abc"))))
+    (let ((available (vulpea-ui-collection--available-columns)))
+      (should (equal (cdr (assoc "prop:COMMIT_ID" available))
+                     '(property "COMMIT_ID"))))
+    (cl-letf (((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) "prop:OTHER")))
+      (call-interactively #'vulpea-ui-collection-add-column)
+      (should (equal (plist-get vulpea-ui-collection--view :columns)
+                     '(title (property "OTHER")))))))
+
+(ert-deftest vulpea-ui-collection-test-narrow-at-point-property ()
+  "= on a property cell requires that property value."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :properties '(("COMMIT_ID" . "abc123"))))
+    (vulpea-ui-test--collection-set-columns
+     notes '(title (property "COMMIT_ID")))
+    (cl-letf (((symbol-function 'vulpea-ui-collection-refresh) #'ignore))
+      (search-forward "abc123")
+      (goto-char (match-beginning 0))
+      (vulpea-ui-collection-narrow-at-point)
+      (should (equal (plist-get (vulpea-ui-collection--current-filter)
+                                :properties)
+                     '(("COMMIT_ID" . "abc123")))))))
+
+(ert-deftest vulpea-ui-collection-test-note-set-property ()
+  "Properties are written to the drawer of file and heading notes."
+  (let ((file (make-temp-file "vulpea-ui-test" nil ".org"
+                              ":PROPERTIES:\n:ID: f1\n:END:\n#+title: File\n\n* Heading\n:PROPERTIES:\n:ID: h1\n:END:\n")))
+    (unwind-protect
+        (let ((file-note (vulpea-ui-test--collection-note
+                          :id "f1" :path file :level 0 :pos 1))
+              (heading-note (vulpea-ui-test--collection-note
+                             :id "h1" :path file :level 1
+                             :pos (with-temp-buffer
+                                    (insert-file-contents file)
+                                    (search-forward "* Heading")
+                                    (match-beginning 0)))))
+          (vulpea-ui-collection--note-set-property file-note "COMMIT_ID" "abc")
+          (vulpea-ui-collection--note-set-property heading-note "COMMIT_ID" "def")
+          (with-current-buffer (find-file-noselect file)
+            (org-mode)
+            (goto-char (point-min))
+            (should (equal (org-entry-get (point) "COMMIT_ID") "abc"))
+            (search-forward "* Heading")
+            (should (equal (org-entry-get (point) "COMMIT_ID") "def")))
+          ;; nil removes the property again
+          (vulpea-ui-collection--note-set-property heading-note "COMMIT_ID" nil)
+          (with-current-buffer (find-file-noselect file)
+            (goto-char (point-min))
+            (search-forward "* Heading")
+            (should-not (org-entry-get (point) "COMMIT_ID"))))
+      (when-let* ((buf (get-file-buffer file)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf))
+      (delete-file file))))
+
+(ert-deftest vulpea-ui-collection-test-quick-edit-property ()
+  "e on a property column sets it on the selection, prefilled and undoable."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "n1" :title "One" :properties '(("COMMIT_ID" . "abc"))))
+    (vulpea-ui-test--collection-set-columns
+     notes '(title (property "COMMIT_ID")))
+    (search-forward "abc")
+    (goto-char (match-beginning 0))
+    (let (writes initial)
+      (cl-letf (((symbol-function 'vulpea-ui-collection--note-set-property)
+                 (lambda (note key value)
+                   (push (list (vulpea-note-id note) key value) writes)))
+                ((symbol-function 'vulpea-ui-collection-refresh) #'ignore)
+                ((symbol-function 'read-string)
+                 (lambda (_prompt &optional init &rest _)
+                   (setq initial init)
+                   "def")))
+        (vulpea-ui-collection-quick-edit)
+        (should (equal initial "abc"))
+        (should (equal writes '(("n1" "COMMIT_ID" "def"))))
+        (vulpea-ui-collection-undo)
+        (should (equal (car writes) '("n1" "COMMIT_ID" "abc")))))))
 
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here

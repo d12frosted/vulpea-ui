@@ -3677,6 +3677,12 @@ Marks are keyed by note id, so they survive sorting and re-querying.")
 
 ;;;; Filtering and querying
 
+(defun vulpea-ui-collection--note-property (note key)
+  "Return the value of property KEY on NOTE, or nil.
+Keys compare case-insensitively, the way org treats property names
+\(vulpea stores them upcased)."
+  (cdr (assoc-string key (vulpea-note-properties note) t)))
+
 (defun vulpea-ui-collection--note-matches-p (note filter)
   "Return non-nil when NOTE satisfies FILTER.
 FILTER is a plist; every present condition must hold:
@@ -3691,6 +3697,8 @@ FILTER is a plist; every present condition must hold:
   :todo       - todo state NOTE must have
   :meta       - alist of (KEY . VALUE) conditions; VALUE t means the
                 key must merely be present
+  :properties - alist of (KEY . VALUE) conditions on the property
+                drawer, same shape as :meta; keys are case-insensitive
   :predicate  - function called with NOTE, must return non-nil
 
 The :body condition (file content match) and the :source
@@ -3728,8 +3736,21 @@ candidate-pool function are applied by
                   values
                 (member (cdr condition) values))))
           (plist-get filter :meta))
+         (seq-every-p
+          (lambda (condition)
+            (let ((value (vulpea-ui-collection--note-property
+                          note (car condition))))
+              (if (eq (cdr condition) t)
+                  value
+                (equal (cdr condition) value))))
+          (plist-get filter :properties))
          (let ((pred (plist-get filter :predicate)))
            (or (null pred) (funcall pred note))))))
+
+(defun vulpea-ui-collection--property-condition-label (condition)
+  "Return the query token for property CONDITION, a (KEY . VALUE) pair."
+  (format "prop:%s=%s" (car condition)
+          (if (eq (cdr condition) t) "*" (cdr condition))))
 
 (defun vulpea-ui-collection--filter-description (filter)
   "Return a short human-readable summary of FILTER.
@@ -3756,6 +3777,9 @@ Empty string when FILTER has no conditions."
                 (format "%s:*" (car condition))
               (format "%s:%s" (car condition) (cdr condition)))
             parts))
+    (dolist (condition (plist-get filter :properties))
+      (push (vulpea-ui-collection--property-condition-label condition)
+            parts))
     (when (plist-get filter :predicate)
       (push "predicate" parts))
     (when (plist-get filter :source)
@@ -3780,6 +3804,14 @@ top."
                 ((plist-get filter :tags-any)
                  (vulpea-db-query-by-tags-some
                   (plist-get filter :tags-any)))
+                ((and (plist-get filter :properties)
+                      (fboundp 'vulpea-db-query-by-property))
+                 (let ((condition (car (plist-get filter :properties))))
+                   (if (eq (cdr condition) t)
+                       (vulpea-db-query-by-property-key
+                        (upcase (car condition)))
+                     (vulpea-db-query-by-property
+                      (upcase (car condition)) (cdr condition)))))
                 ((and (plist-get filter :directory)
                       (fboundp 'vulpea-db-query-by-directory))
                  (vulpea-db-query-by-directory
@@ -3838,6 +3870,8 @@ does."
     (context "Context" 36)
     (tags "Tags" 24)
     (meta nil 14)
+    (property nil 14)
+    (fn nil 14)
     (todo "Todo" 8)
     (priority "Pri" 4)
     (scheduled "Scheduled" 10)
@@ -3849,27 +3883,36 @@ does."
     (aliases "Aliases" 20)
     (file "File" 20))
   "Column defaults: (ID NAME WIDTH) per column type.
-A nil NAME means the column is named after its key (meta columns).")
+A nil NAME means the column is named after its key (meta and
+property columns) or its explicit name (computed columns).")
 
 (defun vulpea-ui-collection--normalize-column (col)
   "Normalize column descriptor COL into a plist.
 COL is a symbol from `vulpea-ui-collection--columns', or a list
-\(SYMBOL [KEY] [KEYWORD VALUE]...) where KEY names the meta field for
-meta columns and the keywords :name and :width override the defaults.
-The result is a plist with :id, :key, :name and :width."
+\(SYMBOL [KEY] [KEYWORD VALUE]...) where KEY names the field for meta
+and property columns and the keywords :name and :width override the
+defaults.  A computed column is (fn NAME FUNCTION [KEYWORD VALUE]...):
+FUNCTION is called with each note and returns the cell (a string, or
+any value, formatted; nil for an empty cell).
+The result is a plist with :id, :key, :name, :width and, for computed
+columns, :function."
   (let* ((col (if (listp col) col (list col)))
          (id (car col))
          (key (when (and (cdr col) (not (keywordp (cadr col))))
                 (cadr col)))
-         (overrides (if key (cddr col) (cdr col)))
+         (fn (when (eq id 'fn) (nth 2 col)))
+         (overrides (cond (fn (nthcdr 3 col))
+                          (key (cddr col))
+                          (t (cdr col))))
          (defaults (alist-get id vulpea-ui-collection--columns))
          (name (or (plist-get overrides :name)
                    (car defaults)
                    key
                    (capitalize (symbol-name id))))
          (width (or (plist-get overrides :width) (cadr defaults) 12)))
-    (list :id id :key key :name name :width width
-          :explicit-width (and (plist-member overrides :width) t))))
+    (append (list :id id :key key :name name :width width
+                  :explicit-width (and (plist-member overrides :width) t))
+            (when fn (list :function fn)))))
 
 (defun vulpea-ui-collection--format-time (value)
   "Format timestamp VALUE as an ISO date string.
@@ -3919,6 +3962,13 @@ CTX is the per-refresh data plist."
     ('meta (string-join (cdr (assoc (plist-get col :key)
                                     (vulpea-note-meta note)))
                         ", "))
+    ('property (or (vulpea-ui-collection--note-property
+                    note (plist-get col :key))
+                   ""))
+    ('fn (let ((value (funcall (plist-get col :function) note)))
+           (cond ((null value) "")
+                 ((stringp value) value)
+                 (t (format "%s" value)))))
     ('context (if (> (vulpea-note-level note) 0)
                   (string-join
                    (delq nil (cons (vulpea-note-file-title note)
@@ -4058,6 +4108,7 @@ the note id."
     (define-key map (kbd "g") #'vulpea-ui-collection-filter-by-body)
     (define-key map (kbd "d") #'vulpea-ui-collection-filter-by-directory)
     (define-key map (kbd "m") #'vulpea-ui-collection-filter-by-meta)
+    (define-key map (kbd "p") #'vulpea-ui-collection-filter-by-property)
     (define-key map (kbd "l") #'vulpea-ui-collection-filter-by-level)
     (define-key map (kbd "k") #'vulpea-ui-collection-filter-remove-condition)
     (define-key map (kbd "/") #'vulpea-ui-collection-filter-clear)
@@ -4196,14 +4247,17 @@ backlinks column is present."
   "Derive default columns from NOTES: only columns the data can fill.
 Title and the backlink count always show; context appears when
 heading-level notes are present, tags and todo when some note
-carries them.  Every meta key FILTER conditions on gets a column, so
-a view filtered by a field shows that field."
+carries them.  Every meta and property key FILTER conditions on gets
+a column, so a view filtered by a field shows that field."
   (append '(title)
           (when (seq-some (lambda (note) (> (vulpea-note-level note) 0))
                           notes)
             '(context))
           (mapcar (lambda (key) (list 'meta key))
                   (seq-uniq (mapcar #'car (plist-get filter :meta))))
+          (mapcar (lambda (key) (list 'property key))
+                  (seq-uniq (mapcar #'car (plist-get filter :properties))
+                            #'string-equal-ignore-case))
           (when (seq-some #'vulpea-note-tags notes) '(tags))
           (when (seq-some #'vulpea-note-todo notes) '(todo))
           '(backlinks)))
@@ -4661,6 +4715,22 @@ Empty value means the field must merely be present."
       (append (plist-get filter :meta)
               (list (cons key (if (string-empty-p value) t value))))))))
 
+(defun vulpea-ui-collection-filter-by-property ()
+  "Narrow the view on a property from the notes' property drawers.
+Empty value means the property must merely be present."
+  (interactive)
+  (let* ((key (upcase (completing-read
+                       "Property: "
+                       (vulpea-ui-collection--known-property-keys))))
+         (value (read-string
+                 (format "Value for %s (empty for presence): " key)))
+         (filter (vulpea-ui-collection--current-filter)))
+    (vulpea-ui-collection--set-filter
+     (vulpea-ui-collection--filter-put
+      filter :properties
+      (append (plist-get filter :properties)
+              (list (cons key (if (string-empty-p value) t value))))))))
+
 (defun vulpea-ui-collection-filter-by-level ()
   "Narrow the view to notes of a given level.
 Level 0 keeps file-level notes only; \"any\" drops the condition."
@@ -4700,6 +4770,10 @@ identifies the condition for `vulpea-ui-collection--filter-remove'."
                     (format "%s:%s" (car condition) (cdr condition)))
                   (cons :meta condition))
             conditions))
+    (dolist (condition (plist-get filter :properties))
+      (push (cons (vulpea-ui-collection--property-condition-label condition)
+                  (cons :properties condition))
+            conditions))
     (when (plist-get filter :predicate)
       (push (cons "predicate" (cons :predicate nil)) conditions))
     (when (plist-get filter :source)
@@ -4708,10 +4782,11 @@ identifies the condition for `vulpea-ui-collection--filter-remove'."
 
 (defun vulpea-ui-collection--filter-remove (filter key &optional value)
   "Return a copy of FILTER without one condition.
-KEY names the condition; for the list-valued keys (tags and meta)
-VALUE picks the element to drop, scalar keys are cleared entirely."
+KEY names the condition; for the list-valued keys (tags, meta and
+properties) VALUE picks the element to drop, scalar keys are cleared
+entirely."
   (pcase key
-    ((or :tags-all :tags-any :tags-none :meta)
+    ((or :tags-all :tags-any :tags-none :meta :properties)
      (vulpea-ui-collection--filter-put
       filter key (remove value (plist-get filter key))))
     (_ (vulpea-ui-collection--filter-put filter key nil))))
@@ -4734,10 +4809,10 @@ VALUE picks the element to drop, scalar keys are cleared entirely."
 
 (defun vulpea-ui-collection-narrow-at-point ()
   "Add a filter condition from the cell at point.
-On a tags cell, require one of the note's tags; on a meta cell,
-require that key to have the cell's value; on a todo cell, require
-the state; on a context or file cell, scope to the note's directory.
-Other columns cannot narrow."
+On a tags cell, require one of the note's tags; on a meta or
+property cell, require that key to have the cell's value; on a todo
+cell, require the state; on a context or file cell, scope to the
+note's directory.  Other columns cannot narrow."
   (interactive)
   (let ((col (vulpea-ui-collection--column-at-point))
         (note (vulpea-ui-collection--note-at-point))
@@ -4767,6 +4842,15 @@ Other columns cannot narrow."
                                     (format "Narrow to %s: " key)
                                     values nil t)
                                  (car values)))))))))
+      ('property
+       (let* ((key (upcase (plist-get col :key)))
+              (value (vulpea-ui-collection--note-property note key)))
+         (unless value (user-error "The note has no %s property" key))
+         (vulpea-ui-collection--set-filter
+          (vulpea-ui-collection--filter-put
+           filter :properties
+           (append (plist-get filter :properties)
+                   (list (cons key value)))))))
       ('todo
        (let ((state (vulpea-note-todo note)))
          (unless state (user-error "The note has no todo state"))
@@ -4796,16 +4880,28 @@ Other columns cannot narrow."
              vulpea-ui-collection--note-table)
     (seq-uniq keys)))
 
+(defun vulpea-ui-collection--known-property-keys ()
+  "Return the property keys present on the notes currently in the view."
+  (let (keys)
+    (maphash (lambda (_ note)
+               (dolist (item (vulpea-note-properties note))
+                 (push (car item) keys)))
+             vulpea-ui-collection--note-table)
+    (seq-uniq keys)))
+
 (defun vulpea-ui-collection--available-columns ()
   "Return an alist of column display name to column descriptor.
-Built-in columns plus a meta:KEY column for every metadata key found
-on the notes currently in the view."
+Built-in columns plus a meta:KEY column for every metadata key and a
+prop:KEY column for every property key found on the notes currently
+in the view."
   (append
    (mapcar (lambda (id) (cons (symbol-name id) id))
            '(title context tags todo priority scheduled deadline
              created modified links backlinks aliases file))
    (mapcar (lambda (key) (cons (format "meta:%s" key) (list 'meta key)))
-           (vulpea-ui-collection--known-meta-keys))))
+           (vulpea-ui-collection--known-meta-keys))
+   (mapcar (lambda (key) (cons (format "prop:%s" key) (list 'property key)))
+           (vulpea-ui-collection--known-property-keys))))
 
 (defun vulpea-ui-collection--set-columns (columns)
   "Install COLUMNS on the current view and re-render.
@@ -4828,13 +4924,16 @@ The sort key is dropped when it points at a column that is gone."
 
 (defun vulpea-ui-collection-add-column (column)
   "Append COLUMN to the current view.
-Interactively, complete over the built-in columns and the meta keys of
-the notes in the view; free input is treated as a meta key."
+Interactively, complete over the built-in columns and the meta and
+property keys of the notes in the view; free input is treated as a
+meta key, or as a property key when it starts with prop:."
   (interactive
    (list (let* ((available (vulpea-ui-collection--available-columns))
                 (name (completing-read "Add column: " available)))
-           (or (cdr (assoc name available))
-               (list 'meta (string-remove-prefix "meta:" name))))))
+           (cond ((cdr (assoc name available)))
+                 ((string-prefix-p "prop:" name)
+                  (list 'property (string-remove-prefix "prop:" name)))
+                 (t (list 'meta (string-remove-prefix "meta:" name)))))))
   (vulpea-ui-collection--set-columns
    (append (vulpea-ui-collection--view-columns) (list column))))
 
@@ -5038,17 +5137,65 @@ The prompt is prefilled from the note at point."
         (message "Set %s on %d note(s)" key (length notes))
         (vulpea-ui-collection-refresh)))))
 
+(defun vulpea-ui-collection--note-set-property (note key value)
+  "Set property KEY to VALUE in NOTE's property drawer and save.
+VALUE nil or empty removes the property.  Works for file-level notes
+\(the drawer before the first heading) and heading notes alike.  The
+entry is found by its ID, since the stored position goes stale as
+soon as an earlier edit in a batch touched the same file."
+  (with-current-buffer (find-file-noselect (vulpea-note-path note))
+    (org-with-wide-buffer
+     (goto-char (or (org-find-property "ID" (vulpea-note-id note))
+                    (vulpea-note-pos note)))
+     (if (or (null value) (string-empty-p value))
+         (org-entry-delete (point) key)
+       (org-entry-put (point) key value)))
+    (save-buffer)))
+
+(defun vulpea-ui-collection--edit-property (key)
+  "Read a value for property KEY and set it on the selection.
+The prompt is prefilled from the note at point; empty input removes
+the property.  Undoable with \\[vulpea-ui-collection-undo]."
+  (let ((notes (vulpea-ui-collection--notes-for-action)))
+    (unless notes (user-error "No notes selected"))
+    (let ((value (read-string
+                  (format "Value for %s (empty to remove): " key)
+                  (when-let* ((note (vulpea-ui-collection--note-at-point)))
+                    (vulpea-ui-collection--note-property note key)))))
+      (when (vulpea-ui-collection--confirm
+             (if (string-empty-p value)
+                 (format "Remove %s from" key)
+               (format "Set %s to %s on" key value))
+             notes)
+        (let ((old (mapcar (lambda (note)
+                             (cons note (vulpea-ui-collection--note-property
+                                         note key)))
+                           notes)))
+          (dolist (note notes)
+            (vulpea-ui-collection--note-set-property note key value))
+          (vulpea-ui-collection--record-undo
+           (format "set %s" key)
+           (lambda ()
+             (dolist (item old)
+               (vulpea-ui-collection--note-set-property
+                (car item) key (cdr item))))))
+        (message "Set %s on %d note(s)" key (length notes))
+        (vulpea-ui-collection-refresh)))))
+
 (defun vulpea-ui-collection-quick-edit ()
   "Edit the field of the column at point.
 On the tags column, rewrite the tags of the note at point with
-completion, prefilled.  On a meta column, read a value for that key -
-prefilled from the note at point - and set it on the selection.
-Anywhere else, fall back to `vulpea-ui-collection-set-meta'."
+completion, prefilled.  On a meta or property column, read a value
+for that key - prefilled from the note at point - and set it on the
+selection.  Anywhere else, fall back to
+`vulpea-ui-collection-set-meta'."
   (interactive)
   (let ((col (vulpea-ui-collection--column-at-point)))
     (pcase (plist-get col :id)
       ('tags (vulpea-ui-collection--edit-tags-at-point))
       ('meta (vulpea-ui-collection--edit-meta (plist-get col :key)))
+      ('property (vulpea-ui-collection--edit-property
+                  (plist-get col :key)))
       (_ (vulpea-ui-collection-set-meta)))))
 
 (defun vulpea-ui-collection-remove-meta ()
@@ -5300,12 +5447,19 @@ filter summary shown in the mode line is itself a valid query:
   title:RE   - title regexp
   KEY:VALUE  - metadata equality
   KEY:*      - metadata key presence
+  prop:KEY=VALUE - property drawer equality (keys case-insensitive)
+  prop:KEY=*     - property presence
 
 Tokens are separated by spaces or commas.  A :predicate condition is
 not expressible in this syntax."
-  (let (all any none level dir title body todo meta)
+  (let (all any none level dir title body todo meta props)
     (dolist (token (split-string input "[, ]+" t))
       (cond
+       ((string-match "\\`prop:\\([^=]+\\)=\\(.+\\)\\'" token)
+        (let ((value (match-string 2 token)))
+          (push (cons (upcase (match-string 1 token))
+                      (if (equal value "*") t value))
+                props)))
        ((string-match "\\`level:\\([0-9]+\\)\\'" token)
         (setq level (string-to-number (match-string 1 token))))
        ((string-match "\\`dir:\\(.+\\)\\'" token)
@@ -5335,7 +5489,8 @@ not expressible in this syntax."
      (when title (list :title title))
      (when body (list :body body))
      (when todo (list :todo todo))
-     (when meta (list :meta (nreverse meta))))))
+     (when meta (list :meta (nreverse meta)))
+     (when props (list :properties (nreverse props))))))
 
 (defun vulpea-ui-collection--resolve-view (input)
   "Resolve INPUT into a view spec.
@@ -5485,6 +5640,7 @@ bookmark file; the current sort order and columns are captured."
     ("d" "directory" vulpea-ui-collection-filter-by-directory
      :transient t)
     ("M" "meta field" vulpea-ui-collection-filter-by-meta :transient t)
+    ("p" "property" vulpea-ui-collection-filter-by-property :transient t)
     ("l" "level" vulpea-ui-collection-filter-by-level :transient t)
     ("K" "remove condition" vulpea-ui-collection-filter-remove-condition
      :transient t)
