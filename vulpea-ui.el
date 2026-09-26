@@ -5140,13 +5140,10 @@ The prompt is prefilled from the note at point."
 (defun vulpea-ui-collection--note-set-property (note key value)
   "Set property KEY to VALUE in NOTE's property drawer and save.
 VALUE nil or empty removes the property.  Works for file-level notes
-\(the drawer before the first heading) and heading notes alike.  The
-entry is found by its ID, since the stored position goes stale as
-soon as an earlier edit in a batch touched the same file."
+\(the drawer before the first heading) and heading notes alike."
   (with-current-buffer (find-file-noselect (vulpea-note-path note))
     (org-with-wide-buffer
-     (goto-char (or (org-find-property "ID" (vulpea-note-id note))
-                    (vulpea-note-pos note)))
+     (vulpea-ui-collection--goto-entry note)
      (if (or (null value) (string-empty-p value))
          (org-entry-delete (point) key)
        (org-entry-put (point) key value)))
@@ -5214,6 +5211,14 @@ selection.  Anywhere else, fall back to
         (message "Removed %s from %d note(s)" key (length notes))
         (vulpea-ui-collection-refresh)))))
 
+(defun vulpea-ui-collection--goto-entry (note)
+  "Move point to NOTE's entry in the current (widened) org buffer.
+The entry is found by its ID: the stored position goes stale as soon
+as an earlier edit in a batch touched the same file.  Falls back to
+the stored position when the ID is not in the buffer."
+  (goto-char (or (org-find-property "ID" (vulpea-note-id note))
+                 (vulpea-note-pos note))))
+
 (defun vulpea-ui-collection--note-set-todo (note state)
   "Set NOTE's todo STATE in its file and save.
 STATE nil or empty clears the state.  Only heading-level notes can
@@ -5221,7 +5226,7 @@ carry one; returns non-nil when the note was updated."
   (when (> (vulpea-note-level note) 0)
     (with-current-buffer (find-file-noselect (vulpea-note-path note))
       (org-with-wide-buffer
-       (goto-char (vulpea-note-pos note))
+       (vulpea-ui-collection--goto-entry note)
        (org-todo (if (or (null state) (string-empty-p state))
                      'none
                    state)))

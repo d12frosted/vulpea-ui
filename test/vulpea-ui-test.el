@@ -5964,5 +5964,33 @@ turned off on its own."
         (vulpea-ui-collection-undo)
         (should (equal (car writes) '("n1" "COMMIT_ID" "abc")))))))
 
+(ert-deftest vulpea-ui-collection-test-note-set-todo-same-file-batch ()
+  "Setting states on several headings of one file hits each of them.
+The first write shifts the second heading, so the stored position
+goes stale; the writer must find the entry by its ID."
+  (let ((file (make-temp-file "vulpea-ui-test" nil ".org"
+                              "* A\n:PROPERTIES:\n:ID: a\n:END:\n* B\n:PROPERTIES:\n:ID: b\n:END:\n")))
+    (unwind-protect
+        (let* ((positions (with-temp-buffer
+                            (insert-file-contents file)
+                            (list (progn (search-forward "* A")
+                                         (match-beginning 0))
+                                  (progn (search-forward "* B")
+                                         (match-beginning 0)))))
+               (a (vulpea-ui-test--collection-note
+                   :id "a" :path file :level 1 :pos (nth 0 positions)))
+               (b (vulpea-ui-test--collection-note
+                   :id "b" :path file :level 1 :pos (nth 1 positions))))
+          (vulpea-ui-collection--note-set-todo a "TODO")
+          (vulpea-ui-collection--note-set-todo b "TODO")
+          (with-current-buffer (find-file-noselect file)
+            (goto-char (point-min))
+            (should (re-search-forward "^\\* TODO A$" nil t))
+            (should (re-search-forward "^\\* TODO B$" nil t))))
+      (when-let* ((buf (get-file-buffer file)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf))
+      (delete-file file))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here
