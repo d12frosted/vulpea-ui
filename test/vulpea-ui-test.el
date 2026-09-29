@@ -1985,6 +1985,11 @@ raw org markup such as links and emphasis."
 
 ;;; Widget registry tests
 
+(defun vulpea-ui-test--widget-components (note)
+  "Return the components of the widgets shown for NOTE, in display order."
+  (mapcar (lambda (widget) (plist-get widget :component))
+          (vulpea-ui--get-widgets-for-note note)))
+
 (ert-deftest vulpea-ui-test-register-widget-stores-props ()
   "Registering a widget stores component, predicate and order."
   (vulpea-ui-test--with-clean-registry
@@ -2005,6 +2010,22 @@ raw org markup such as links and emphasis."
     (let ((props (gethash 'w vulpea-ui--widget-registry)))
       (should (eq (plist-get props :component) 'second))
       (should (= (plist-get props :order) 200)))))
+
+(ert-deftest vulpea-ui-test-register-widget-stores-collapsed ()
+  "An explicit :collapsed is stored, nil included; an absent one is not.
+Nil starts the widget expanded whatever the global default says, so it
+must stay distinguishable from not setting :collapsed at all."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'folded :component 'c :collapsed t)
+    (vulpea-ui-register-widget 'open :component 'c :collapsed nil)
+    (vulpea-ui-register-widget 'plain :component 'c)
+    (let ((folded (gethash 'folded vulpea-ui--widget-registry))
+          (open (gethash 'open vulpea-ui--widget-registry))
+          (plain (gethash 'plain vulpea-ui--widget-registry)))
+      (should (eq (plist-get folded :collapsed) t))
+      (should (plist-member open :collapsed))
+      (should-not (plist-get open :collapsed))
+      (should-not (plist-member plain :collapsed)))))
 
 (ert-deftest vulpea-ui-test-unregister-widget ()
   "Unregistering removes the widget from the registry."
@@ -2032,7 +2053,7 @@ raw org markup such as links and emphasis."
   (vulpea-ui-test--with-clean-registry
     (vulpea-ui-register-widget 'w :component 'w-component)
     (should (memq 'w-component
-                  (vulpea-ui--get-widgets-for-note
+                  (vulpea-ui-test--widget-components
                    (vulpea-ui-test--make-mock-note))))))
 
 (ert-deftest vulpea-ui-test-widgets-for-note-predicate-filters ()
@@ -2042,11 +2063,11 @@ raw org markup such as links and emphasis."
                                :component 'w-component
                                :predicate (lambda (_note) nil))
     (should-not (memq 'w-component
-                      (vulpea-ui--get-widgets-for-note
+                      (vulpea-ui-test--widget-components
                        (vulpea-ui-test--make-mock-note))))
     (vulpea-ui-widget-set 'w :predicate (lambda (_note) t))
     (should (memq 'w-component
-                  (vulpea-ui--get-widgets-for-note
+                  (vulpea-ui-test--widget-components
                    (vulpea-ui-test--make-mock-note))))))
 
 (ert-deftest vulpea-ui-test-widgets-for-note-ordering ()
@@ -2055,7 +2076,7 @@ raw org markup such as links and emphasis."
     (vulpea-ui-register-widget 'a :component 'a-component :order 300)
     (vulpea-ui-register-widget 'b :component 'b-component :order 100)
     (vulpea-ui-register-widget 'c :component 'c-component :order 200)
-    (should (equal (vulpea-ui--get-widgets-for-note
+    (should (equal (vulpea-ui-test--widget-components
                     (vulpea-ui-test--make-mock-note))
                    '(b-component c-component a-component)))))
 
@@ -2074,24 +2095,144 @@ Mirrors the example from the README."
            default-on)))
       ;; no property, variable nil -> hidden
       (should-not (memq 'w-component
-                        (vulpea-ui--get-widgets-for-note
+                        (vulpea-ui-test--widget-components
                          (vulpea-ui-test--make-mock-note))))
       ;; no property, variable t -> shown
       (setq default-on t)
       (should (memq 'w-component
-                    (vulpea-ui--get-widgets-for-note
+                    (vulpea-ui-test--widget-components
                      (vulpea-ui-test--make-mock-note))))
       ;; property "nil" overrides variable t -> hidden
       (should-not (memq 'w-component
-                        (vulpea-ui--get-widgets-for-note
+                        (vulpea-ui-test--widget-components
                          (vulpea-ui-test--make-mock-note
                           nil nil '(("SHOW_W" . "nil"))))))
       ;; property "t" overrides variable nil -> shown
       (setq default-on nil)
       (should (memq 'w-component
-                    (vulpea-ui--get-widgets-for-note
+                    (vulpea-ui-test--widget-components
                      (vulpea-ui-test--make-mock-note
                       nil nil '(("SHOW_W" . "t")))))))))
+
+
+;;; Widget collapse tests
+
+(vui-defcomponent vulpea-ui-test--collapse-alpha ()
+  "Probe widget titled Alpha with the body \"Alpha body\"."
+  :render
+  (vui-component 'vulpea-ui-widget
+    :title "Alpha"
+    :children (lambda () (vui-text "Alpha body"))))
+
+(vui-defcomponent vulpea-ui-test--collapse-beta ()
+  "Probe widget titled Beta with the body \"Beta body\"."
+  :render
+  (vui-component 'vulpea-ui-widget
+    :title "Beta"
+    :children (lambda () (vui-text "Beta body"))))
+
+(defun vulpea-ui-test--collapse-state (output title)
+  "Return how the probe widget TITLE shows in OUTPUT.
+An expanded widget has the ▼ header and its body, a collapsed one the
+▶ header only; the result is `expanded', `collapsed', or nil when
+OUTPUT matches neither."
+  (let ((body (string-match-p (regexp-quote (concat title " body")) output)))
+    (cond ((and body (string-match-p (regexp-quote (concat "▼ " title)) output))
+           'expanded)
+          ((and (not body) (string-match-p (regexp-quote (concat "▶ " title)) output))
+           'collapsed))))
+
+(ert-deftest vulpea-ui-test-widget-collapse-follows-global ()
+  "Without :collapsed a widget follows `vulpea-ui-default-widget-collapsed'."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'alpha :component 'vulpea-ui-test--collapse-alpha)
+    (dolist (case '((nil . expanded) (t . collapsed)))
+      (let ((vulpea-ui-default-widget-collapsed (car case)))
+        (vulpea-ui-test--mount-sidebar-root (vulpea-ui-test--make-mock-note)
+          (should (eq (vulpea-ui-test--collapse-state output "Alpha")
+                      (cdr case))))))))
+
+(ert-deftest vulpea-ui-test-widget-collapse-overrides-global ()
+  "A widget's :collapsed wins over `vulpea-ui-default-widget-collapsed'.
+Each widget applies its own setting, so one sidebar can mix both
+states: :collapsed nil starts expanded even when the global says
+collapsed, and the other way around."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'alpha
+                               :component 'vulpea-ui-test--collapse-alpha
+                               :collapsed nil
+                               :order 100)
+    (vulpea-ui-register-widget 'beta
+                               :component 'vulpea-ui-test--collapse-beta
+                               :collapsed t
+                               :order 200)
+    (dolist (global '(nil t))
+      (let ((vulpea-ui-default-widget-collapsed global))
+        (vulpea-ui-test--mount-sidebar-root (vulpea-ui-test--make-mock-note)
+          (should (eq (vulpea-ui-test--collapse-state output "Alpha") 'expanded))
+          (should (eq (vulpea-ui-test--collapse-state output "Beta") 'collapsed)))))))
+
+(ert-deftest vulpea-ui-test-widget-set-collapsed ()
+  "`vulpea-ui-widget-set' changes :collapsed of a registered widget.
+This is how a built-in or third-party widget gets its own default."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'alpha :component 'vulpea-ui-test--collapse-alpha)
+    (vulpea-ui-widget-set 'alpha :collapsed t)
+    (let ((vulpea-ui-default-widget-collapsed nil))
+      (vulpea-ui-test--mount-sidebar-root (vulpea-ui-test--make-mock-note)
+        (should (eq (vulpea-ui-test--collapse-state output "Alpha")
+                    'collapsed))))))
+
+(ert-deftest vulpea-ui-test-widget-collapse-outside-sidebar ()
+  "Outside the sidebar `vulpea-ui-widget' follows the global default.
+There is no registry entry to read there, so nothing overrides it."
+  (dolist (case '((nil . expanded) (t . collapsed)))
+    (let ((vulpea-ui-default-widget-collapsed (car case))
+          (buf-name "*vulpea-ui-collapse-test*"))
+      (unwind-protect
+          (progn
+            (vui-mount (vui-component 'vulpea-ui-test--collapse-alpha) buf-name)
+            (should (eq (vulpea-ui-test--collapse-state
+                         (with-current-buffer buf-name
+                           (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                         "Alpha")
+                        (cdr case))))
+        (when (get-buffer buf-name)
+          (kill-buffer buf-name))))))
+
+(ert-deftest vulpea-ui-test-widget-collapse-keeps-toggle-across-notes ()
+  "A widget toggled by hand keeps its state when the sidebar changes notes.
+The registered :collapsed only seeds the widget when it mounts.
+Re-rendering the sidebar for another note must reuse the widget, not
+remount it back into its registered state."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'alpha
+                               :component 'vulpea-ui-test--collapse-alpha
+                               :collapsed t)
+    (let ((vui-render-delay nil)
+          (buf-name "*vulpea-ui-collapse-test*"))
+      (with-current-buffer (get-buffer-create buf-name)
+        (vulpea-ui-sidebar-mode))
+      (unwind-protect
+          (let ((instance (vui-mount
+                           (vui-component 'vulpea-ui-sidebar-root
+                                          :note (vulpea-ui-test--make-mock-note
+                                                 "note-a" "A"))
+                           buf-name)))
+            (with-current-buffer buf-name
+              (goto-char (point-min))
+              (search-forward "▶ Alpha")
+              (vui-activate (match-beginning 0))
+              (should (eq (vulpea-ui-test--collapse-state (buffer-string) "Alpha")
+                          'expanded))
+              (vui-update-props instance
+                                (list :note (vulpea-ui-test--make-mock-note
+                                             "note-b" "B")))
+              (should (eq (vulpea-ui-test--collapse-state (buffer-string) "Alpha")
+                          'expanded))))
+        (when (get-buffer buf-name)
+          (kill-buffer buf-name))))))
 
 
 ;;; Unlinked mentions grouping tests
@@ -5203,10 +5344,10 @@ Mirrors the sidebar split: data changes are announced on
   (let ((note (vulpea-ui-test--make-mock-note)))
     (let ((vulpea-ui-collection-views nil))
       (should-not (memq 'vulpea-ui-widget-collections
-                        (vulpea-ui--get-widgets-for-note note))))
+                        (vulpea-ui-test--widget-components note))))
     (let ((vulpea-ui-collection-views '(("wines" . (:filter nil)))))
       (should (memq 'vulpea-ui-widget-collections
-                    (vulpea-ui--get-widgets-for-note note))))))
+                    (vulpea-ui-test--widget-components note))))))
 
 (ert-deftest vulpea-ui-collection-test-bookmark ()
   "Bookmarks capture the view (minus the predicate) and restore it."
