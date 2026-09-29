@@ -958,7 +958,7 @@ For use within widget components."
 ;;; Widget wrapper component
 
 (defun vulpea-ui--widget-collapsed-p (entry)
-  "Return non-nil when the widget registered as ENTRY starts collapsed.
+  "Return non-nil if the widget registered as ENTRY should start collapsed.
 ENTRY is a registry plist, or nil for a widget outside the sidebar.
 Its :collapsed wins when set, even to nil; otherwise
 `vulpea-ui-default-widget-collapsed' decides."
