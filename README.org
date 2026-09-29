@@ -188,7 +188,8 @@ list of types.
 ;; When nil, sidebar remains visible with stale content
 (setq vulpea-ui-sidebar-auto-hide t)
 
-;; Start widgets collapsed
+;; Start widgets collapsed (a widget's own :collapsed wins, see
+;; "Collapsed or expanded" below)
 (setq vulpea-ui-default-widget-collapsed nil)
 
 ;; Auto-refresh sidebar on database changes and idle (enabled by
@@ -728,7 +729,8 @@ vulpea-ui registers these widgets by default:
 (vulpea-ui-register-widget 'my-widget
   :component 'my-custom-widget-component
   :predicate #'my-note-predicate  ; optional: only show when this returns non-nil
-  :order 150)                      ; optional: default 100
+  :order 150                       ; optional: default 100
+  :collapsed nil)                  ; optional: nil starts expanded, t collapsed
 #+end_src
 
 ** Narrowing-aware widgets
@@ -780,6 +782,26 @@ stays file-scoped - nothing else changes for it.
 ;; Remove a widget
 (vulpea-ui-unregister-widget 'links)
 #+end_src
+
+** Collapsed or expanded
+
+By default every widget follows =vulpea-ui-default-widget-collapsed=. Give a widget =:collapsed= to decide for it alone: =t= starts it collapsed, =nil= starts it expanded, whatever the global value says. It works at registration and with =vulpea-ui-widget-set=, so built-in widgets and widgets from other packages can have their own default too.
+
+#+begin_src emacs-lisp
+;; Fold everything except your own widget
+(setq vulpea-ui-default-widget-collapsed t)
+(vulpea-ui-register-widget 'my-widget
+  :component 'my-custom-widget-component
+  :collapsed nil)
+
+;; Or keep widgets expanded and fold only the long ones
+(vulpea-ui-widget-set 'backlinks :collapsed t)
+(vulpea-ui-widget-set 'unlinked-mentions :collapsed t)
+#+end_src
+
+This only decides how a widget starts. You can still toggle it, and the sidebar keeps the toggled state through refreshes and note switches. Changing =:collapsed= while the sidebar is open takes effect after you close and reopen it.
+
+Widgets get this through the =vulpea-ui-widget= wrapper, so a custom widget built on it needs no code for it.
 
 ** Toggling a widget per note
 

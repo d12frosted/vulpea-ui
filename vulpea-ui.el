@@ -94,7 +94,9 @@ Alists'."
 
 (defcustom vulpea-ui-default-widget-collapsed nil
   "Default collapsed state for all widgets.
-When non-nil, widgets start collapsed."
+When non-nil, widgets start collapsed.  A widget registered with
+:collapsed (see `vulpea-ui-register-widget' and
+`vulpea-ui-widget-set') uses that instead."
   :type 'boolean
   :group 'vulpea-ui)
 
@@ -293,6 +295,13 @@ include the value in their `vui-use-memo' dependencies, so their data
 recomputes when the user narrows or widens; see the README for a
 recipe.")
 
+(vui-defcontext vulpea-ui--widget-entry nil
+  "Registry entry of the sidebar widget being rendered, or nil.
+Provided around each widget by `vulpea-ui-sidebar-content', so the
+`vulpea-ui-widget' wrapper applies the widget's registered settings
+\(such as :collapsed) without the widget passing them along.  Nil
+outside the sidebar.")
+
 
 ;;; Widget Registry
 
@@ -301,7 +310,8 @@ recipe.")
 Keys are widget symbols, values are plists with:
   :component - the vui component symbol
   :predicate - function taking note, returns non-nil if widget shows
-  :order - numeric order for sorting (lower = earlier)")
+  :order - numeric order for sorting (lower = earlier)
+  :collapsed - initial collapse state, present only when set")
 
 (defun vulpea-ui-register-widget (name &rest props)
   "Register a widget NAME with properties PROPS.
@@ -312,6 +322,9 @@ PROPS is a plist with:
   :component - (required) symbol naming the vui component
   :predicate - (optional) function (note) -> bool, widget shown when true
   :order - (optional) numeric order, default 100
+  :collapsed - (optional) non-nil to start the widget collapsed, nil to
+               start it expanded; when absent, the widget follows
+               `vulpea-ui-default-widget-collapsed'
 
 Example:
   (vulpea-ui-register-widget \\='journal-nav
@@ -324,9 +337,13 @@ Example:
     (unless component
       (error "Widget %s requires :component" name))
     (puthash name
-             (list :component component
-                   :predicate predicate
-                   :order order)
+             (append (list :component component
+                           :predicate predicate
+                           :order order)
+                     ;; An explicit nil means "start expanded", so
+                     ;; store :collapsed whenever it is given.
+                     (when (plist-member props :collapsed)
+                       (list :collapsed (plist-get props :collapsed))))
              vulpea-ui--widget-registry)))
 
 (defun vulpea-ui-unregister-widget (name)
@@ -339,25 +356,22 @@ Example:
     (puthash name (plist-put widget prop value) vulpea-ui--widget-registry)))
 
 (defun vulpea-ui--get-widgets-for-note (note)
-  "Return list of widget components to display for NOTE.
+  "Return registry entries of the widgets to display for NOTE.
+Each entry is the widget's registry plist with :name prepended.
 Widgets are filtered by predicate and sorted by order."
   (let ((widgets nil))
     ;; Collect applicable widgets
     (maphash
      (lambda (name props)
-       (let ((predicate (plist-get props :predicate))
-             (component (plist-get props :component))
-             (order (plist-get props :order)))
+       (let ((predicate (plist-get props :predicate)))
          (when (or (null predicate)
                    (funcall predicate note))
-           (push (list :name name :component component :order order) widgets))))
+           (push (cl-list* :name name props) widgets))))
      vulpea-ui--widget-registry)
     ;; Sort by order
-    (setq widgets (sort widgets (lambda (a b)
-                                  (< (plist-get a :order)
-                                     (plist-get b :order)))))
-    ;; Return component symbols
-    (mapcar (lambda (w) (plist-get w :component)) widgets)))
+    (sort widgets (lambda (a b)
+                    (< (plist-get a :order)
+                       (plist-get b :order))))))
 
 
 ;;; Faces
@@ -943,18 +957,32 @@ For use within widget components."
 
 ;;; Widget wrapper component
 
+(defun vulpea-ui--widget-collapsed-p (entry)
+  "Return non-nil when the widget registered as ENTRY starts collapsed.
+ENTRY is a registry plist, or nil for a widget outside the sidebar.
+Its :collapsed wins when set, even to nil; otherwise
+`vulpea-ui-default-widget-collapsed' decides."
+  (if (plist-member entry :collapsed)
+      (plist-get entry :collapsed)
+    vulpea-ui-default-widget-collapsed))
+
 (vui-defcomponent vulpea-ui-widget (title count)
   "Standard widget wrapper with collapsible header.
 TITLE is the widget title string.
 COUNT is an optional count to display in the header.
-CHILDREN (implicit) is a function returning the widget content."
+CHILDREN (implicit) is a function returning the widget content.
+
+The widget starts collapsed as its registration says (see
+`vulpea-ui-register-widget'), falling back to
+`vulpea-ui-default-widget-collapsed'."
   :render
   (let ((display-title (if count
                            (format "%s (%s)" title count)
-                         title)))
+                         title))
+        (entry (vui-use-context vulpea-ui--widget-entry-context)))
     (vui-collapsible
       :title display-title
-      :initially-expanded (not vulpea-ui-default-widget-collapsed)
+      :initially-expanded (not (vulpea-ui--widget-collapsed-p entry))
       :title-face 'vulpea-ui-widget-header-face
       :key title
       :indent 2
@@ -2356,15 +2384,19 @@ all\" button action for an outgoing-mention group."
 ;;; Root component
 
 (vui-defcomponent vulpea-ui-sidebar-content ()
-  "Content component for the sidebar (uses context)."
+  "Content component for the sidebar (uses context).
+Each widget renders inside a provider of its registry entry, which
+`vulpea-ui-widget' reads for per-widget settings such as :collapsed."
   :render
   (let ((note (use-vulpea-ui-note)))
     (if note
         (let ((widgets (vulpea-ui--get-widgets-for-note note)))
           (vui-vstack
            :spacing 1
-           (seq-map (lambda (widget-sym)
-                      (vui-component widget-sym :key widget-sym))
+           (seq-map (lambda (widget)
+                      (let ((component (plist-get widget :component)))
+                        (vulpea-ui--widget-entry-provider widget
+                          (vui-component component :key component))))
                     widgets)))
       (vui-muted "No vulpea note selected"))))
 
