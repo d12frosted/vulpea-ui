@@ -3405,6 +3405,101 @@ The file is what the list shows, so only saving brings the two in line."
                                  " which has unsaved changes;"
                                  " save it to update the list"))))))))
 
+;;; Ignored notes widget render tests
+
+(defmacro vulpea-ui-test--render-ignored-notes (ignored-form &rest body)
+  "Render the ignored-notes widget and run BODY with OUTPUT bound.
+
+`vulpea-mentions-ignored-notes' is stubbed to return IGNORED-FORM, so
+the widget renders deterministically with no database.  OUTPUT is the
+rendered sidebar buffer text.  The widget registry is isolated to the
+ignored-notes widget for the duration of the render."
+  (declare (indent 1))
+  `(vulpea-ui-test--with-clean-registry
+     (vulpea-ui-register-widget 'ignored-notes
+                                :component 'vulpea-ui-widget-ignored-notes
+                                :order 475)
+     (let ((note (vulpea-ui-test--make-mock-note "tgt" "Target"))
+           (buf-name "*vulpea-ui-ignored-test*"))
+       (with-current-buffer (get-buffer-create buf-name)
+         (vulpea-ui-sidebar-mode))
+       (cl-letf (((symbol-function 'vulpea-mentions-ignored-notes)
+                  (lambda (_note) ,ignored-form)))
+         (unwind-protect
+             (progn
+               (vui-mount (vui-component 'vulpea-ui-sidebar-root :note note)
+                          buf-name)
+               (let ((output (with-current-buffer buf-name
+                               (buffer-substring-no-properties
+                                (point-min) (point-max)))))
+                 ,@body))
+           (when (get-buffer buf-name)
+             (kill-buffer buf-name)))))))
+
+(ert-deftest vulpea-ui-test-ignored-notes-widget-lists ()
+  "Ignored notes render as links with an unignore button, under a count."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+        (b (vulpea-ui-test--make-mock-note "id-b" "Note B")))
+    (vulpea-ui-test--render-ignored-notes (list a b)
+      ;; Header shows how many notes are ignored
+      (should (string-match-p "Ignored Notes (2)" output))
+      ;; Both ignored notes appear, each with its unignore button
+      (should (string-match-p (regexp-quote "[Note A] [unignore]") output))
+      (should (string-match-p (regexp-quote "[Note B] [unignore]") output)))))
+
+(ert-deftest vulpea-ui-test-ignored-notes-widget-empty ()
+  "No ignored notes renders the empty-state message under a zero count."
+  (vulpea-ui-test--render-ignored-notes nil
+    (should (string-match-p "Ignored Notes (0)" output))
+    (should (string-match-p "No ignored notes" output))))
+
+(ert-deftest vulpea-ui-test-ignored-notes-unignore-from ()
+  "Render an unignore button for each ignored note.
+Pressing the button passes the note arguments to
+`vulpea-mentions-unignore-from' in the expected order.  The point should
+be placed at the Ignored Notes group after the on-click function
+returns."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+        (b (vulpea-ui-test--make-mock-note "id-b" "Note B")))
+    (vulpea-ui-test--render-ignored-notes (list a b)
+      (should (string-match-p (regexp-quote "[Note A] [unignore]") output))
+      (should (string-match-p (regexp-quote "[Note B] [unignore]") output))
+      (with-current-buffer buf-name
+        (let ((calls nil)
+              (last-message nil))
+          (cl-letf (((symbol-function 'vulpea-mentions-unignore-from)
+                     (lambda (note from-note)
+                       (push (list (vulpea-note-id note)
+                                   (vulpea-note-id from-note))
+                             calls)))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (when fmt
+                         (setq last-message (apply #'format fmt args)))
+                       nil)))
+            ;; Press Note A's unignore button (the first one in the buffer),
+            ;; going through the button's own :on-click wiring.
+            (let ((unignore-buttons
+                   (seq-filter
+                    (lambda (w)
+                      (equal (vui-element-get w :vui-tag) "unignore"))
+                    (vui--collect-widgets))))
+              (should (= (length unignore-buttons) 2))
+              (should (vui-activate
+                       (car (vui--widget-bounds (car unignore-buttons)))))))
+          ;; The viewed note comes first, the ignored note second.
+          (should (equal calls '(("tgt" "id-a"))))
+          (should (equal last-message
+                         "vulpea-ui: unignored mentions of Target from Note A")))
+        (let ((ignored-notes
+               (seq-find
+                (lambda (w)
+                  (equal (vui-element-get w :vui-key)
+                         vulpea-ui--ignored-notes-title))
+                (vui--collect-widgets))))
+          (should (= (point) (car (vui--widget-bounds ignored-notes)))))))))
+
+
 ;;; Schema health widget
 
 (ert-deftest vulpea-ui-test-schema-health-no-schema ()
