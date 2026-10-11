@@ -2766,6 +2766,49 @@ there instead of the top of the sidebar.  Intended as the \"link\" and
                what "the line changed or the mention is not plain text"))
      (t (message "vulpea-ui: %s" what)))))
 
+;;; Ignored notes widget
+
+(defconst vulpea-ui--ignored-notes-title "Ignored Notes"
+  "Title of the ignored notes widget.
+
+`vulpea-ui-widget' keys its collapsible by title, so this string is also
+the cursor anchor that `vulpea-ui--unignore-mentions-action' jumps to;
+sharing one constant keeps the two from drifting apart.")
+
+(vui-defcomponent vulpea-ui-widget-ignored-notes ()
+  "Widget displaying notes whose mentions to this note are ignored."
+  :render
+  (when-let* ((note (use-vulpea-ui-note)))
+    (let ((ignored-notes (vulpea-mentions-ignored-notes note)))
+      (vui-component 'vulpea-ui-widget
+        :title vulpea-ui--ignored-notes-title
+        :count (length ignored-notes)
+        :children
+        (lambda ()
+          (if (> (length ignored-notes) 0)
+              (vui-vstack
+               :spacing 0
+               (seq-map (lambda (ignored-note)
+                          (vui-hstack
+                           (vui-component 'vulpea-ui-note-link :note ignored-note)
+                           (vui-button "unignore"
+                             :face 'vulpea-ui-mention-action-face
+                             :on-click (lambda ()
+                                         (vulpea-ui--unignore-mentions-action note ignored-note))
+                             :help-echo "Unignore mentions from this note.")))
+                        ignored-notes))
+            (vui-muted "No ignored notes")))))))
+
+(defun vulpea-ui--unignore-mentions-action (note from-note)
+  "Unignore mentions of NOTE from FROM-NOTE.
+
+Intended as the \"unignore\" button action for an ignored note."
+  (when (fboundp 'vui-goto-key)
+    (vui-goto-key vulpea-ui--ignored-notes-title))
+  (vulpea-mentions-unignore-from note from-note)
+  (message "vulpea-ui: unignored mentions of %s from %s"
+           (vulpea-note-title note)
+           (vulpea-note-title from-note)))
 
 ;;; Root component
 
@@ -3746,6 +3789,10 @@ Renders nothing when the file carries no schema-bearing note."
 (vulpea-ui-register-widget 'outgoing-mentions
                            :component 'vulpea-ui-widget-outgoing-mentions
                            :order 450)
+
+(vulpea-ui-register-widget 'ignored-notes
+                           :component 'vulpea-ui-widget-ignored-notes
+                           :order 475)
 
 ;;; Schema dashboard
 
