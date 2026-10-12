@@ -433,7 +433,7 @@ Widgets are filtered by predicate and sorted by order."
 
 (defface vulpea-ui-mention-action-face
   '((t :inherit link :underline nil))
-  "Face for the link action buttons in the outgoing mentions widget."
+  "Face for the action buttons in the mention widgets."
   :group 'vulpea-ui)
 
 
@@ -2046,9 +2046,11 @@ MENTIONS is the list resolved by `vulpea-note-unlinked-mentions-async':
 each is a plist with :note (the mentioning `vulpea-note'), :path, :line,
 and :context.
 
-Returns a list of group plists, one per mentioning note in
-first-encounter order, each with :note, :path, and :mentions - a list of
-\(:line :context) plists kept in their original order."
+Returns a list of group plists, one per mentioning note, each with
+:note, :path, and :mentions - a list of (:line :context) plists kept in
+their original order.  The groups are sorted by note title, then by
+path: the scan reports files in no fixed order, and the list should not
+reshuffle each time it is re-scanned."
   (let ((meta (make-hash-table :test 'equal))
         (lists (make-hash-table :test 'equal))
         (order nil))
@@ -2062,48 +2064,77 @@ first-encounter order, each with :note, :path, and :mentions - a list of
           (push (list :line (plist-get m :line)
                       :context (plist-get m :context))
                 (gethash id lists)))))
-    (mapcar (lambda (id)
-              (let ((info (gethash id meta)))
-                (list :note (plist-get info :note)
-                      :path (plist-get info :path)
-                      :mentions (nreverse (gethash id lists)))))
-            (nreverse order))))
+    (sort (mapcar (lambda (id)
+                    (let ((info (gethash id meta)))
+                      (list :note (plist-get info :note)
+                            :path (plist-get info :path)
+                            :mentions (nreverse (gethash id lists)))))
+                  order)
+          (lambda (a b)
+            (let ((title-a (or (vulpea-note-title (plist-get a :note)) ""))
+                  (title-b (or (vulpea-note-title (plist-get b :note)) "")))
+              (if (string= title-a title-b)
+                  (string< (or (plist-get a :path) "")
+                           (or (plist-get b :path) ""))
+                (string< title-a title-b)))))))
 
 (defun vulpea-ui--render-mention-group (group source-note)
   "Render a mention GROUP: the mentioning note link and its context lines.
 
-For each note link, there is an ignore button, which adds the mentioning
-note id to the value of `vulpea-mentions-per-note-ignore-property-key'
-in SOURCE-NOTE."
+For each note link, there is a \"link all\" button, which turns every
+mention below into a link to SOURCE-NOTE, and an ignore button, which
+adds the mentioning note id to the value of
+`vulpea-mentions-per-note-ignore-property-key' in SOURCE-NOTE."
   (let ((note (plist-get group :note))
         (path (plist-get group :path))
         (mentions (plist-get group :mentions)))
     (vui-vstack
      :spacing 0
      (if note
-         (vui-hstack
-          (vui-component 'vulpea-ui-note-link :note note)
-          (vui-button "ignore"
-            :face 'vulpea-ui-mention-action-face
-            :on-click (lambda ()
-                        (vulpea-ui--ignore-mentions-action source-note note))
-            :help-echo "Ignore mentions from this note."))
+         (let ((key (list 'link-mentions path)))
+           (vui-hstack
+            (vui-component 'vulpea-ui-note-link :note note)
+            (vui-button "link all"
+              :key key
+              :face 'vulpea-ui-mention-action-face
+              :on-click (lambda ()
+                          (vulpea-ui--link-incoming-action
+                           source-note note path mentions key))
+              :help-echo "Insert id: links for every mention below")
+            (vui-button "ignore"
+              :face 'vulpea-ui-mention-action-face
+              :on-click (lambda ()
+                          (vulpea-ui--ignore-mentions-action source-note note))
+              :help-echo "Ignore mentions from this note.")))
        (vui-muted (file-name-nondirectory path)))
      (vui-vstack
       :spacing 0
       :indent 2
-      (seq-map (lambda (m) (vulpea-ui--render-mention m path)) mentions)))))
+      (seq-map (lambda (m)
+                 (vulpea-ui--render-mention m path source-note note))
+               mentions)))))
 
-(defun vulpea-ui--render-mention (mention path)
-  "Render a single MENTION from PATH as a clickable context line.
-Clicking jumps to the mention's line in the main window."
-  (let ((line (plist-get mention :line))
-        (context (plist-get mention :context)))
-    (vui-button context
-      :face 'vulpea-ui-mention-context-face
-      :no-decoration t
-      :on-click (lambda () (vulpea-ui--jump-to-file-line path line))
-      :help-echo nil)))
+(defun vulpea-ui--render-mention (mention path source-note note)
+  "Render a single MENTION from PATH as a context line with a link action.
+The leading button turns the mention, which NOTE makes in the file at
+PATH, into an =id:= link to SOURCE-NOTE; clicking the context that
+follows jumps to the mention's line in the main window."
+  (let* ((line (plist-get mention :line))
+         (context (plist-get mention :context))
+         (key (list 'link-mention path line)))
+    (vui-hstack
+     (vui-button "link"
+       :key key
+       :face 'vulpea-ui-mention-action-face
+       :on-click (lambda ()
+                   (vulpea-ui--link-incoming-action
+                    source-note note path (list mention) key))
+       :help-echo "Insert an id: link at this mention")
+     (vui-button context
+       :face 'vulpea-ui-mention-context-face
+       :no-decoration t
+       :on-click (lambda () (vulpea-ui--jump-to-file-line path line))
+       :help-echo nil))))
 
 (defun vulpea-ui--jump-to-file-line (path line)
   "Jump to LINE in the file at PATH in the main window."
@@ -2268,79 +2299,111 @@ note's file, where each context line lives and where clicking it jumps to."
 
 ;;; Linking unlinked mentions
 
-(defconst vulpea-ui--org-link-re
-  "\\[\\[[^][]*\\]\\(?:\\[[^][]*\\]\\)?\\]"
-  "Regexp matching an Org bracket link: [[target]] or [[target][desc]].
-Targets or descriptions containing square brackets are not matched, which
-is fine for the =id:= links this widget creates and detects.")
+(defconst vulpea-ui--linkable-element-types
+  '(paragraph headline inlinetask item table-cell verse-block
+    bold italic underline strike-through)
+  "Org element and object types whose text may hold a mention to link.
+Everything else is Org syntax, where a link in place of the text would
+break what is there: timestamps, planning and clock lines, code and
+verbatim, blocks, comments, targets, macros, footnote references, and
+links themselves.")
+
+(defun vulpea-ui--linkable-p (pos)
+  "Return non-nil when the text at POS is prose that may become a link.
+The Org parser decides, so the buffer has to be in `org-mode'.  Text
+inside a link never counts, also when the link wraps across lines.  In a
+heading only the title counts, not the todo keyword, the priority or the
+tags.  Keyword and property lines never count, as in the scan."
+  (and (derived-mode-p 'org-mode)
+       (save-excursion
+         (goto-char pos)
+         (let* ((context (org-element-context))
+                (type (org-element-type context)))
+           (and (memq type vulpea-ui--linkable-element-types)
+                (not (org-element-lineage context '(link) t))
+                (progn
+                  (forward-line 0)
+                  (cond
+                   ((looking-at-p "[ \t]*\\(?:#\\+\\|:[A-Za-z0-9_@%-]+:\\)")
+                    nil)
+                   ((memq type '(headline inlinetask))
+                    (let ((case-fold-search nil))
+                      (and (looking-at org-complex-heading-regexp)
+                           (match-beginning 4)
+                           (<= (match-beginning 4) pos)
+                           (< pos (match-end 4)))))
+                   (t t))))))))
 
 (defun vulpea-ui--note-link-terms (note)
-  "Return NOTE's title and aliases as a list of non-empty strings.
-These are the texts an outgoing mention may have matched, and the texts
-to search for when converting a mention into a link."
-  (seq-filter (lambda (s)
-                (and (stringp s) (not (string-empty-p (string-trim s)))))
-              (cons (vulpea-note-title note) (vulpea-note-aliases note))))
+  "Return the texts to look for when linking a mention of NOTE.
+These are its title and aliases, trimmed, without those narrower than
+`vulpea-mentions-min-term-length', which the scan does not look for
+either.  The longest come first, so that in a regexp alternation an
+alias like \"Emacs Lisp\" wins over the title \"Emacs\"."
+  (sort (seq-filter
+         (lambda (s)
+           (and (not (string-empty-p s))
+                (>= (string-width s) vulpea-mentions-min-term-length)))
+         (mapcar #'string-trim
+                 (seq-filter #'stringp
+                             (cons (vulpea-note-title note)
+                                   (vulpea-note-aliases note)))))
+        (lambda (a b) (> (length a) (length b)))))
 
-(defun vulpea-ui--line-link-spans (bound)
-  "Return a list of (BEG . END) Org link spans between point and BOUND."
-  (let ((spans nil))
-    (save-excursion
-      (while (re-search-forward vulpea-ui--org-link-re bound t)
-        (push (cons (match-beginning 0) (match-end 0)) spans)))
-    (nreverse spans)))
+(defun vulpea-ui--goto-line (line)
+  "Move to the beginning of LINE and return non-nil if there is such a line."
+  (goto-char (point-min))
+  (and (> line 0)
+       (zerop (forward-line (1- line)))
+       ;; Running into the end of a last line that has no newline counts
+       ;; as a line moved, and leaves point at the end of that line.
+       (bolp)))
 
-(defun vulpea-ui--pos-in-spans-p (pos spans)
-  "Return non-nil if POS falls within any (BEG . END) span in SPANS."
-  (seq-some (lambda (s) (and (>= pos (car s)) (< pos (cdr s)))) spans))
-
-(defun vulpea-ui--link-mention-line (buffer line note)
+(defun vulpea-ui--link-mention-line (buffer line note &optional context)
   "Convert plain-text mentions of NOTE on LINE of BUFFER into id: links.
 
 Searches LINE for NOTE's title and aliases (word-bounded and
-case-insensitive, mirroring the ripgrep scan), skips any occurrence
-already inside an Org link, and replaces each remaining occurrence with an
-=id:= link to NOTE, preserving the matched text as the link description.
+case-insensitive), skips any occurrence that is not prose (see
+`vulpea-ui--linkable-p'), and replaces each remaining one with an =id:=
+link to NOTE, preserving the matched text as the link description.
+
+CONTEXT, when non-nil, is the trimmed text the scan saw on LINE.  Nothing
+is linked unless the line still reads the same, so a line number that no
+longer points at the mention cannot land the link somewhere else.
 
 Re-validates against the live buffer instead of trusting the cached
 position, so a stale or already-linked mention is simply a no-op.  Returns
 the number of occurrences linked."
   (with-current-buffer buffer
     (let ((terms (vulpea-ui--note-link-terms note)))
-      (if (null terms)
-          0
-        (save-excursion
-          (goto-char (point-min))
-          (forward-line (1- line))
-          (let ((line-beg (line-beginning-position))
-                (re (concat "\\b\\(?:"
+      (save-excursion
+        (if (not (and terms
+                      (vulpea-ui--goto-line line)
+                      (or (null context)
+                          (string= context
+                                   (string-trim
+                                    (buffer-substring-no-properties
+                                     (point) (line-end-position)))))))
+            0
+          (let ((re (concat "\\b\\(?:"
                             (mapconcat #'regexp-quote terms "\\|")
                             "\\)\\b"))
                 (case-fold-search t)
-                (count 0)
-                (scanning t))
-            (while scanning
-              (goto-char line-beg)
-              (let ((spans (vulpea-ui--line-link-spans (line-end-position)))
-                    (hit nil))
-                (goto-char line-beg)
-                (while (and (not hit)
-                            (re-search-forward re (line-end-position) t))
-                  (let ((beg (match-beginning 0))
-                        (end (match-end 0)))
-                    (unless (vulpea-ui--pos-in-spans-p beg spans)
-                      (setq hit (cons beg end)))))
-                (if (not hit)
-                    (setq scanning nil)
-                  (let* ((beg (car hit))
-                         (end (cdr hit))
-                         (text (buffer-substring-no-properties beg end))
-                         (link (vulpea-utils-link-make-string note text)))
-                    (goto-char beg)
-                    (delete-region beg end)
-                    (insert link)
-                    (cl-incf count)))))
-            count))))))
+                (eol (line-end-position))
+                (hits nil))
+            (while (re-search-forward re eol t)
+              (let ((beg (match-beginning 0))
+                    (end (match-end 0)))
+                (when (vulpea-ui--linkable-p beg)
+                  (push (cons beg end) hits))))
+            ;; HITS runs from the end of the line to its start, so a
+            ;; replacement never moves the hits still to be replaced.
+            (pcase-dolist (`(,beg . ,end) hits)
+              (let ((text (buffer-substring-no-properties beg end)))
+                (goto-char beg)
+                (delete-region beg end)
+                (insert (vulpea-utils-link-make-string note text))))
+            (length hits)))))))
 
 (defun vulpea-ui--link-mention-action (path line note)
   "Link occurrences of NOTE on LINE of the file at PATH.
@@ -2379,6 +2442,81 @@ all\" button action for an outgoing-mention group."
           (message
            "vulpea-ui: linked %d occurrence%s of %s (press g to refresh)"
            total (if (= total 1) "" "s") (vulpea-note-title note)))))))
+
+(defun vulpea-ui--link-mentions-in-file (path mentions note)
+  "Convert plain-text MENTIONS of NOTE in the file at PATH to links.
+MENTIONS are (:line :context) plists, as an incoming mention group holds
+them.
+
+An incoming mention lives in another note's file, which is often not
+open, and the scan that found it reads files from disk.  So the edit is
+saved and the database synced right away: that is what makes the mention
+drop out of the list on the sidebar refresh that follows.  A buffer that
+already has unsaved changes is edited but left unsaved, since saving it
+would also write changes that have nothing to do with the link.
+
+The lines are line numbers in the file, so they are resolved with the
+buffer widened, and a clean buffer that is behind the file is reverted
+first.  Each line is linked only if it still reads as its :context (see
+`vulpea-ui--link-mention-line'), and a file that is gone links nothing.
+
+A buffer opened here stays open after an edit, which keeps the edit
+undoable, and is killed again when there was nothing to link.
+
+Return (COUNT . UNSAVED): the number of occurrences linked, and non-nil
+UNSAVED when the buffer had unsaved changes and so was not saved."
+  (if (not (file-exists-p path))
+      (list 0)
+    (let* ((visiting (find-buffer-visiting path))
+           (unsaved (and visiting (buffer-modified-p visiting)))
+           (buffer (or visiting (find-file-noselect path)))
+           (count 0))
+      (with-current-buffer buffer
+        (unless (or unsaved (verify-visited-file-modtime buffer))
+          (revert-buffer t t t))
+        (save-restriction
+          (widen)
+          (dolist (mention mentions)
+            (cl-incf count (vulpea-ui--link-mention-line
+                            buffer (plist-get mention :line) note
+                            (plist-get mention :context)))))
+        (when (and (> count 0) (not unsaved))
+          (save-buffer)))
+      (cond
+       ((and (> count 0) (not unsaved))
+        (vulpea-db-update-file path))
+       ((and (zerop count) (not visiting))
+        (kill-buffer buffer)))
+      (cons count unsaved))))
+
+(defun vulpea-ui--link-incoming-action (note from-note path mentions key)
+  "Link MENTIONS of NOTE in the file of FROM-NOTE at PATH.
+KEY is the key of the pressed button, and point is moved onto it first.
+A saved edit is followed by a sidebar refresh that drops the linked
+lines, and with point on a button vui lands on the nearest row still
+there instead of the top of the sidebar.  Intended as the \"link\" and
+\"link all\" button action for an incoming mention."
+  (when (fboundp 'vui-goto-key)
+    (vui-goto-key key))
+  (let* ((result (vulpea-ui--link-mentions-in-file path mentions note))
+         (count (car result))
+         (unsaved (cdr result))
+         (from (if from-note
+                   (vulpea-note-title from-note)
+                 (file-name-nondirectory path)))
+         (what (if (zerop count)
+                   (format "nothing to link in %s" from)
+                 (format "linked %d mention%s of %s in %s"
+                         count (if (= count 1) "" "s")
+                         (vulpea-note-title note) from))))
+    (cond
+     (unsaved
+      (message "vulpea-ui: %s, which has unsaved changes; %s"
+               what "save it to update the list"))
+     ((zerop count)
+      (message "vulpea-ui: %s: %s"
+               what "the line changed or the mention is not plain text"))
+     (t (message "vulpea-ui: %s" what)))))
 
 
 ;;; Root component

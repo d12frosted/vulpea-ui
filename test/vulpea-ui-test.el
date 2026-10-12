@@ -1194,73 +1194,186 @@ in :matched - they must not render twice."
 
 ;;; Mention linking tests
 
+(defmacro vulpea-ui-test--with-org-text (text &rest body)
+  "Run BODY in a temporary `org-mode' buffer holding TEXT."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (delay-mode-hooks (org-mode))
+     (insert ,text)
+     ,@body))
+
+(defun vulpea-ui-test--link-line (text line note &optional context)
+  "Link mentions of NOTE on LINE of an Org buffer holding TEXT.
+CONTEXT is passed on to `vulpea-ui--link-mention-line'.  Return the
+number of occurrences linked and the resulting text as (COUNT TEXT)."
+  (vulpea-ui-test--with-org-text text
+    (let ((count (vulpea-ui--link-mention-line
+                  (current-buffer) line note context)))
+      (list count (buffer-string)))))
+
 (ert-deftest vulpea-ui-test-note-link-terms ()
-  "Link terms are the title plus aliases, dropping empty strings."
-  (let ((note (make-vulpea-note :id "n" :title "Title"
-                                :aliases '("A1" "" "A2"))))
-    (should (equal (vulpea-ui--note-link-terms note) '("Title" "A1" "A2")))))
+  "Link terms are the title plus aliases, trimmed, longest first.
+Empty ones and those the scan finds too short are dropped."
+  (let ((vulpea-mentions-min-term-length 3)
+        (note (make-vulpea-note :id "n" :title "Emacs"
+                                :aliases '("el" "" " Emacs Lisp " "GNU"))))
+    (should (equal (vulpea-ui--note-link-terms note)
+                   '("Emacs Lisp" "Emacs" "GNU")))))
 
 (ert-deftest vulpea-ui-test-link-mention-line-single ()
   "A bare occurrence becomes an id: link; returns 1."
   (let ((note (make-vulpea-note :id "n1" :title "Note One")))
-    (with-temp-buffer
-      (insert "We had Note One today.\n")
-      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 1))
-      (should (equal (buffer-string)
-                     "We had [[id:n1][Note One]] today.\n")))))
+    (should (equal (vulpea-ui-test--link-line "We had Note One today.\n" 1 note)
+                   '(1 "We had [[id:n1][Note One]] today.\n")))))
 
 (ert-deftest vulpea-ui-test-link-mention-line-skips-linked ()
   "An occurrence already inside a link is left alone; returns 0."
   (let ((note (make-vulpea-note :id "n1" :title "Note One")))
-    (with-temp-buffer
-      (insert "See [[id:n1][Note One]] here.\n")
-      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 0))
-      (should (equal (buffer-string)
-                     "See [[id:n1][Note One]] here.\n")))))
+    (should (equal (vulpea-ui-test--link-line
+                    "See [[id:n1][Note One]] here.\n" 1 note)
+                   '(0 "See [[id:n1][Note One]] here.\n")))))
 
 (ert-deftest vulpea-ui-test-link-mention-line-multiple ()
   "Two bare occurrences on the line are both linked; returns 2."
   (let ((note (make-vulpea-note :id "n1" :title "Cab")))
-    (with-temp-buffer
-      (insert "Cab and more Cab.\n")
-      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 2))
-      (should (equal (buffer-string)
-                     "[[id:n1][Cab]] and more [[id:n1][Cab]].\n")))))
+    (should (equal (vulpea-ui-test--link-line "Cab and more Cab.\n" 1 note)
+                   '(2 "[[id:n1][Cab]] and more [[id:n1][Cab]].\n")))))
 
 (ert-deftest vulpea-ui-test-link-mention-line-mixed ()
   "A bare occurrence is linked while an already-linked one is preserved."
   (let ((note (make-vulpea-note :id "n1" :title "Cab")))
-    (with-temp-buffer
-      (insert "[[id:n1][Cab]] and bare Cab.\n")
-      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 1))
-      (should (equal (buffer-string)
-                     "[[id:n1][Cab]] and bare [[id:n1][Cab]].\n")))))
+    (should (equal (vulpea-ui-test--link-line
+                    "[[id:n1][Cab]] and bare Cab.\n" 1 note)
+                   '(1 "[[id:n1][Cab]] and bare [[id:n1][Cab]].\n")))))
 
 (ert-deftest vulpea-ui-test-link-mention-line-alias-and-case ()
   "Matching is case-insensitive and works on aliases; casing is preserved."
   (let ((note (make-vulpea-note :id "n1" :title "Cabernet"
                                 :aliases '("Cab Sauv"))))
-    (with-temp-buffer
-      (insert "love cab sauv tonight\n")
-      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 1))
-      (should (equal (buffer-string)
-                     "love [[id:n1][cab sauv]] tonight\n")))))
+    (should (equal (vulpea-ui-test--link-line "love cab sauv tonight\n" 1 note)
+                   '(1 "love [[id:n1][cab sauv]] tonight\n")))))
 
 (ert-deftest vulpea-ui-test-link-mention-line-word-boundary ()
   "A term does not match inside a larger word."
-  (let ((note (make-vulpea-note :id "n1" :title "NO")))
-    (with-temp-buffer
-      (insert "Head NORTH now.\n")
-      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 0))
-      (should (equal (buffer-string) "Head NORTH now.\n")))))
+  (let ((note (make-vulpea-note :id "n1" :title "NOR")))
+    (should (equal (vulpea-ui-test--link-line "Head NORTH now.\n" 1 note)
+                   '(0 "Head NORTH now.\n")))))
 
 (ert-deftest vulpea-ui-test-link-mention-line-stale ()
   "When the term is gone (stale mention), nothing is linked; returns 0."
   (let ((note (make-vulpea-note :id "n1" :title "Gone")))
-    (with-temp-buffer
-      (insert "nothing here\n")
-      (should (= (vulpea-ui--link-mention-line (current-buffer) 1 note) 0))
-      (should (equal (buffer-string) "nothing here\n")))))
+    (should (equal (vulpea-ui-test--link-line "nothing here\n" 1 note)
+                   '(0 "nothing here\n")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-longest-term-wins ()
+  "An alias that starts with the title is linked whole."
+  (let ((note (make-vulpea-note :id "n1" :title "Emacs"
+                                :aliases '("Emacs Lisp"))))
+    (should (equal (vulpea-ui-test--link-line
+                    "I love Emacs Lisp and Emacs.\n" 1 note)
+                   '(2 "I love [[id:n1][Emacs Lisp]] and [[id:n1][Emacs]].\n")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-skips-short-alias ()
+  "An alias too short for the scan is not linked on a line the title hit."
+  (let ((vulpea-mentions-min-term-length 3)
+        (note (make-vulpea-note :id "n1" :title "Information Technology"
+                                :aliases '("IT"))))
+    (should (equal (vulpea-ui-test--link-line
+                    "Information Technology: it is everywhere, IT too.\n"
+                    1 note)
+                   (list 1 (concat "[[id:n1][Information Technology]]:"
+                                   " it is everywhere, IT too.\n"))))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-brackets-in-title ()
+  "A title with square brackets is linked once.
+The inserted link holds the title again; it must not be taken for a new
+mention."
+  (let ((note (make-vulpea-note :id "n1" :title "Array [of] things")))
+    (should (equal (vulpea-ui-test--link-line
+                    "An Array [of] things is here.\n" 1 note)
+                   '(1 "An [[id:n1][Array [of] things]] is here.\n")))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-skips-other-links ()
+  "Text inside another link is left alone, whatever the link looks like."
+  (let ((note (make-vulpea-note :id "n1" :title "Emacs")))
+    ;; brackets in the description
+    (should (equal (vulpea-ui-test--link-line
+                    "[[id:o][notes [1] on Emacs]] and Emacs bare.\n" 1 note)
+                   (list 1 (concat "[[id:o][notes [1] on Emacs]]"
+                                   " and [[id:n1][Emacs]] bare.\n"))))
+    ;; a link wrapped across lines
+    (should (equal (vulpea-ui-test--link-line
+                    "See [[id:o][a long description that\nwraps Emacs text]] and Emacs bare.\n"
+                    2 note)
+                   (list 1 (concat "See [[id:o][a long description that\n"
+                                   "wraps Emacs text]] and [[id:n1][Emacs]]"
+                                   " bare.\n"))))
+    ;; a plain URL
+    (should (equal (vulpea-ui-test--link-line
+                    "See https://example.com/Emacs/page for Emacs.\n" 1 note)
+                   (list 1 (concat "See https://example.com/Emacs/page"
+                                   " for [[id:n1][Emacs]].\n"))))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-skips-org-syntax ()
+  "A title that only shows up as Org syntax is not linked.
+A link there would break the tag, the keyword, the timestamp or the code
+it lands in."
+  (let ((emacs (make-vulpea-note :id "n1" :title "Emacs"))
+        (done (make-vulpea-note :id "n1" :title "Done"))
+        (date (make-vulpea-note :id "n1" :title "2024-01-15")))
+    (pcase-dolist (`(,note ,line ,text)
+                   `((,emacs 1 "* Setup notes :emacs:work:\n")
+                     (,done 1 "* DONE Ship release\n")
+                     (,date 2 "* Task\nSCHEDULED: <2024-01-15 Mon>\n")
+                     (,date 1 "Met on <2024-01-15 Mon> again.\n")
+                     (,date 1 "Closed [2024-01-15 Mon 18:00] already.\n")
+                     (,emacs 2 "#+begin_src elisp\n(message \"Emacs\")\n#+end_src\n")
+                     (,emacs 2 "#+begin_example\nEmacs\n#+end_example\n")
+                     (,emacs 1 "# a comment about Emacs\n")
+                     (,emacs 1 "#+caption: Emacs logo\n| a |\n")
+                     (,emacs 1 "Use ~Emacs~ or =Emacs= here.\n")
+                     (,emacs 1 "A <<Emacs>> target and {{{Emacs}}} macro.\n")))
+      (should (equal (vulpea-ui-test--link-line text line note)
+                     (list 0 text))))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-links-prose ()
+  "A title in running text is linked wherever Org keeps prose."
+  (let ((note (make-vulpea-note :id "n1" :title "Emacs")))
+    (pcase-dolist (`(,line ,text ,expected)
+                   '((1 "* TODO [#A] Emacs setup :emacs:\n"
+                        "* TODO [#A] [[id:n1][Emacs]] setup :emacs:\n")
+                     (1 "| Emacs | editor |\n"
+                        "| [[id:n1][Emacs]] | editor |\n")
+                     (1 "- Emacs :: an editor\n"
+                        "- [[id:n1][Emacs]] :: an editor\n")
+                     (1 "- [ ] try Emacs\n"
+                        "- [ ] try [[id:n1][Emacs]]\n")
+                     (1 "Some *bold Emacs* text.\n"
+                        "Some *bold [[id:n1][Emacs]]* text.\n")
+                     (2 "#+begin_quote\nquoted Emacs\n#+end_quote\n"
+                        "#+begin_quote\nquoted [[id:n1][Emacs]]\n#+end_quote\n")))
+      (should (equal (vulpea-ui-test--link-line text line note)
+                     (list 1 expected))))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-missing-line ()
+  "A line number outside the buffer links nothing.
+This holds for a last line without a newline too, where moving past the
+end stops on that line."
+  (let ((note (make-vulpea-note :id "n1" :title "Emacs")))
+    (dolist (line '(0 -1 3 500))
+      (should (equal (vulpea-ui-test--link-line "one Emacs\ntwo Emacs" line note)
+                     '(0 "one Emacs\ntwo Emacs"))))))
+
+(ert-deftest vulpea-ui-test-link-mention-line-context ()
+  "With a context, the line is linked only if it still reads the same.
+Leading and trailing whitespace does not count, as the scan trims it."
+  (let ((note (make-vulpea-note :id "n1" :title "Emacs")))
+    (should (equal (vulpea-ui-test--link-line
+                    "  - try Emacs  \n" 1 note "- try Emacs")
+                   '(1 "  - try [[id:n1][Emacs]]  \n")))
+    (should (equal (vulpea-ui-test--link-line
+                    "another Emacs line\n" 1 note "- try Emacs")
+                   '(0 "another Emacs line\n")))))
 
 
 ;;; Mention link action tests
@@ -2242,17 +2355,18 @@ remount it back into its registered state."
   (should (null (vulpea-ui--group-mentions nil))))
 
 (ert-deftest vulpea-ui-test-group-mentions-by-note ()
-  "Mentions are grouped by mentioning note, preserving order.
-Groups appear in first-encounter order; mentions keep their order
-within a group and carry :line and :context."
+  "Mentions are grouped by mentioning note, and groups sorted by title.
+The scan reports files in no fixed order, so the order of the input must
+not show.  Mentions keep their order within a group and carry :line and
+:context."
   (let* ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
          (b (vulpea-ui-test--make-mock-note "id-b" "Note B"))
          (mentions (list
-                    (list :note a :path "/a.org" :line 3 :context "first a")
                     (list :note b :path "/b.org" :line 7 :context "only b")
+                    (list :note a :path "/a.org" :line 3 :context "first a")
                     (list :note a :path "/a.org" :line 9 :context "second a")))
          (groups (vulpea-ui--group-mentions mentions)))
-    ;; Two groups, in first-seen order: A then B
+    ;; Two groups, by title: A then B
     (should (= (length groups) 2))
     (should (equal (vulpea-note-id (plist-get (nth 0 groups) :note)) "id-a"))
     (should (equal (plist-get (nth 0 groups) :path) "/a.org"))
@@ -2269,6 +2383,18 @@ within a group and carry :line and :context."
       (should (= (length b-mentions) 1))
       (should (= (plist-get (nth 0 b-mentions) :line) 7))
       (should (equal (plist-get (nth 0 b-mentions) :context) "only b")))))
+
+(ert-deftest vulpea-ui-test-group-mentions-same-title ()
+  "Notes that share a title are ordered by path, so the order is stable."
+  (let* ((x (vulpea-ui-test--make-mock-note "id-x" "Same"))
+         (y (vulpea-ui-test--make-mock-note "id-y" "Same"))
+         (in-order (list (list :note x :path "/1.org" :line 1 :context "x")
+                         (list :note y :path "/2.org" :line 1 :context "y")))
+         (ids (lambda (mentions)
+                (mapcar (lambda (g) (vulpea-note-id (plist-get g :note)))
+                        (vulpea-ui--group-mentions mentions)))))
+    (should (equal (funcall ids in-order) '("id-x" "id-y")))
+    (should (equal (funcall ids (reverse in-order)) '("id-x" "id-y")))))
 
 (ert-deftest vulpea-ui-test-group-mentions-single-group ()
   "Multiple mentions from one note collapse into a single group."
@@ -2349,8 +2475,10 @@ returns."
         (list (list :note a :path "/a.org" :line 3 :context "mentions Target here")
               (list :note a :path "/a.org" :line 9 :context "Target again")
               (list :note b :path "/b.org" :line 5 :context "a Target reference"))
-      (should (string-match-p (regexp-quote "[Note A] [ignore]") output))
-      (should (string-match-p (regexp-quote "[Note B] [ignore]") output))
+      (should (string-match-p (regexp-quote "[Note A] [link all] [ignore]")
+                              output))
+      (should (string-match-p (regexp-quote "[Note B] [link all] [ignore]")
+                              output))
       (with-current-buffer buf-name
         (let ((calls nil)
               (last-message nil))
@@ -2385,6 +2513,453 @@ returns."
                          vulpea-ui--unlinked-mentions-title))
                 (vui--collect-widgets))))
           (should (= (point) (car (vui--widget-bounds unlinked-mentions)))))))))
+
+;;; Incoming mention link tests
+
+(defmacro vulpea-ui-test--with-mention-file (content &rest body)
+  "Run BODY with FILE bound to a temporary org file holding CONTENT.
+`vulpea-db-update-file' is stubbed and the paths it was called with are
+collected in SYNCED, most recent first.  The file, its directory and any
+buffer visiting it are cleaned up afterwards."
+  (declare (indent 1))
+  `(let* ((dir (make-temp-file "vui-in-" t))
+          (file (expand-file-name "mentioning.org" dir))
+          (synced nil))
+     (unwind-protect
+         (progn
+           (with-temp-file file (insert ,content))
+           (cl-letf (((symbol-function 'vulpea-db-update-file)
+                      (lambda (path) (push path synced))))
+             ,@body))
+       (when-let* ((buf (find-buffer-visiting file)))
+         (with-current-buffer buf (set-buffer-modified-p nil))
+         (kill-buffer buf))
+       (delete-directory dir t))))
+
+(defun vulpea-ui-test--file-string (file)
+  "Return the contents of FILE on disk."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (buffer-string)))
+
+(defun vulpea-ui-test--mention (line context)
+  "Return a mention plist for LINE reading CONTEXT, as the grouping keeps it."
+  (list :line line :context context))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-saves-and-syncs ()
+  "Linking in a file that is not open writes it to disk and syncs it.
+The buffer opened for the edit stays around, so the edit can be undone."
+  (let ((note (make-vulpea-note :id "tid" :title "Target")))
+    (vulpea-ui-test--with-mention-file "Mention Target here.\n"
+      (should-not (find-buffer-visiting file))
+      (should (equal (vulpea-ui--link-mentions-in-file
+                      file
+                      (list (vulpea-ui-test--mention 1 "Mention Target here."))
+                      note)
+                     '(1)))
+      (should (equal (vulpea-ui-test--file-string file)
+                     "Mention [[id:tid][Target]] here.\n"))
+      (should (equal synced (list file)))
+      (should (find-buffer-visiting file)))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-several-lines ()
+  "Several lines are linked with a single save and sync."
+  (let ((note (make-vulpea-note :id "tid" :title "Target")))
+    (vulpea-ui-test--with-mention-file "Target a\nnothing\nb Target\n"
+      (should (equal (vulpea-ui--link-mentions-in-file
+                      file
+                      (list (vulpea-ui-test--mention 1 "Target a")
+                            (vulpea-ui-test--mention 3 "b Target"))
+                      note)
+                     '(2)))
+      (should (equal (vulpea-ui-test--file-string file)
+                     "[[id:tid][Target]] a\nnothing\nb [[id:tid][Target]]\n"))
+      (should (equal synced (list file))))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-keeps-unsaved-buffer ()
+  "A buffer with unsaved changes is edited but neither saved nor synced.
+Saving it would write out changes that have nothing to do with the link."
+  (let ((note (make-vulpea-note :id "tid" :title "Target")))
+    (vulpea-ui-test--with-mention-file "Mention Target here.\n"
+      (let ((buf (find-file-noselect file)))
+        (with-current-buffer buf
+          (goto-char (point-max))
+          (insert "draft\n"))
+        (should (equal (vulpea-ui--link-mentions-in-file
+                        file
+                        (list (vulpea-ui-test--mention 1 "Mention Target here."))
+                        note)
+                       '(1 . t)))
+        (with-current-buffer buf
+          (should (buffer-modified-p))
+          (should (equal (buffer-string)
+                         "Mention [[id:tid][Target]] here.\ndraft\n")))
+        (should (equal (vulpea-ui-test--file-string file)
+                       "Mention Target here.\n"))
+        (should-not synced)))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-unsaved-lines-moved ()
+  "Unsaved edits that moved the lines never get another line linked.
+The scan read the file, so its line numbers can point at other text in
+the buffer.  Here line 2 of the file is line 3 of the buffer, and line 2
+of the buffer mentions the target as well."
+  (let ((note (make-vulpea-note :id "tid" :title "Target")))
+    (vulpea-ui-test--with-mention-file "intro\nfirst Target\nsecond Target\n"
+      (let ((buf (find-file-noselect file)))
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (insert "draft\n"))
+        (should (equal (vulpea-ui--link-mentions-in-file
+                        file
+                        (list (vulpea-ui-test--mention 3 "second Target"))
+                        note)
+                       '(0 . t)))
+        (with-current-buffer buf
+          (should (equal (buffer-string)
+                         "draft\nintro\nfirst Target\nsecond Target\n")))))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-nothing-to-link ()
+  "A stale line links nothing, so the file is neither saved nor synced.
+The buffer opened to look at it is not left behind."
+  (let ((note (make-vulpea-note :id "tid" :title "Target")))
+    (vulpea-ui-test--with-mention-file "nothing here\n"
+      (should (equal (vulpea-ui--link-mentions-in-file
+                      file
+                      (list (vulpea-ui-test--mention 1 "Mention Target here."))
+                      note)
+                     '(0)))
+      (should (equal (vulpea-ui-test--file-string file) "nothing here\n"))
+      (should-not synced)
+      (should-not (find-buffer-visiting file)))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-changed-on-disk ()
+  "A file that changed after the scan does not get another line linked."
+  (let ((note (make-vulpea-note :id "tid" :title "Target")))
+    (vulpea-ui-test--with-mention-file "#+title: Target tips\n\nabout Target\n"
+      (should (equal (vulpea-ui--link-mentions-in-file
+                      file
+                      (list (vulpea-ui-test--mention 1 "about Target"))
+                      note)
+                     '(0)))
+      (should (equal (vulpea-ui-test--file-string file)
+                     "#+title: Target tips\n\nabout Target\n"))
+      (should-not synced))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-missing-file ()
+  "A file that is gone links nothing and leaves no buffer behind."
+  (let* ((note (make-vulpea-note :id "tid" :title "Target"))
+         (dir (make-temp-file "vui-in-" t))
+         (file (expand-file-name "gone.org" dir)))
+    (unwind-protect
+        (progn
+          (should (equal (vulpea-ui--link-mentions-in-file
+                          file
+                          (list (vulpea-ui-test--mention 1 "Target"))
+                          note)
+                         '(0)))
+          (should-not (find-buffer-visiting file)))
+      (delete-directory dir t))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-narrowed-buffer ()
+  "Lines count from the start of the file even in a narrowed buffer.
+The restriction is still in place afterwards."
+  (let ((note (make-vulpea-note :id "tid" :title "Target")))
+    (vulpea-ui-test--with-mention-file "Target one\nmiddle\nlast line\n"
+      (with-current-buffer (find-file-noselect file)
+        (goto-char (point-min))
+        (forward-line 2)
+        (narrow-to-region (point) (point-max))
+        (should (equal (vulpea-ui--link-mentions-in-file
+                        file
+                        (list (vulpea-ui-test--mention 1 "Target one"))
+                        note)
+                       '(1)))
+        (should (equal (buffer-string) "last line\n")))
+      (should (equal (vulpea-ui-test--file-string file)
+                     "[[id:tid][Target]] one\nmiddle\nlast line\n")))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-reverts-stale-buffer ()
+  "A clean buffer that is behind the file is brought up to date first.
+The scan read the file, so that is the text its lines refer to, and the
+save must not put the old text back."
+  (let ((note (make-vulpea-note :id "tid" :title "Target")))
+    (vulpea-ui-test--with-mention-file "old line\n"
+      (let ((buf (find-file-noselect file)))
+        ;; The file changes behind the buffer's back.
+        (with-temp-file file
+          (insert "added elsewhere\nMention Target here.\n"))
+        (set-file-times file (time-add (current-time) 5))
+        (should-not (verify-visited-file-modtime buf))
+        (should (equal (vulpea-ui--link-mentions-in-file
+                        file
+                        (list (vulpea-ui-test--mention 2 "Mention Target here."))
+                        note)
+                       '(1)))
+        (should (equal (vulpea-ui-test--file-string file)
+                       (concat "added elsewhere\n"
+                               "Mention [[id:tid][Target]] here.\n")))
+        (with-current-buffer buf
+          (should-not (buffer-modified-p)))))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-real-scan ()
+  "With a real database and scan, a linked mention is no longer reported.
+The mentioning note links to the target afterwards, which takes its other
+mention off the list too."
+  (skip-unless (executable-find "rg"))
+  (let* ((dir (file-name-as-directory (make-temp-file "vui-scan-" t)))
+         (vulpea-db-location (expand-file-name "vulpea.db" dir))
+         (vulpea-db--connection nil)
+         (notes (file-name-as-directory (expand-file-name "notes" dir)))
+         (vulpea-db-sync-directories (list notes))
+         (vulpea-mentions-exclude-linked t)
+         (target-file (expand-file-name "target.org" notes))
+         (a-file (expand-file-name "a.org" notes))
+         (b-file (expand-file-name "b.org" notes))
+         (updated nil)
+         (on-update (lambda (path &rest _) (push path updated))))
+    (cl-flet ((scan ()
+                (let* ((done nil)
+                       (result nil)
+                       (proc (vulpea-note-unlinked-mentions-async
+                              (vulpea-db-get-by-id "scan-target")
+                              (lambda (r) (setq result r done t))
+                              (lambda (e) (setq result (list 'error e) done t)))))
+                  (with-timeout (10 (error "Scan timed out"))
+                    (while (not done)
+                      (accept-process-output proc 0.1)))
+                  result)))
+      (unwind-protect
+          (progn
+            (make-directory notes t)
+            (with-temp-file target-file
+              (insert ":PROPERTIES:\n:ID: scan-target\n:END:\n"
+                      "#+title: Scan Target\n\nBody.\n"))
+            (with-temp-file a-file
+              (insert ":PROPERTIES:\n:ID: scan-a\n:END:\n#+title: Note A\n\n"
+                      "First Scan Target here.\n\nAgain scan target there.\n"))
+            (with-temp-file b-file
+              (insert ":PROPERTIES:\n:ID: scan-b\n:END:\n#+title: Note B\n\n"
+                      "Only one Scan Target.\n"))
+            (vulpea-db)
+            (cl-letf (((symbol-function 'lwarn) #'ignore))
+              (dolist (f (list target-file a-file b-file))
+                (vulpea-db-update-file f)))
+            (let* ((before (scan))
+                   (in-a (seq-filter
+                          (lambda (m)
+                            (equal (vulpea-note-id (plist-get m :note)) "scan-a"))
+                          before))
+                   (first (seq-find (lambda (m) (= (plist-get m :line) 6))
+                                    in-a)))
+              (should (= (length before) 3))
+              (should (= (length in-a) 2))
+              (should first)
+              (when (boundp 'vulpea-db-updated-functions)
+                (add-hook 'vulpea-db-updated-functions on-update))
+              (should (equal (vulpea-ui--link-mentions-in-file
+                              (plist-get first :path)
+                              (list first)
+                              (vulpea-db-get-by-id "scan-target"))
+                             '(1)))
+              (when (boundp 'vulpea-db-updated-functions)
+                (should (= (length updated) 1)))
+              (should (equal (mapcar (lambda (m)
+                                       (vulpea-note-id (plist-get m :note)))
+                                     (scan))
+                             '("scan-b")))))
+        (when (boundp 'vulpea-db-updated-functions)
+          (remove-hook 'vulpea-db-updated-functions on-update))
+        (when vulpea-db--connection (vulpea-db-close))
+        (dolist (f (list target-file a-file b-file))
+          (when-let* ((buf (find-buffer-visiting f)))
+            (with-current-buffer buf (set-buffer-modified-p nil))
+            (kill-buffer buf)))
+        (delete-directory dir t)))))
+
+(defun vulpea-ui-test--buttons-tagged (tag)
+  "Return the buttons labelled TAG in the current buffer, in buffer order."
+  (seq-filter (lambda (w) (equal (vui-element-get w :vui-tag) tag))
+              (vui--collect-widgets)))
+
+(defmacro vulpea-ui-test--with-link-stub (result &rest body)
+  "Run BODY with `vulpea-ui--link-mentions-in-file' returning RESULT.
+Each call is recorded in CALLS as (PATH MENTIONS TARGET-ID), most recent
+first, and the last message is kept in LAST-MESSAGE."
+  (declare (indent 1))
+  `(let ((calls nil)
+         (last-message nil))
+     (cl-letf (((symbol-function 'vulpea-ui--link-mentions-in-file)
+                (lambda (path mentions target)
+                  (push (list path mentions (vulpea-note-id target)) calls)
+                  ,result))
+               ((symbol-function 'message)
+                (lambda (fmt &rest args)
+                  (when fmt
+                    (setq last-message (apply #'format fmt args)))
+                  nil)))
+       ,@body)))
+
+(ert-deftest vulpea-ui-test-mentions-link-button-before-context ()
+  "Every context line of an incoming mention starts with a link button."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A")))
+    (vulpea-ui-test--render-mentions
+        (list (list :note a :path "/a.org" :line 3 :context "mentions Target here")
+              (list :note a :path "/a.org" :line 9 :context "Target again"))
+      (should (string-match-p (regexp-quote "[link] mentions Target here")
+                              output))
+      (should (string-match-p (regexp-quote "[link] Target again") output)))))
+
+(ert-deftest vulpea-ui-test-mentions-link-action ()
+  "The link button links its own line in the mentioning file.
+The viewed note is the link target, and point is left on the pressed
+button so that it stays nearby once the refresh drops the line."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+        (b (vulpea-ui-test--make-mock-note "id-b" "Note B")))
+    (vulpea-ui-test--render-mentions
+        (list (list :note a :path "/a.org" :line 3 :context "mentions Target here")
+              (list :note a :path "/a.org" :line 9 :context "Target again")
+              (list :note b :path "/b.org" :line 5 :context "a Target reference"))
+      (with-current-buffer buf-name
+        (let* ((buttons (vulpea-ui-test--buttons-tagged "link"))
+               (second (car (vui--widget-bounds (nth 1 buttons)))))
+          (should (= (length buttons) 3))
+          (goto-char (point-min))
+          (vulpea-ui-test--with-link-stub '(1)
+            (should (vui-activate second))
+            (should (equal calls
+                           '(("/a.org"
+                              ((:line 9 :context "Target again"))
+                              "tgt"))))
+            (should (equal last-message
+                           "vulpea-ui: linked 1 mention of Target in Note A")))
+          (should (= (point) second)))))))
+
+(ert-deftest vulpea-ui-test-mentions-link-all-action ()
+  "The link all button links every line of its group."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+        (b (vulpea-ui-test--make-mock-note "id-b" "Note B")))
+    (vulpea-ui-test--render-mentions
+        (list (list :note a :path "/a.org" :line 3 :context "mentions Target here")
+              (list :note b :path "/b.org" :line 5 :context "a Target reference")
+              (list :note a :path "/a.org" :line 9 :context "Target again"))
+      (with-current-buffer buf-name
+        (let* ((buttons (vulpea-ui-test--buttons-tagged "link all"))
+               (first (car (vui--widget-bounds (car buttons)))))
+          (should (= (length buttons) 2))
+          (goto-char (point-max))
+          (vulpea-ui-test--with-link-stub '(2)
+            (should (vui-activate first))
+            (should (equal calls
+                           '(("/a.org"
+                              ((:line 3 :context "mentions Target here")
+                               (:line 9 :context "Target again"))
+                              "tgt"))))
+            (should (equal last-message
+                           "vulpea-ui: linked 2 mentions of Target in Note A")))
+          (should (= (point) first)))))))
+
+(ert-deftest vulpea-ui-test-mentions-link-point-survives-refresh ()
+  "Point stays next to the linked mention when the refresh drops its group.
+Point starts away from any button, as it is when a button is pressed
+without point going there first (a middle click does that).  The stub
+stands in for the save, the sync and the re-scan: the mentioning
+note now links to the target, so its whole group is gone."
+  (vulpea-ui-test--with-clean-registry
+    (vulpea-ui-register-widget 'unlinked-mentions
+                               :component 'vulpea-ui-widget-unlinked-mentions
+                               :order 350)
+    (let* ((vui-render-delay nil)
+           (buf-name "*vulpea-ui-mentions-test*")
+           (note (vulpea-ui-test--make-mock-note "tgt" "Target"))
+           (a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+           (b (vulpea-ui-test--make-mock-note "id-b" "Note B"))
+           (c (vulpea-ui-test--make-mock-note "id-c" "Note C"))
+           (mentions
+            (list (list :note a :path "/a.org" :line 3 :context "first Target")
+                  (list :note b :path "/b.org" :line 5 :context "second Target")
+                  (list :note c :path "/c.org" :line 7 :context "third Target"))))
+      (with-current-buffer (get-buffer-create buf-name)
+        (vulpea-ui-sidebar-mode))
+      (cl-letf (((symbol-function 'vulpea-note-unlinked-mentions-async)
+                 (lambda (_note resolve _reject)
+                   (funcall resolve mentions)
+                   nil))
+                ((symbol-function 'message) #'ignore))
+        (unwind-protect
+            (let ((instance (vui-mount
+                             (vui-component 'vulpea-ui-sidebar-root :note note)
+                             buf-name)))
+              (with-current-buffer buf-name
+                (cl-letf (((symbol-function 'vulpea-ui--link-mentions-in-file)
+                           (lambda (path _mentions _target)
+                             (setq mentions
+                                   (seq-remove
+                                    (lambda (m) (equal (plist-get m :path) path))
+                                    mentions))
+                             (cl-incf vulpea-ui--refresh-generation)
+                             (vui-update instance (list :note note))
+                             '(1))))
+                  (goto-char (point-min))
+                  (should (vui-activate
+                           (car (vui--widget-bounds
+                                 (nth 1 (vulpea-ui-test--buttons-tagged
+                                         "link")))))))
+                (should-not (string-match-p "Note B" (buffer-string)))
+                ;; Note B's rows are gone; point sits on Note C's, which
+                ;; moved up into their place.
+                (should (vui-element-at))
+                (should (string-match-p
+                         "Note C\\|third Target"
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))))))
+          (when (get-buffer buf-name)
+            (kill-buffer buf-name)))))))
+
+(ert-deftest vulpea-ui-test-mentions-link-action-unsaved ()
+  "An edit left unsaved says so, since the list only updates on save."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A")))
+    (vulpea-ui-test--render-mentions
+        (list (list :note a :path "/a.org" :line 3 :context "mentions Target here"))
+      (with-current-buffer buf-name
+        (vulpea-ui-test--with-link-stub '(1 . t)
+          (should (vui-activate
+                   (car (vui--widget-bounds
+                         (car (vulpea-ui-test--buttons-tagged "link"))))))
+          (should (equal last-message
+                         (concat "vulpea-ui: linked 1 mention of Target in"
+                                 " Note A, which has unsaved changes;"
+                                 " save it to update the list"))))))))
+
+(ert-deftest vulpea-ui-test-mentions-link-action-nothing ()
+  "A mention that cannot be linked reports that there was nothing to link."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A")))
+    (vulpea-ui-test--render-mentions
+        (list (list :note a :path "/a.org" :line 3 :context "mentions Target here"))
+      (with-current-buffer buf-name
+        (vulpea-ui-test--with-link-stub '(0)
+          (should (vui-activate
+                   (car (vui--widget-bounds
+                         (car (vulpea-ui-test--buttons-tagged "link"))))))
+          (should (equal last-message
+                         (concat "vulpea-ui: nothing to link in Note A:"
+                                 " the line changed or the mention is not"
+                                 " plain text"))))))))
+
+(ert-deftest vulpea-ui-test-mentions-link-action-nothing-unsaved ()
+  "Nothing linked in a buffer with unsaved changes points at the save.
+The file is what the list shows, so only saving brings the two in line."
+  (let ((a (vulpea-ui-test--make-mock-note "id-a" "Note A")))
+    (vulpea-ui-test--render-mentions
+        (list (list :note a :path "/a.org" :line 3 :context "mentions Target here"))
+      (with-current-buffer buf-name
+        (vulpea-ui-test--with-link-stub '(0 . t)
+          (should (vui-activate
+                   (car (vui--widget-bounds
+                         (car (vulpea-ui-test--buttons-tagged "link"))))))
+          (should (equal last-message
+                         (concat "vulpea-ui: nothing to link in Note A,"
+                                 " which has unsaved changes;"
+                                 " save it to update the list"))))))))
 
 ;;; Schema health widget
 

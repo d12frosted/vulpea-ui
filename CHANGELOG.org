@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ** Added
 
+- Quick-link actions in the unlinked mentions widget ([[https://github.com/d12frosted/vulpea-ui/issues/82][#82]]), like the ones the outgoing mentions widget has. Each mention has a =link= button before its context that turns it into an =id:= link to the current note, and each group has a =link all= button next to =ignore= that links every mention listed for that note. The edit lands in the mentioning note's file, so unlike the outgoing actions it is saved and synced right away, and the sidebar refresh that follows drops what was linked (the whole group with =vulpea-mentions-exclude-linked= on, which is the default). Point stays in the list next to where the row was instead of jumping to the top. A mentioning note that is open with unsaved changes gets the link but is not saved, so unrelated edits are not written out; the list updates once you save it. A clean buffer that is behind its file is reverted first, and a line is edited only if it still reads the way the scan saw it, so a stale line number never puts the link somewhere else. A note that was not open stays open in a buffer after the edit, which keeps it undoable. Thanks =@lhernanz= for the request.
+
 - Per-widget collapse state ([[https://github.com/d12frosted/vulpea-ui/issues/80][#80]]). =:collapsed= on =vulpea-ui-register-widget= decides whether that widget starts collapsed, overriding =vulpea-ui-default-widget-collapsed= for it alone; =vulpea-ui-widget-set= sets it on widgets registered elsewhere, built-in or from other packages. =nil= starts a widget expanded even when the global default folds everything, so your own widget can stay open while the built-ins start folded (or the other way around). Without =:collapsed= a widget follows the global value as before. The sidebar hands each widget its registry entry through a context that the =vulpea-ui-widget= wrapper reads, so no widget code changes. Thanks =@lhernanz= for the request.
 
 - Property drawer entries in collection views. =(property KEY)= is a column over the note's =:PROPERTIES:= drawer (=(property "COMMIT_ID")=), offered as =prop:KEY= by =c a= for every property found on the notes in view. =:properties= filters on them with the same shape as =:meta= (=(("COMMIT_ID" . "abc") ("CREATED_TS" . t))=), written =prop:KEY=VALUE= / =prop:KEY=*= in queries and added with =/ p=. Keys are case-insensitive, like in org. A property condition is pushed down to vulpea's property index when no tag condition is cheaper. =e= on a property cell sets it on the selection (empty removes it, =Z= undoes), === narrows to its value, and adaptive columns show the properties a view is filtered by. Writes find the entry by its ID, so a batch touching several notes of one file lands in the right drawers.
@@ -68,9 +70,19 @@ All notable changes to this project will be documented in this file.
 
 ** Changed
 
+- Groups in the unlinked mentions widget are sorted by note title. They used to come in the order ripgrep reported the files, which differs from scan to scan, so the list reshuffled on every refresh.
+
 - Auto-refresh now reacts to database content changes instead of saves. The sidebar used to refresh on =after-save-hook=, which fires before =vulpea-db-update-file= runs, so the refresh read the pre-update note: the ignore-mentions button ([[https://github.com/d12frosted/vulpea-ui/pull/62][#62]]) saved and synced the note, yet the ignored group only disappeared after a second manual refresh. The sidebar and the collection view now subscribe to vulpea's =vulpea-db-updated-functions=, the single data-changed signal covering synchronous updates, background extraction results and removals; it runs after the write transaction commits, so the refresh always reads fresh content, and a deleted note drops out of backlinks and mentions without a manual =g=. Bulk syncs still coalesce into one refresh when the extraction worker drains; =vulpea-db-worker-done-functions= is only used for that lifecycle purpose now (flushing a deferred refresh) rather than driving refreshes itself. On a vulpea without the new hook, nothing changes: the save-triggered refresh and worker-done refreshes keep working as before.
 
 ** Fixed
+
+- The =link= and =link all= buttons of the mention widgets only link plain text now. They used to rewrite any occurrence of the title on the line, so a note called =Emacs= could get linked inside a heading tag (=:emacs:=), a note titled by date inside a =SCHEDULED:= timestamp, and any title inside a URL, a src block, verbatim text, a comment, or the description of another link that had brackets in it or wrapped across lines. The Org parser now decides what is prose; everything else is left alone.
+
+- Linking a mention of a note whose title or alias contains square brackets no longer hangs Emacs. The inserted link was taken for a new mention and wrapped again, forever.
+
+- Linking a mention no longer links aliases shorter than =vulpea-mentions-min-term-length= that happen to be on the same line (an =IT= alias turning every "it" into a link), and an alias that starts with the title (=Emacs Lisp= next to =Emacs=) is linked whole instead of only its first word.
+
+- A stale line number past the end of a file without a trailing newline no longer links the last line.
 
 - Setting a todo state from a collection view on several headings of the same file (=T=, and its =Z= undo) no longer writes through stale positions. The first write shifts every heading below it, so later notes in the batch could get the state set on the wrong heading, or not at all. Entries are now located by their ID.
 
