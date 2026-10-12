@@ -614,9 +614,42 @@ widen.
 
 Shows notes that mention the current note's title or one of its aliases
 as plain text, *without* an =id:= link pointing back - the notes you may
-want to link. Mentions are grouped by the mentioning note; click a
-context line to jump to it. Each group has an =ignore= button next to
-the note link: it writes the mentioning note's file-level id to the
+want to link. Mentions are grouped by the mentioning note, sorted by
+title; click a context line to jump to it, or use the =link= button
+before it to turn that mention into an =id:= link to the current note
+(every occurrence of the title or an alias on that line). Each group
+also has a =link all= button that does it for every line listed for that
+note.
+
+Linking edits the mentioning note's file, which is usually not the one
+you are looking at, so the edit is saved and synced right away and the
+sidebar refresh that follows drops what you linked (with
+=vulpea-ui-auto-refresh= off, press =g=). With
+=vulpea-mentions-exclude-linked= on (the default) that is the whole
+group: once a note links to the current one, its other mentions no
+longer count. Point stays in the list next to where the row was, so you
+can go through several notes in a row. A few things to know:
+
+- The file is saved the usual way, so your save hooks run on it. If the
+  note was not open, its buffer stays open afterwards, which lets you
+  undo the edit.
+- If the mentioning note is open with unsaved changes, the link is
+  inserted but the buffer is left unsaved, and the list catches up when
+  you save it.
+- A line is edited only if it still reads the way the scan saw it. When
+  the text changed in the meantime, nothing is linked.
+- Only plain text is linked. A title that shows up as a tag, a todo
+  keyword, a timestamp, inside another link or a URL, or in code,
+  verbatim text, a block or a comment is left alone, since a link there
+  would break it. The scan does not tell these apart, so such a line can
+  be listed while =link= reports that there is nothing to link.
+- Words are matched the way Emacs sees word boundaries, which is not
+  always how the scan sees them. A title like =C++=, a possessive like
+  =Emacs's=, or a title in a script without spaces can be listed but not
+  linked.
+
+Each group has an =ignore= button as well: it writes the mentioning
+note's file-level id to the
 =vulpea-mentions-per-note-ignore-property-key= property of the current
 note (via =vulpea-mentions-ignore-from=), and the sidebar refresh that
 follows the edit drops the group. Mentions from that note stay hidden
@@ -679,7 +712,8 @@ gone stale (the surrounding text changed, or you already linked it) is
 simply skipped. It keeps your place in the sidebar and does not re-scan,
 so the suggestion stays listed (and point stays put) until the sidebar
 refreshes (=g=, or the database picking up your edits) - which makes it
-easy to link several in a row. Which
+easy to link several in a row. As in the unlinked mentions widget, only
+plain text is linked, and the same word boundary limits apply. Which
 notes count as candidates is controlled by =vulpea-mentions-note-filter=
 (file-level notes by default).
 
