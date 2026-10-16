@@ -2195,7 +2195,8 @@ Returns a list of plists with :note and :count, sorted by title."
   "Title of the unlinked mentions widget.
 `vulpea-ui-widget' keys its collapsible by title, so this string is
 also the cursor anchor that `vulpea-ui--ignore-mentions-action' jumps
-to; sharing one constant keeps the two from drifting apart.")
+to, and `vulpea-ui--unignore-mentions-action' when it removes the last
+ignored note; sharing one constant keeps them from drifting apart.")
 
 (vui-defcomponent vulpea-ui-widget-unlinked-mentions ()
   "Widget displaying notes that mention the current note without linking.
@@ -2776,7 +2777,8 @@ the cursor anchor that `vulpea-ui--unignore-mentions-action' jumps to;
 sharing one constant keeps the two from drifting apart.")
 
 (vui-defcomponent vulpea-ui-widget-ignored-notes ()
-  "Widget displaying notes whose mentions to this note are ignored."
+  "Widget displaying notes whose mentions to this note are ignored.
+The widget is absent when the note ignores nothing."
   :render
   (when-let* ((note (use-vulpea-ui-note)))
     (let ((ignored-notes (vui-use-memo (note)
@@ -2784,31 +2786,38 @@ sharing one constant keeps the two from drifting apart.")
                                  (lambda (a b)
                                    (string< (or (vulpea-note-title a) "")
                                             (or (vulpea-note-title b) "")))))))
-      (vui-component 'vulpea-ui-widget
-        :title vulpea-ui--ignored-notes-title
-        :count (length ignored-notes)
-        :children
-        (lambda ()
-          (if ignored-notes
-              (vui-vstack
-               :spacing 0
-               (seq-map (lambda (ignored-note)
-                          (vui-hstack
-                           (vui-component 'vulpea-ui-note-link :note ignored-note)
-                           (vui-button "unignore"
-                             :face 'vulpea-ui-mention-action-face
-                             :on-click (lambda ()
-                                         (vulpea-ui--unignore-mentions-action note ignored-note))
-                             :help-echo "Unignore mentions from this note.")))
-                        ignored-notes))
-            (vui-muted "No ignored notes")))))))
+      (when ignored-notes
+        (vui-component 'vulpea-ui-widget
+          :title vulpea-ui--ignored-notes-title
+          :count (length ignored-notes)
+          :children
+          (lambda ()
+            (vui-vstack
+             :spacing 0
+             (seq-map (lambda (ignored-note)
+                        (vui-hstack
+                         (vui-component 'vulpea-ui-note-link :note ignored-note)
+                         (vui-button "unignore"
+                           :face 'vulpea-ui-mention-action-face
+                           :on-click (lambda ()
+                                       (vulpea-ui--unignore-mentions-action
+                                        note ignored-note
+                                        (null (cdr ignored-notes))))
+                           :help-echo "Unignore mentions from this note.")))
+                      ignored-notes))))))))
 
-(defun vulpea-ui--unignore-mentions-action (note from-note)
+(defun vulpea-ui--unignore-mentions-action (note from-note &optional last)
   "Unignore mentions of NOTE from FROM-NOTE.
 
-Intended as the \"unignore\" button action for an ignored note."
+Intended as the \"unignore\" button action for an ignored note.  Point
+moves to the ignored notes widget head, which outlives the row through
+the refresh that follows.  When FROM-NOTE is the LAST ignored note, the
+widget goes away with it, so point moves to the unlinked mentions
+widget head instead, where FROM-NOTE shows up again."
   (when (fboundp 'vui-goto-key)
-    (vui-goto-key vulpea-ui--ignored-notes-title))
+    (vui-goto-key (if last
+                      vulpea-ui--unlinked-mentions-title
+                    vulpea-ui--ignored-notes-title)))
   (vulpea-mentions-unignore-from note from-note)
   (message "vulpea-ui: unignored mentions of %s from %s"
            (vulpea-note-title note)
