@@ -20,7 +20,7 @@ Visual tools for [[https://github.com/d12frosted/vulpea][vulpea]] notes: a per-n
 
 - Two ways to see your notes: a per-note *sidebar* of widgets, and standalone *views*
 - Configurable per-frame sidebar (position, size, auto-hide)
-- Built-in widgets: outline, tasks, backlinks, unlinked mentions, forward links, outgoing mentions, stats, schema health
+- Built-in widgets: outline, tasks, backlinks, unlinked mentions, ignored notes, forward links, outgoing mentions, stats, schema health
 - Schema dashboard: a collection-wide view of how every note measures up to its schema
 - Collection view: a sortable table over a filtered set of notes, with dired-style marks and bulk actions (tags, metadata, delete, your own function)
 - Backlink counts in the note buffer itself: an opt-in minor mode annotating every note with how many links point at it
@@ -674,7 +674,7 @@ note's file-level id to the
 =vulpea-mentions-per-note-ignore-property-key= property of the current
 note (via =vulpea-mentions-ignore-from=), and the sidebar refresh that
 follows the edit drops the group. Mentions from that note stay hidden
-until you undo it with =vulpea-mentions-unignore-from=.
+until you unignore it in the [[*Ignored notes widget][ignored notes widget]].
 
 Unlike the other widgets, this one loads *asynchronously*: scanning the
 whole collection for a note's title is expensive, so the search is
@@ -761,6 +761,29 @@ the candidate note, e.g. to drop notes carrying an =index= tag:
         (not (member "index" (vulpea-note-tags note)))))
 #+end_src
 
+** Ignored notes widget
+
+The other side of the =ignore= button in the
+[[*Unlinked mentions widget][unlinked mentions widget]]: it lists the
+notes whose mentions of the current note are ignored, sorted by title.
+Each one has an =unignore= button that removes it from
+=vulpea-mentions-per-note-ignore-property-key= (via
+=vulpea-mentions-unignore-from=), and after the refresh that follows
+its mentions are back in the unlinked mentions widget.
+
+An id in that property silences the whole file it lives in, so the
+widget lists the note a mention from that file is attributed to: the
+file-level note, or the first note in the file when there is none.
+Unignoring removes every id of that file. Ids that no longer belong to
+any note are not listed, so remove those from the property by hand.
+
+The widget only shows up on notes that ignore something. To turn it
+off:
+
+#+begin_src emacs-lisp
+(vulpea-ui-unregister-widget 'ignored-notes)
+#+end_src
+
 * Widget Registration
 
 Widgets are registered with =vulpea-ui-register-widget=, which allows filtering by predicate and ordering.
@@ -778,6 +801,7 @@ vulpea-ui registers these widgets by default:
 | =unlinked-mentions= |   350 | =vulpea-ui-widget-unlinked-mentions= |
 | =links=             |   400 | =vulpea-ui-widget-links=             |
 | =outgoing-mentions= |   450 | =vulpea-ui-widget-outgoing-mentions= |
+| =ignored-notes=     |   475 | =vulpea-ui-widget-ignored-notes=     |
 
 ** Registering widgets
 
