@@ -3412,9 +3412,8 @@ The file is what the list shows, so only saving brings the two in line."
 
 `vulpea-mentions-ignored-notes' is stubbed to return IGNORED-FORM, so
 the widget renders deterministically with no database.  IGNORED-FORM
-is evaluated on every call with ASKED-NOTE bound to the note the
-widget asks about, so BODY can change both the note and what the stub
-answers.  OUTPUT is the rendered sidebar buffer text, INSTANCE the
+is evaluated on every call, so BODY can change what the stub answers
+between renders.  OUTPUT is the rendered sidebar buffer text, INSTANCE the
 mounted sidebar root, NOTE the note it mounts and BUF-NAME the buffer
 holding it, so BODY can refresh the sidebar for another note.  The
 widget registry is isolated to the ignored-notes widget for the
@@ -3521,9 +3520,8 @@ the widget, so the no-recompute expectation cannot pass by accident."
          (vui-render-delay nil))
     (vulpea-ui-test--render-ignored-notes
         ;; Stand-in for the lookup the widget performs: it answers from
-        ;; the note it is handed, so only the note decides what gets
-        ;; rendered - suppressing the second call is the memo's doing,
-        ;; not this stub's.
+        ;; IGNORED on every call and caches nothing, so a skipped call
+        ;; is the memo's doing, not this stub's.
         (progn
           (cl-incf ignored-calls)
           ignored)
