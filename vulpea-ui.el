@@ -2779,13 +2779,17 @@ sharing one constant keeps the two from drifting apart.")
   "Widget displaying notes whose mentions to this note are ignored."
   :render
   (when-let* ((note (use-vulpea-ui-note)))
-    (let ((ignored-notes (vulpea-mentions-ignored-notes note)))
+    (let ((ignored-notes (vui-use-memo (note)
+                           (sort (vulpea-mentions-ignored-notes note)
+                                 (lambda (a b)
+                                   (string< (or (vulpea-note-title a) "")
+                                            (or (vulpea-note-title b) "")))))))
       (vui-component 'vulpea-ui-widget
         :title vulpea-ui--ignored-notes-title
         :count (length ignored-notes)
         :children
         (lambda ()
-          (if (> (length ignored-notes) 0)
+          (if ignored-notes
               (vui-vstack
                :spacing 0
                (seq-map (lambda (ignored-note)
