@@ -3411,9 +3411,14 @@ The file is what the list shows, so only saving brings the two in line."
   "Render the ignored-notes widget and run BODY with OUTPUT bound.
 
 `vulpea-mentions-ignored-notes' is stubbed to return IGNORED-FORM, so
-the widget renders deterministically with no database.  OUTPUT is the
-rendered sidebar buffer text.  The widget registry is isolated to the
-ignored-notes widget for the duration of the render."
+the widget renders deterministically with no database.  IGNORED-FORM
+is evaluated on every call with ASKED-NOTE bound to the note the
+widget asks about, so BODY can change both the note and what the stub
+answers.  OUTPUT is the rendered sidebar buffer text, INSTANCE the
+mounted sidebar root, NOTE the note it mounts and BUF-NAME the buffer
+holding it, so BODY can refresh the sidebar for another note.  The
+widget registry is isolated to the ignored-notes widget for the
+duration of the render."
   (declare (indent 1))
   `(vulpea-ui-test--with-clean-registry
      (vulpea-ui-register-widget 'ignored-notes
@@ -3426,13 +3431,14 @@ ignored-notes widget for the duration of the render."
        (cl-letf (((symbol-function 'vulpea-mentions-ignored-notes)
                   (lambda (_note) ,ignored-form)))
          (unwind-protect
-             (progn
-               (vui-mount (vui-component 'vulpea-ui-sidebar-root :note note)
-                          buf-name)
-               (let ((output (with-current-buffer buf-name
-                               (buffer-substring-no-properties
-                                (point-min) (point-max)))))
-                 ,@body))
+             (let* ((instance
+                     (vui-mount (vui-component 'vulpea-ui-sidebar-root
+                                               :note note)
+                                buf-name))
+                    (output (with-current-buffer buf-name
+                              (buffer-substring-no-properties
+                               (point-min) (point-max)))))
+               ,@body)
            (when (get-buffer buf-name)
              (kill-buffer buf-name)))))))
 
@@ -3498,6 +3504,59 @@ returns."
                          vulpea-ui--ignored-notes-title))
                 (vui--collect-widgets))))
           (should (= (point) (car (vui--widget-bounds ignored-notes)))))))))
+
+(ert-deftest vulpea-ui-test-ignored-notes-widget-memo-follows-the-note ()
+  "A soft refresh recomputes ignored notes only when the note changed.
+
+An idle sidebar refresh goes through `vui-update-props', which keeps
+memos: re-rendering for a note equal to the cached one serves the
+cached list without asking the database again, while a note that
+changed drops it.  MEMO-CONSULTS proves the refresh really re-rendered
+the widget, so the no-recompute expectation cannot pass by accident."
+  (let* ((a (vulpea-ui-test--make-mock-note "id-a" "Note A"))
+         (b (vulpea-ui-test--make-mock-note "id-b" "Note B"))
+         (c (vulpea-ui-test--make-mock-note "id-c" "Note C"))
+         (ignored-calls 0)
+         (ignored (list c a))
+         (vui-render-delay nil))
+    (vulpea-ui-test--render-ignored-notes
+        ;; Stand-in for the lookup the widget performs: it answers from
+        ;; the note it is handed, so only the note decides what gets
+        ;; rendered - suppressing the second call is the memo's doing,
+        ;; not this stub's.
+        (progn
+          (cl-incf ignored-calls)
+          ignored)
+      (let ((rendered
+             (lambda ()
+               (with-current-buffer buf-name
+                 (buffer-substring-no-properties (point-min) (point-max))))))
+        (should (= ignored-calls 1))
+        (should (string-match-p "Ignored Notes (2)" output))
+        (let ((memo-consults 0)
+              (orig (symbol-function 'vui--get-or-update-memo)))
+          (cl-letf (((symbol-function 'vui--get-or-update-memo)
+                     (lambda (&rest args)
+                       (cl-incf memo-consults)
+                       (apply orig args))))
+            ;; The same note content again, as a fresh struct - what an
+            ;; idle refresh passes after re-reading it from the
+            ;; database.  The widget re-renders, but from the cache.
+            (vui-update-props instance (list :note note))
+            (should (> memo-consults 0))
+            (should (= ignored-calls 1))
+            (should (equal (funcall rendered) output))
+            ;; The note changed, so the cached list must be dropped
+            ;; and the fresh one rendered.
+            (setq ignored (list b))
+            (vui-update-props instance
+                              (list :note (vulpea-ui-test--make-mock-note
+                                           "tgt" "Target Changed")))
+            (should (= ignored-calls 2))
+            (should (string-match-p "Ignored Notes (1)" (funcall rendered)))
+            (should (string-match-p (regexp-quote "[Note B] [unignore]")
+                                    (funcall rendered)))
+            (should-not (string-match-p "Note A" (funcall rendered)))))))))
 
 
 ;;; Schema health widget
