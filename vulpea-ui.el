@@ -1269,15 +1269,263 @@ NOTE is the parent note for navigation."
        :help-echo nil))))
 
 (defun vulpea-ui--jump-to-position (note pos)
-  "Jump to position POS in NOTE's file."
+  "Jump to position POS in NOTE's file.
+The buffer is widened when POS is outside its restriction, and the
+heading is revealed along with its outline path."
   (when (and note pos)
     (let ((main-win (vulpea-ui--get-main-window)))
       (when main-win
         (select-window main-win)
         (find-file (vulpea-note-path note))
+        (unless (<= (point-min) pos (point-max))
+          (widen))
         (goto-char pos)
+        (org-fold-reveal)
         (org-fold-show-entry)
         (recenter)))))
+
+
+;;; Tasks widget
+
+(vui-defcomponent vulpea-ui-widget-tasks ()
+  "Widget listing the open tasks of the current note.
+A task is a heading with a todo keyword that is not a done one.  Tasks
+nest under the tasks above them in the outline.  Clicking a title jumps
+to the task, clicking its keyword changes the state with `org-todo',
+the same as \\[org-todo] on the heading.  The widget is absent when the
+note has no open tasks.  When the note's buffer is narrowed (and
+`vulpea-ui-respect-narrowing' is enabled), only the tasks inside the
+restriction are listed."
+  :state ((revision 0))
+  :render
+  (let ((note (use-vulpea-ui-note)))
+    (when note
+      (let* ((note-buf (when (vulpea-note-path note)
+                         (find-buffer-visiting (vulpea-note-path note))))
+             (tick (when note-buf (buffer-modified-tick note-buf)))
+             (scope (use-vulpea-ui-scope))
+             (tasks (vui-use-memo (note tick scope)
+                      (vulpea-ui--parse-tasks note scope))))
+        (when tasks
+          (vui-component 'vulpea-ui-widget
+            :title "Tasks"
+            :count (vulpea-ui--scoped-count-display
+                    (length tasks) (length tasks) scope)
+            :children
+            (lambda ()
+              (seq-map
+               (lambda (task)
+                 (vulpea-ui--render-task
+                  task note
+                  ;; Re-render now rather than on the next idle refresh,
+                  ;; so the list and the positions in it are current.
+                  (lambda () (vui-set-state :revision #'1+))))
+               tasks))))))))
+
+(defconst vulpea-ui--todo-state-variables
+  '(org-todo-keywords-1 org-not-done-keywords org-done-keywords
+    org-todo-kwd-alist org-todo-sets org-todo-heads
+    org-todo-regexp org-not-done-regexp org-not-done-heading-regexp
+    org-todo-line-regexp org-todo-line-tags-regexp
+    org-complex-heading-regexp org-complex-heading-regexp-format)
+  "Buffer-local variables in which Org keeps a buffer's todo keywords.
+`vulpea-ui--parse-tasks' copies them from the note's buffer, so the
+parse agrees with `org-todo' there.")
+
+(defun vulpea-ui--task-hidden-p (hl archive-tag)
+  "Return non-nil if HL is in an archived or commented subtree.
+ARCHIVE-TAG is the archive tag.  HL and its ancestors are checked."
+  (seq-some (lambda (el)
+              (or (org-element-property :commentedp el)
+                  (member archive-tag (org-element-property :tags el))))
+            (org-element-lineage hl nil t)))
+
+(defun vulpea-ui--parse-tasks (note &optional scope)
+  "Return the open tasks in NOTE's file, in document order.
+A task is a heading with a todo keyword that is not a done one,
+outside archived and commented subtrees.  The buffer visiting the file
+is read when there is one, so unsaved edits count and the todo
+keywords are the ones Org uses in that buffer.
+With SCOPE (see `vulpea-ui-narrowing-scope'), only the tasks inside
+the restriction are returned.
+
+Each task is a plist with :title, :keyword, :priority (a character or
+nil), :pos (the heading start in the widened buffer), :depth (how many
+of the returned tasks it is nested under) and :index (how many earlier
+tasks have the same title, so title and index tell tasks apart)."
+  (when (and note (vulpea-note-path note))
+    (let* ((path (vulpea-note-path note))
+           (buf (find-buffer-visiting path))
+           (beg (plist-get scope :beg))
+           (end (plist-get scope :end)))
+      (with-temp-buffer
+        ;; Parse the whole file even when narrowed: #+TODO lines above
+        ;; the restriction still define the keywords.  The scope filters
+        ;; the result instead, and positions need no offset.
+        (if buf
+            (insert (with-current-buffer buf
+                      (save-restriction
+                        (widen)
+                        (buffer-substring-no-properties
+                         (point-min) (point-max)))))
+          (insert-file-contents path))
+        ;; Keywords can come from a #+SETUPFILE given relative to the note.
+        (setq default-directory (file-name-directory path))
+        (vulpea-ui--setup-org-mode)
+        ;; A visited note's tasks are the ones `org-todo' sees there, so
+        ;; take its keywords as computed in that buffer rather than
+        ;; recomputing them from the text.
+        (when buf
+          (dolist (var vulpea-ui--todo-state-variables)
+            (when (local-variable-p var buf)
+              (set (make-local-variable var) (buffer-local-value var buf)))))
+        (let ((archive-tag org-archive-tag)
+              (shown (make-hash-table :test 'eq))
+              (seen (make-hash-table :test 'equal))
+              (tasks nil))
+          (org-element-map (org-element-parse-buffer 'headline) 'headline
+            (lambda (hl)
+              (let ((pos (org-element-property :begin hl)))
+                (when (and (eq (org-element-property :todo-type hl) 'todo)
+                           (or (null scope) (and (<= beg pos) (< pos end)))
+                           (not (vulpea-ui--task-hidden-p hl archive-tag)))
+                  (let* ((title (vulpea-ui--clean-org-links
+                                 (org-element-property :raw-value hl)))
+                         (index (gethash title seen 0)))
+                    (puthash hl t shown)
+                    (puthash title (1+ index) seen)
+                    (push (list :title title
+                                :keyword (org-element-property :todo-keyword hl)
+                                :priority (org-element-property :priority hl)
+                                :pos pos
+                                :depth (seq-count (lambda (parent)
+                                                    (gethash parent shown))
+                                                  (org-element-lineage hl))
+                                :index index)
+                          tasks))))))
+          (nreverse tasks))))))
+
+(defun vulpea-ui--priority-string (priority)
+  "Return PRIORITY, as parsed by org-element, as written in its cookie.
+Org 9.8 parses a numeric priority to the number and provides
+`org-priority-to-string' to turn it back; older Org parses every
+cookie to its character."
+  (if (fboundp 'org-priority-to-string)
+      (org-priority-to-string priority)
+    (char-to-string priority)))
+
+(defun vulpea-ui--render-task (task note on-change)
+  "Render TASK of NOTE as a row: keyword, priority, then title.
+The row is indented by the task's depth.  Clicking the keyword changes
+the state (see `vulpea-ui--task-change-state') and then calls
+ON-CHANGE; clicking the title jumps to the task."
+  (let* ((title (plist-get task :title))
+         (keyword (plist-get task :keyword))
+         (priority (plist-get task :priority))
+         (id (list title (plist-get task :index)))
+         (state-key (cons 'vulpea-ui-task-state id)))
+    (vui-vstack
+     :indent (* 2 (plist-get task :depth))
+     (vui-hstack
+      (vui-button keyword
+        :key state-key
+        :face (org-get-todo-face keyword)
+        :no-decoration t
+        :on-click (lambda ()
+                    (vulpea-ui--task-change-state note task state-key)
+                    (funcall on-change))
+        :help-echo "Change the state with org-todo")
+      (when priority
+        (vui-text (format "[#%s]" (vulpea-ui--priority-string priority))
+                  :face 'org-priority))
+      (vui-button (if (string-empty-p title) "(untitled)" title)
+        :key (cons 'vulpea-ui-task id)
+        :no-decoration t
+        :on-click (lambda () (vulpea-ui--task-jump note task))
+        :help-echo nil)))))
+
+(defmacro vulpea-ui--with-task-buffer (note &rest body)
+  "Run BODY in the buffer visiting NOTE's file, visiting it if needed.
+The buffer stays narrowed when `vulpea-ui-respect-narrowing' is on, as
+the widget then lists only the tasks inside the restriction.  With it
+off every task is listed, so BODY runs widened."
+  (declare (indent 1) (debug t))
+  `(with-current-buffer (find-file-noselect (vulpea-note-path ,note))
+     (save-restriction
+       (unless vulpea-ui-respect-narrowing
+         (widen))
+       ,@body)))
+
+(defun vulpea-ui--task-at (pos title)
+  "Return the start of the open task titled TITLE at POS, or nil.
+Tasks in archived or commented subtrees do not count, as in
+`vulpea-ui--parse-tasks'."
+  (save-excursion
+    (goto-char pos)
+    (when (and (org-at-heading-p)
+               (org-entry-is-todo-p)
+               (not (org-in-archived-heading-p))
+               (not (org-in-commented-heading-p)))
+      (let ((heading (org-element-at-point)))
+        (when (equal (vulpea-ui--clean-org-links
+                      (org-element-property :raw-value heading))
+                     title)
+          (org-element-property :begin heading))))))
+
+(defun vulpea-ui--task-locate (task)
+  "Return the start of TASK's heading in the current buffer, or nil.
+TASK comes from `vulpea-ui--parse-tasks'.  Its :pos is trusted only
+while the heading there is still an open task with the same title,
+because an edit since the last render moves headings around.
+Otherwise the open task with that title nearest to :pos is taken.
+Only the accessible portion of the buffer is searched; see
+`vulpea-ui--with-task-buffer'."
+  (let ((title (plist-get task :title))
+        (pos (plist-get task :pos)))
+    (or (and (<= (point-min) pos) (< pos (point-max))
+             (vulpea-ui--task-at pos title))
+        (save-excursion
+          (goto-char (point-min))
+          (let ((best nil))
+            (while (re-search-forward org-outline-regexp-bol nil t)
+              (when-let* ((start (vulpea-ui--task-at (match-beginning 0) title)))
+                (when (or (null best)
+                          (< (abs (- start pos)) (abs (- best pos))))
+                  (setq best start))))
+            best)))))
+
+(defun vulpea-ui--task-change-state (note task &optional key)
+  "Change the todo state of TASK in NOTE's file with `org-todo'.
+The change is what \\[org-todo] does on the heading, so custom
+keywords, repeaters and logging work as usual.  KEY is the key of the
+pressed button, and point is moved onto it first: when the task is
+closed and its row goes away, vui then lands on the nearest row still
+there.  Return non-nil when the task was found."
+  (when (and key (fboundp 'vui-goto-key))
+    (vui-goto-key key))
+  (vulpea-ui--with-task-buffer note
+    (if-let* ((pos (vulpea-ui--task-locate task)))
+        (progn
+          (save-excursion
+            (goto-char pos)
+            ;; A region left active in the note would make `org-todo'
+            ;; act on its headings instead of this one.
+            (let ((org-loop-over-headlines-in-active-region nil))
+              (org-todo)))
+          t)
+      (message "vulpea-ui: %s is no longer an open task"
+               (plist-get task :title))
+      nil)))
+
+(defun vulpea-ui--task-jump (note task)
+  "Jump to TASK of NOTE in the main window.
+The heading is located as for a state change, falling back to the
+position from the last render."
+  (vulpea-ui--jump-to-position
+   note
+   (or (vulpea-ui--with-task-buffer note
+         (vulpea-ui--task-locate task))
+       (plist-get task :pos))))
 
 
 ;;; Backlinks widget
@@ -3476,6 +3724,12 @@ Renders nothing when the file carries no schema-bearing note."
 (vulpea-ui-register-widget 'outline
                            :component 'vulpea-ui-widget-outline
                            :order 200)
+
+;; No predicate: the widget itself renders nothing when the note has
+;; no open tasks.
+(vulpea-ui-register-widget 'tasks
+                           :component 'vulpea-ui-widget-tasks
+                           :order 250)
 
 (vulpea-ui-register-widget 'backlinks
                            :component 'vulpea-ui-widget-backlinks

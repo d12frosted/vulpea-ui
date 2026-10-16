@@ -2096,6 +2096,450 @@ raw org markup such as links and emphasis."
       (delete-file temp-file))))
 
 
+;;; Tasks widget tests
+
+(defconst vulpea-ui-test--tasks-content
+  "#+title: Tasks Test
+#+TODO: TODO NEXT | DONE CANCELLED
+
+* TODO Write report
+* DONE Old thing
+* Plain heading
+** NEXT Call Alice
+* TODO [#A] Project :project:
+** TODO Draft outline
+** DONE Finished step
+*** TODO Leftover under done
+* Archived :ARCHIVE:
+** TODO Hidden task
+* TODO Write report
+"
+  "Org file content used by the tasks widget tests.
+Six open tasks: keywords from the #+TODO line, a priority, nesting
+under a task and under a done task, an archived subtree to skip, and
+a duplicate title.")
+
+(defconst vulpea-ui-test--three-tasks
+  "* TODO First\n* TODO Second\n* TODO Third\n"
+  "Three sibling tasks for the state change tests.")
+
+(defmacro vulpea-ui-test--with-tasks-buffer (content &rest body)
+  "Visit a temp org file holding CONTENT and run BODY in its buffer.
+BODY sees `path', `buf' and `note', a file-level note for the file.
+Org settings that change what `org-todo' does are pinned to their
+defaults.  The buffer and file are cleaned up afterwards."
+  (declare (indent 1))
+  `(let ((org-todo-keywords '((sequence "TODO" "DONE")))
+         (org-log-done nil)
+         (org-use-fast-todo-selection nil)
+         (path (make-temp-file "vulpea-ui-test-tasks" nil ".org")))
+     (unwind-protect
+         (progn
+           (with-temp-file path
+             (insert ,content))
+           (let ((buf (find-file-noselect path))
+                 (note (make-vulpea-note
+                        :id "tasks-file" :path path :level 0 :pos 1
+                        :title "Tasks Test" :primary-title "Tasks Test")))
+             (unwind-protect
+                 (with-current-buffer buf
+                   (ignore note)
+                   ,@body)
+               (with-current-buffer buf
+                 (set-buffer-modified-p nil))
+               (kill-buffer buf))))
+       (delete-file path))))
+
+(defmacro vulpea-ui-test--with-sidebar (note &rest body)
+  "Mount the sidebar root for NOTE and run BODY in the sidebar buffer.
+`vui-render-delay' is off, so a button press re-renders right away.
+Widgets must already be registered.  The previous buffer is current
+again afterwards."
+  (declare (indent 1))
+  `(let ((vui-render-delay nil)
+         (sidebar (get-buffer-create "*vulpea-ui-tasks-test*")))
+     (with-current-buffer sidebar
+       (vulpea-ui-sidebar-mode))
+     (unwind-protect
+         (save-current-buffer
+           (vui-mount (vui-component 'vulpea-ui-sidebar-root :note ,note)
+                      (buffer-name sidebar))
+           (set-buffer sidebar)
+           ,@body)
+       (kill-buffer sidebar))))
+
+(defun vulpea-ui-test--task-titles (tasks)
+  "Return the titles of TASKS."
+  (mapcar (lambda (task) (plist-get task :title)) tasks))
+
+(defun vulpea-ui-test--indent-of (text)
+  "Return the indentation of the line holding TEXT in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward text)
+    (current-indentation)))
+
+(ert-deftest vulpea-ui-test-parse-tasks-open-only ()
+  "Only headings with a keyword that is not a done one are tasks.
+Done and plain headings are left out, and so is everything in an
+archived subtree.  Keywords from the #+TODO line count."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--tasks-content
+    (let ((tasks (vulpea-ui--parse-tasks note)))
+      (should (equal (vulpea-ui-test--task-titles tasks)
+                     '("Write report" "Call Alice" "Project" "Draft outline"
+                       "Leftover under done" "Write report")))
+      (should (equal (mapcar (lambda (task) (plist-get task :keyword)) tasks)
+                     '("TODO" "NEXT" "TODO" "TODO" "TODO" "TODO"))))))
+
+(ert-deftest vulpea-ui-test-parse-tasks-depth ()
+  "A task's depth counts the tasks it is nested under.
+Plain and done headings in between do not add to it."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--tasks-content
+    (should (equal (mapcar (lambda (task) (plist-get task :depth))
+                           (vulpea-ui--parse-tasks note))
+                   '(0 0 0 1 1 0)))))
+
+(ert-deftest vulpea-ui-test-parse-tasks-details ()
+  "Tasks carry their priority, heading position and title index."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--tasks-content
+    (let ((tasks (vulpea-ui--parse-tasks note)))
+      (should (eq (plist-get (nth 2 tasks) :priority) ?A))
+      (should-not (plist-get (nth 0 tasks) :priority))
+      ;; The duplicate title is told apart by its index.
+      (should (= (plist-get (nth 0 tasks) :index) 0))
+      (should (= (plist-get (nth 5 tasks) :index) 1))
+      (dolist (task tasks)
+        (goto-char (plist-get task :pos))
+        (should (looking-at-p
+                 (concat "\\*+ [A-Z]+ .*"
+                         (regexp-quote (plist-get task :title)))))))))
+
+(ert-deftest vulpea-ui-test-parse-tasks-narrowed ()
+  "With a scope only the tasks inside the restriction are returned.
+The whole file is still parsed, so keywords from a #+TODO line above
+the restriction are known, and positions stay file positions."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--tasks-content
+    (goto-char (point-min))
+    (re-search-forward "^\\* Plain heading")
+    (org-narrow-to-subtree)
+    (let* ((scope (vulpea-ui-narrowing-scope note))
+           (tasks (vulpea-ui--parse-tasks note scope)))
+      (should scope)
+      (should (equal (vulpea-ui-test--task-titles tasks) '("Call Alice")))
+      (goto-char (plist-get (car tasks) :pos))
+      (should (looking-at-p "\\*\\* NEXT Call Alice")))))
+
+(ert-deftest vulpea-ui-test-parse-tasks-unsaved-edits ()
+  "Tasks come from the live buffer, so unsaved edits show up."
+  (vulpea-ui-test--with-tasks-buffer "* TODO Saved\n"
+    (goto-char (point-max))
+    (insert "* TODO Unsaved\n")
+    (should (equal (vulpea-ui-test--task-titles (vulpea-ui--parse-tasks note))
+                   '("Saved" "Unsaved")))))
+
+(ert-deftest vulpea-ui-test-parse-tasks-follow-buffer-keywords ()
+  "Tasks follow the todo keywords Org uses in the note's buffer.
+A #+TODO line added without refreshing Org does not count yet, as for
+`org-todo' itself; once Org is refreshed it does, and the listed task
+can change state."
+  (vulpea-ui-test--with-tasks-buffer "* WAIT On hold\n* TODO Plain\n"
+    (goto-char (point-min))
+    (insert "#+TODO: WAIT | OVER\n")
+    (should (equal (vulpea-ui-test--task-titles (vulpea-ui--parse-tasks note))
+                   '("Plain")))
+    (org-mode-restart)
+    (let ((tasks (vulpea-ui--parse-tasks note)))
+      (should (equal (vulpea-ui-test--task-titles tasks) '("On hold")))
+      (should (vulpea-ui--task-change-state note (car tasks)))
+      (should (string-match-p "^\\* OVER On hold" (buffer-string))))))
+
+(ert-deftest vulpea-ui-test-parse-tasks-skip-commented ()
+  "Commented headings and everything below them are not tasks."
+  (vulpea-ui-test--with-tasks-buffer
+      "* TODO COMMENT Commented\n* COMMENT Parent\n** TODO Child\n* TODO Real\n"
+    (should (equal (vulpea-ui-test--task-titles (vulpea-ui--parse-tasks note))
+                   '("Real")))))
+
+(ert-deftest vulpea-ui-test-parse-tasks-unvisited-file ()
+  "A file that no buffer visits is read from disk."
+  (let ((path (make-temp-file "vulpea-ui-test-tasks" nil ".org")))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert "* TODO On disk\n"))
+          (should (equal (vulpea-ui-test--task-titles
+                          (vulpea-ui--parse-tasks
+                           (make-vulpea-note :id "x" :path path :level 0 :pos 1)))
+                         '("On disk"))))
+      (delete-file path))))
+
+(ert-deftest vulpea-ui-test-task-locate ()
+  "A task is found at its position, or by its title after an edit.
+A task that is no longer open is not found."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (let ((second (nth 1 (vulpea-ui--parse-tasks note))))
+      (should (= (vulpea-ui--task-locate second) (plist-get second :pos)))
+      (goto-char (point-min))
+      (insert "Some text above.\n")
+      (goto-char (vulpea-ui--task-locate second))
+      (should (looking-at-p "\\* TODO Second"))
+      (re-search-forward "TODO" (line-end-position))
+      (replace-match "DONE")
+      (should-not (vulpea-ui--task-locate second)))))
+
+(ert-deftest vulpea-ui-test-task-locate-duplicate-title ()
+  "Of several tasks with one title, the one nearest the old position wins."
+  (vulpea-ui-test--with-tasks-buffer
+      "* TODO Same\nbody\n* TODO Other\n* TODO Same\n"
+    (let ((later (nth 2 (vulpea-ui--parse-tasks note))))
+      (goto-char (point-min))
+      (insert "Shift.\n")
+      (goto-char (vulpea-ui--task-locate later))
+      (should (looking-at-p "\\* TODO Same"))
+      (should (= (line-number-at-pos) 5)))))
+
+(ert-deftest vulpea-ui-test-task-change-state ()
+  "Changing a task's state runs `org-todo' on its heading."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (should (vulpea-ui--task-change-state
+             note (nth 1 (vulpea-ui--parse-tasks note))))
+    (should (equal (buffer-string)
+                   "* TODO First\n* DONE Second\n* TODO Third\n"))))
+
+(ert-deftest vulpea-ui-test-task-change-state-after-edit ()
+  "An edit since the last render does not send the change elsewhere.
+The stored position now lands on another heading; the task is found
+by its title instead."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (let ((second (nth 1 (vulpea-ui--parse-tasks note))))
+      (goto-char (point-min))
+      (insert "* TODO Zeroth\n")
+      (should (vulpea-ui--task-change-state note second))
+      (should (equal (buffer-string)
+                     (concat "* TODO Zeroth\n* TODO First\n"
+                             "* DONE Second\n* TODO Third\n"))))))
+
+(ert-deftest vulpea-ui-test-task-locate-skips-hidden-duplicates ()
+  "Locating never lands on a same-titled task the list leaves out.
+Archived and commented subtrees are not listed, so their tasks must
+not be the ones that change."
+  (vulpea-ui-test--with-tasks-buffer
+      "* A :ARCHIVE:\n** TODO Same\n* COMMENT B\n** TODO Same\n* TODO Same\n"
+    (let ((task (car (vulpea-ui--parse-tasks note))))
+      (goto-char (point-min))
+      (insert "Note.\n")
+      (should (vulpea-ui--task-change-state note task))
+      (should (equal (buffer-string)
+                     (concat "Note.\n* A :ARCHIVE:\n** TODO Same\n"
+                             "* COMMENT B\n** TODO Same\n* DONE Same\n"))))))
+
+(ert-deftest vulpea-ui-test-task-change-state-outside-restriction ()
+  "Without `vulpea-ui-respect-narrowing' every task is listed.
+So a task outside the buffer's restriction must still change state."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (let ((vulpea-ui-respect-narrowing nil))
+      (goto-char (point-min))
+      (re-search-forward "^\\* TODO Second")
+      (org-narrow-to-subtree)
+      (let ((tasks (vulpea-ui--parse-tasks
+                    note (vulpea-ui-narrowing-scope note))))
+        (should (= (length tasks) 3))
+        (should (vulpea-ui--task-change-state note (nth 2 tasks)))
+        (widen)
+        (should (equal (buffer-string)
+                       "* TODO First\n* TODO Second\n* DONE Third\n"))))))
+
+(ert-deftest vulpea-ui-test-task-change-state-ignores-region ()
+  "An active region in the note's buffer does not redirect the change.
+`org-todo' would otherwise act on every heading in the region."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (let ((transient-mark-mode t))
+      (goto-char (point-min))
+      (push-mark (point) t t)
+      (forward-line 2)
+      (should (vulpea-ui--task-change-state
+               note (nth 2 (vulpea-ui--parse-tasks note))))
+      (should (equal (buffer-string)
+                     "* TODO First\n* TODO Second\n* DONE Third\n")))))
+
+(ert-deftest vulpea-ui-test-task-change-state-linked-title ()
+  "A title with a link is shown clean and still found for a change."
+  (vulpea-ui-test--with-tasks-buffer "* TODO Call [[id:abc][Alice]]\n"
+    (let ((task (car (vulpea-ui--parse-tasks note))))
+      (should (equal (plist-get task :title) "Call Alice"))
+      (should (vulpea-ui--task-change-state note task))
+      (should (equal (buffer-string) "* DONE Call [[id:abc][Alice]]\n")))))
+
+(ert-deftest vulpea-ui-test-parse-tasks-relative-setupfile ()
+  "Keywords from a #+SETUPFILE given relative to the note count."
+  (let* ((dir (make-temp-file "vulpea-ui-test-setup" t))
+         (path (expand-file-name "note.org" dir))
+         (default-directory temporary-file-directory))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "setup.org" dir)
+            (insert "#+TODO: WAIT | OVER\n"))
+          (with-temp-file path
+            (insert "#+SETUPFILE: setup.org\n* WAIT On hold\n* OVER Finished\n"))
+          (should (equal (vulpea-ui-test--task-titles
+                          (vulpea-ui--parse-tasks
+                           (make-vulpea-note :id "x" :path path :level 0 :pos 1)))
+                         '("On hold"))))
+      (delete-directory dir t))))
+
+(ert-deftest vulpea-ui-test-task-jump-after-edit ()
+  "A title click finds the task again after an edit moved it."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (let ((third (nth 2 (vulpea-ui--parse-tasks note)))
+          (jumped nil))
+      (goto-char (point-min))
+      (insert "Some text above.\n")
+      (cl-letf (((symbol-function 'vulpea-ui--jump-to-position)
+                 (lambda (_note pos) (setq jumped pos))))
+        (vulpea-ui--task-jump note third))
+      (goto-char jumped)
+      (should (looking-at-p "\\* TODO Third")))))
+
+(ert-deftest vulpea-ui-test-jump-to-position-outside-restriction ()
+  "Jumping to a heading outside the restriction widens to reach it."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (switch-to-buffer buf)
+    (goto-char (point-min))
+    (re-search-forward "^\\* TODO Third")
+    (org-narrow-to-subtree)
+    (cl-letf (((symbol-function 'vulpea-ui--get-main-window)
+               (lambda (&rest _) (selected-window))))
+      (vulpea-ui--jump-to-position note 1))
+    (should (= (point) 1))
+    (should (looking-at-p "\\* TODO First"))))
+
+(ert-deftest vulpea-ui-test-jump-to-position-reveals-ancestors ()
+  "Jumping to a folded heading shows its whole outline path."
+  (vulpea-ui-test--with-tasks-buffer
+      "* Parent\n** Sub\n*** TODO Deep\nbody\n* Other\n"
+    (switch-to-buffer buf)
+    (org-overview)
+    (cl-letf (((symbol-function 'vulpea-ui--get-main-window)
+               (lambda (&rest _) (selected-window))))
+      (vulpea-ui--task-jump note (car (vulpea-ui--parse-tasks note))))
+    (save-excursion
+      (goto-char (point-min))
+      (re-search-forward "^\\*\\* Sub")
+      (should-not (org-invisible-p (match-beginning 0))))
+    (should (looking-at-p "\\*\\*\\* TODO Deep"))))
+
+(ert-deftest vulpea-ui-test-tasks-widget-numeric-priority ()
+  "A numeric priority shows as its number."
+  (vulpea-ui-test--with-tasks-buffer "* TODO [#1] Urgent\n"
+    (let ((org-priority-highest 1)
+          (org-priority-lowest 9)
+          (org-priority-default 5))
+      (org-mode-restart)
+      (vulpea-ui-test--with-clean-registry
+        (vulpea-ui-register-widget 'tasks :component 'vulpea-ui-widget-tasks)
+        (vulpea-ui-test--with-sidebar note
+          (should (string-match-p "TODO \\[#1\\] Urgent" (buffer-string))))))))
+
+(ert-deftest vulpea-ui-test-task-change-state-gone ()
+  "A task that is gone is left alone and reported."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (let ((second (nth 1 (vulpea-ui--parse-tasks note))))
+      (goto-char (point-min))
+      (re-search-forward "^\\* TODO Second\n")
+      (replace-match "")
+      (should-not (vulpea-ui--task-change-state note second))
+      (should (equal (buffer-string) "* TODO First\n* TODO Third\n")))))
+
+(ert-deftest vulpea-ui-test-tasks-widget-registered ()
+  "The tasks widget is registered by default, right after the outline."
+  (let ((entry (gethash 'tasks vulpea-ui--widget-registry)))
+    (should (eq (plist-get entry :component) 'vulpea-ui-widget-tasks))
+    (should (= (plist-get entry :order) 250))))
+
+(ert-deftest vulpea-ui-test-tasks-widget-renders ()
+  "The widget lists each task with its keyword, nested ones indented."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--tasks-content
+    (vulpea-ui-test--with-clean-registry
+      (vulpea-ui-register-widget 'tasks :component 'vulpea-ui-widget-tasks)
+      (vulpea-ui-test--with-sidebar note
+        (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+          (should (string-match-p "Tasks (6)" text))
+          (should (string-match-p "NEXT Call Alice" text))
+          (should (string-match-p "TODO \\[#A\\] Project" text))
+          (should-not (string-match-p "Old thing" text))
+          (should-not (string-match-p "Hidden task" text)))
+        (should (= (vulpea-ui-test--indent-of "Write report")
+                   (vulpea-ui-test--indent-of "Project")))
+        (should (> (vulpea-ui-test--indent-of "Draft outline")
+                   (vulpea-ui-test--indent-of "Project")))))))
+
+(ert-deftest vulpea-ui-test-tasks-widget-hidden-without-tasks ()
+  "A note without open tasks gets no tasks widget at all."
+  (vulpea-ui-test--with-tasks-buffer "* DONE Finished\n* Plain\n"
+    (vulpea-ui-test--with-clean-registry
+      (vulpea-ui-register-widget 'tasks :component 'vulpea-ui-widget-tasks)
+      (vulpea-ui-test--with-sidebar note
+        (should-not (string-match-p "Tasks" (buffer-string)))))))
+
+(ert-deftest vulpea-ui-test-tasks-widget-narrowed ()
+  "Narrowed, the widget lists the restriction's tasks and says so."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--tasks-content
+    (goto-char (point-min))
+    (re-search-forward "^\\* TODO \\[#A\\] Project")
+    (org-narrow-to-subtree)
+    (vulpea-ui-test--with-clean-registry
+      (vulpea-ui-register-widget 'tasks :component 'vulpea-ui-widget-tasks)
+      (vulpea-ui-test--with-sidebar note
+        (should (string-match-p "Tasks (3 · narrowed)" (buffer-string)))
+        (should-not (string-match-p "Write report" (buffer-string)))))))
+
+(ert-deftest vulpea-ui-test-tasks-widget-keyword-click ()
+  "Clicking a keyword changes the state and updates the list right away.
+The closed task's row goes away, and point lands on the row that took
+its place instead of the top of the sidebar."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (vulpea-ui-test--with-clean-registry
+      (vulpea-ui-register-widget 'tasks :component 'vulpea-ui-widget-tasks)
+      (vulpea-ui-test--with-sidebar note
+        (should (vui-goto-key '(vulpea-ui-task-state "Second" 0)))
+        (vui-activate)
+        (should (string-match-p "Tasks (2)" (buffer-string)))
+        (should-not (string-match-p "Second" (buffer-string)))
+        (should (equal (vui-element-get (vui-element-at) :vui-key)
+                       '(vulpea-ui-task-state "Third" 0))))
+      (should (equal (buffer-string)
+                     "* TODO First\n* DONE Second\n* TODO Third\n")))))
+
+(ert-deftest vulpea-ui-test-tasks-widget-keyword-click-point-elsewhere ()
+  "Point lands on the next row even when it was not on the pressed button.
+A mouse click does not move point, so the action moves it first."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (vulpea-ui-test--with-clean-registry
+      (vulpea-ui-register-widget 'tasks :component 'vulpea-ui-widget-tasks)
+      (vulpea-ui-test--with-sidebar note
+        (let ((pos (vui-goto-key '(vulpea-ui-task-state "Second" 0))))
+          (goto-char (point-max))
+          (vui-activate pos))
+        (should-not (string-match-p "Second" (buffer-string)))
+        (should (equal (vui-element-get (vui-element-at) :vui-key)
+                       '(vulpea-ui-task-state "Third" 0)))))))
+
+(ert-deftest vulpea-ui-test-tasks-widget-title-click ()
+  "Clicking a title jumps to the task's heading."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (let ((jumped nil))
+      (cl-letf (((symbol-function 'vulpea-ui--jump-to-position)
+                 (lambda (_note pos) (setq jumped pos))))
+        (vulpea-ui-test--with-clean-registry
+          (vulpea-ui-register-widget 'tasks :component 'vulpea-ui-widget-tasks)
+          (vulpea-ui-test--with-sidebar note
+            (should (vui-goto-key '(vulpea-ui-task "Third" 0)))
+            (vui-activate))))
+      (should jumped)
+      (goto-char jumped)
+      (should (looking-at-p "\\* TODO Third")))))
+
+
 ;;; Widget registry tests
 
 (defun vulpea-ui-test--widget-components (note)

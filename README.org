@@ -20,7 +20,7 @@ Visual tools for [[https://github.com/d12frosted/vulpea][vulpea]] notes: a per-n
 
 - Two ways to see your notes: a per-note *sidebar* of widgets, and standalone *views*
 - Configurable per-frame sidebar (position, size, auto-hide)
-- Built-in widgets: outline, backlinks, unlinked mentions, forward links, outgoing mentions, stats, schema health
+- Built-in widgets: outline, tasks, backlinks, unlinked mentions, forward links, outgoing mentions, stats, schema health
 - Schema dashboard: a collection-wide view of how every note measures up to its schema
 - Collection view: a sortable table over a filtered set of notes, with dired-style marks and bulk actions (tags, metadata, delete, your own function)
 - Backlink counts in the note buffer itself: an opt-in minor mode annotating every note with how many links point at it
@@ -581,6 +581,27 @@ Displays the heading structure of the note. Click headings to navigate.
 When the buffer is narrowed, only the accessible headings are shown
 (see =vulpea-ui-respect-narrowing=).
 
+** Tasks widget
+
+Lists the open tasks of the note: headings with a todo keyword that is
+not a done one, counting keywords from =#+TODO:= lines and
+=org-todo-keywords=. A task under another task is nested below it, so
+the tasks of a project heading show up under the project. Archived and
+commented subtrees are skipped, and when the buffer is narrowed only
+the tasks inside the restriction are shown (see
+=vulpea-ui-respect-narrowing=).
+
+Click a title to jump to the task. Click its keyword to change the
+state: it is the same as =C-c C-t= (=org-todo=) on the heading, so your
+keyword sequences, fast selection keys, repeaters and logging all
+apply. A task you close this way leaves the list right away.
+
+The widget only shows up on notes with open tasks. To turn it off:
+
+#+begin_src emacs-lisp
+(vulpea-ui-unregister-widget 'tasks)
+#+end_src
+
 ** Backlinks widget
 
 #+begin_html
@@ -752,6 +773,7 @@ vulpea-ui registers these widgets by default:
 |---------------------+-------+--------------------------------------|
 | =stats=             |   100 | =vulpea-ui-widget-stats=             |
 | =outline=           |   200 | =vulpea-ui-widget-outline=           |
+| =tasks=             |   250 | =vulpea-ui-widget-tasks=             |
 | =backlinks=         |   300 | =vulpea-ui-widget-backlinks=         |
 | =unlinked-mentions= |   350 | =vulpea-ui-widget-unlinked-mentions= |
 | =links=             |   400 | =vulpea-ui-widget-links=             |
