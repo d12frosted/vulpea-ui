@@ -3453,10 +3453,9 @@ duration of the render."
       (should (string-match-p (regexp-quote "[Note B] [unignore]") output)))))
 
 (ert-deftest vulpea-ui-test-ignored-notes-widget-empty ()
-  "No ignored notes renders the empty-state message under a zero count."
+  "A note that ignores nothing gets no ignored notes widget at all."
   (vulpea-ui-test--render-ignored-notes nil
-    (should (string-match-p "Ignored Notes (0)" output))
-    (should (string-match-p "No ignored notes" output))))
+    (should (string-empty-p (string-trim output)))))
 
 (ert-deftest vulpea-ui-test-ignored-notes-unignore-from ()
   "Render an unignore button for each ignored note.
@@ -3503,6 +3502,59 @@ returns."
                          vulpea-ui--ignored-notes-title))
                 (vui--collect-widgets))))
           (should (= (point) (car (vui--widget-bounds ignored-notes)))))))))
+
+(ert-deftest vulpea-ui-test-ignored-notes-unignore-last-anchors-on-mentions ()
+  "Unignoring the last ignored note moves point to the unlinked mentions head.
+The ignored notes widget goes away with its last entry, so its own head
+cannot hold point across the refresh that follows.  The unlinked
+mentions head can, and it is where the note shows up again."
+  (let* ((note (vulpea-ui-test--make-mock-note "tgt" "Target"))
+         (ignored (list (vulpea-ui-test--make-mock-note "id-a" "Note A")))
+         (buf-name "*vulpea-ui-ignored-test*")
+         (vui-render-delay nil)
+         (head-pos
+          (lambda ()
+            (when-let* ((head (seq-find
+                               (lambda (w)
+                                 (equal (vui-element-get w :vui-key)
+                                        vulpea-ui--unlinked-mentions-title))
+                               (vui--collect-widgets))))
+              (car (vui--widget-bounds head))))))
+    (vulpea-ui-test--with-clean-registry
+      (vulpea-ui-register-widget 'unlinked-mentions
+                                 :component 'vulpea-ui-widget-unlinked-mentions
+                                 :order 350)
+      (vulpea-ui-register-widget 'ignored-notes
+                                 :component 'vulpea-ui-widget-ignored-notes
+                                 :order 475)
+      (with-current-buffer (get-buffer-create buf-name)
+        (vulpea-ui-sidebar-mode))
+      (cl-letf (((symbol-function 'vulpea-note-unlinked-mentions-async)
+                 (lambda (_note resolve _reject) (funcall resolve nil) nil))
+                ((symbol-function 'vulpea-mentions-ignored-notes)
+                 (lambda (_note) ignored))
+                ((symbol-function 'vulpea-mentions-unignore-from)
+                 (lambda (_note _from-note) (setq ignored nil)))
+                ((symbol-function 'message) #'ignore))
+        (unwind-protect
+            (let ((instance (vui-mount (vui-component 'vulpea-ui-sidebar-root
+                                                      :note note)
+                                       buf-name)))
+              (with-current-buffer buf-name
+                (let ((button (seq-find
+                               (lambda (w)
+                                 (equal (vui-element-get w :vui-tag)
+                                        "unignore"))
+                               (vui--collect-widgets))))
+                  (should (vui-activate (car (vui--widget-bounds button)))))
+                (should (= (point) (funcall head-pos)))
+                ;; The refresh that follows the edit drops the widget,
+                ;; and point stays on the head it was moved to.
+                (vui-update instance (list :note note))
+                (should-not (string-match-p "Ignored Notes" (buffer-string)))
+                (should (= (point) (funcall head-pos)))))
+          (when (get-buffer buf-name)
+            (kill-buffer buf-name)))))))
 
 (ert-deftest vulpea-ui-test-ignored-notes-widget-memo-follows-the-note ()
   "A soft refresh recomputes ignored notes only when the note changed.
