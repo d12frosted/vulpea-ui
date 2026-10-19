@@ -596,6 +596,10 @@ state: it is the same as =C-c C-t= (=org-todo=) on the heading, so your
 keyword sequences, fast selection keys, repeaters and logging all
 apply. A task you close this way leaves the list right away.
 
+Titles use =vulpea-ui-task-title-face= (a =link= by default). Keywords
+get the faces Org gives them, so =org-todo-keyword-faces= styles them
+here too, and priorities use =org-priority=.
+
 The widget only shows up on notes with open tasks. To turn it off:
 
 #+begin_src emacs-lisp
@@ -977,6 +981,7 @@ Useful for rendering previews in custom widgets.
 | =vulpea-ui-widget-header-face=       | Widget header text       |
 | =vulpea-ui-widget-count-face=        | Widget count numbers     |
 | =vulpea-ui-outline-heading-face=     | Outline headings         |
+| =vulpea-ui-task-title-face=          | Task titles              |
 | =vulpea-ui-stats-face=               | Statistics text          |
 | =vulpea-ui-backlink-preview-face=    | Backlink preview text    |
 | =vulpea-ui-backlink-heading-face=    | Backlink heading path    |
