@@ -2539,6 +2539,31 @@ A mouse click does not move point, so the action moves it first."
       (goto-char jumped)
       (should (looking-at-p "\\* TODO Third")))))
 
+(defun vulpea-ui-test--face-at (text)
+  "Return the face of the first occurrence of TEXT in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward text)
+    (get-text-property (match-beginning 0) 'face)))
+
+(ert-deftest vulpea-ui-test-tasks-widget-title-face ()
+  "Task titles use their own face, so they can be styled apart from links."
+  (vulpea-ui-test--with-tasks-buffer vulpea-ui-test--three-tasks
+    (vulpea-ui-test--with-clean-registry
+      (vulpea-ui-register-widget 'tasks :component 'vulpea-ui-widget-tasks)
+      (vulpea-ui-test--with-sidebar note
+        (should (eq (vulpea-ui-test--face-at "Second")
+                    'vulpea-ui-task-title-face))))))
+
+(ert-deftest vulpea-ui-test-outline-widget-heading-face ()
+  "Outline headings use the outline heading face."
+  (vulpea-ui-test--with-tasks-buffer "* Alpha\n** Beta\n"
+    (vulpea-ui-test--with-clean-registry
+      (vulpea-ui-register-widget 'outline :component 'vulpea-ui-widget-outline)
+      (vulpea-ui-test--with-sidebar note
+        (should (eq (vulpea-ui-test--face-at "Beta")
+                    'vulpea-ui-outline-heading-face))))))
+
 
 ;;; Widget registry tests
 

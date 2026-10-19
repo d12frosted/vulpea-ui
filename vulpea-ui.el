@@ -387,8 +387,15 @@ Widgets are filtered by predicate and sorted by order."
   :group 'vulpea-ui)
 
 (defface vulpea-ui-outline-heading-face
-  '((t :inherit org-level-1))
-  "Face for outline headings."
+  '((t :inherit shadow))
+  "Face for headings in the outline widget."
+  :group 'vulpea-ui)
+
+(defface vulpea-ui-task-title-face
+  '((t :inherit link))
+  "Face for task titles in the tasks widget.
+The keyword uses the face Org gives it (see `org-todo-keyword-faces'),
+and the priority uses `org-priority'."
   :group 'vulpea-ui)
 
 (defface vulpea-ui-stats-face
@@ -1262,7 +1269,7 @@ NOTE is the parent note for navigation."
     (vui-vstack
      :indent indent
      (vui-button (concat "· " title)
-       :face 'shadow
+       :face 'vulpea-ui-outline-heading-face
        :no-decoration t
        :on-click (lambda ()
                    (vulpea-ui--jump-to-position note pos))
@@ -1440,6 +1447,7 @@ ON-CHANGE; clicking the title jumps to the task."
                   :face 'org-priority))
       (vui-button (if (string-empty-p title) "(untitled)" title)
         :key (cons 'vulpea-ui-task id)
+        :face 'vulpea-ui-task-title-face
         :no-decoration t
         :on-click (lambda () (vulpea-ui--task-jump note task))
         :help-echo nil)))))
