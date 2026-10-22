@@ -5365,6 +5365,58 @@ slots."
       (should (equal (list wine beer)
                      (vulpea-ui-collection--query nil))))))
 
+(defmacro vulpea-ui-test--with-wine-and-beer (&rest body)
+  "Run BODY with the database holding a wine and a beer note.
+The notes are bound to `wine' and `beer'."
+  (declare (indent 0))
+  `(let ((wine (vulpea-ui-test--collection-note
+                :id "w" :tags '("wine") :meta '(("country" "France"))))
+         (beer (vulpea-ui-test--collection-note
+                :id "b" :tags '("beer"))))
+     (cl-letf (((symbol-function 'vulpea-db-query)
+                (lambda (&optional _pred) (list wine beer)))
+               ((symbol-function 'vulpea-db-query-by-tags-every)
+                (lambda (tags)
+                  (seq-filter (lambda (note)
+                                (seq-every-p
+                                 (lambda (tag)
+                                   (member tag (vulpea-note-tags note)))
+                                 tags))
+                              (list wine beer)))))
+       ,@body)))
+
+(ert-deftest vulpea-ui-collection-test-notes-saved-view ()
+  "A saved view name returns the notes its filter matches."
+  (vulpea-ui-test--with-wine-and-beer
+    (let ((vulpea-ui-collection-views
+           '(("wines" . (:filter (:tags-all ("wine"))
+                         :columns (title tags))))))
+      (should (equal (vulpea-ui-collection-notes "wines") (list wine))))))
+
+(ert-deftest vulpea-ui-collection-test-notes-query ()
+  "A query string is parsed like the prompt's free input."
+  (vulpea-ui-test--with-wine-and-beer
+    (should (equal (vulpea-ui-collection-notes "-beer country:France")
+                   (list wine)))
+    (should (equal (vulpea-ui-collection-notes "beer") (list beer)))))
+
+(ert-deftest vulpea-ui-collection-test-notes-everything ()
+  "Empty input and nil both return every note."
+  (vulpea-ui-test--with-wine-and-beer
+    (should (equal (vulpea-ui-collection-notes "") (list wine beer)))
+    (should (equal (vulpea-ui-collection-notes nil) (list wine beer)))))
+
+(ert-deftest vulpea-ui-collection-test-notes-plist ()
+  "A filter plist is used as is, a view spec through its :filter."
+  (vulpea-ui-test--with-wine-and-beer
+    (should (equal (vulpea-ui-collection-notes '(:tags-none ("wine")))
+                   (list beer)))
+    ;; a view spec, as stored in `vulpea-ui-collection-views', must
+    ;; not read as an empty filter matching everything
+    (should (equal (vulpea-ui-collection-notes
+                    '(:filter (:tags-all ("wine")) :sort ("Title")))
+                   (list wine)))))
+
 (ert-deftest vulpea-ui-collection-test-adaptive-columns ()
   "Adaptive defaults show only columns the data can fill."
   ;; bare file-level notes: just identity and connectedness
