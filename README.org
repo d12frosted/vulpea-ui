@@ -474,6 +474,22 @@ a note as an org dynamic block:
 =C-c C-x x= (=org-dynamic-block-insert=) offers the block; titles
 render as =id:= links, and =:view "name"= reuses a saved view.
 
+To use a view from code, =vulpea-ui-collection-notes= returns its
+notes without opening anything. It takes the same input as the
+prompt - a saved view name or a query - or a filter plist:
+
+#+begin_src emacs-lisp
+(dolist (note (vulpea-ui-collection-notes "wines"))
+  (message "%s" (vulpea-note-title note)))
+
+(vulpea-ui-collection-notes "wine -beer country:France")
+(vulpea-ui-collection-notes '(:tags-all ("wine") :level 0))
+#+end_src
+
+The notes are the ones the view shows, but in database order: the
+view's =:sort= names a column of the table, so sort the result
+yourself (=seq-sort-by=) when order matters.
+
 * Backlink counts
 
 =M-x vulpea-ui-backlink-count-mode= annotates the notes of the current

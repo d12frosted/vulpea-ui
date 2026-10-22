@@ -6007,6 +6007,25 @@ empty for a view over the whole collection."
             :filter (vulpea-ui-collection--parse-query input)
             :sort '("Title"))))))
 
+;;;###autoload
+(defun vulpea-ui-collection-notes (view)
+  "Return the notes of collection VIEW without displaying it.
+VIEW is what `vulpea-ui-collection' accepts - the name of a saved
+view from `vulpea-ui-collection-views' or a query such as
+=wine -beer country:France= - or a plist: a filter (the value of a
+view's :filter) or a whole view spec carrying one.  Empty or nil
+means every note.
+
+The notes match exactly what the view would show, but come in
+database order: :sort names a display column, so sort the result
+yourself when order matters."
+  (vulpea-ui-collection--query
+   (cond
+    ((stringp view)
+     (plist-get (vulpea-ui-collection--resolve-view view) :filter))
+    ((plist-member view :filter) (plist-get view :filter))
+    (t view))))
+
 (defun vulpea-ui-collection--column-with-width (col width)
   "Return descriptor COL with :width WIDTH pinned into it."
   (let* ((col (if (listp col) col (list col)))
