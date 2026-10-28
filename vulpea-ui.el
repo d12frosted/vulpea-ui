@@ -5711,13 +5711,14 @@ view, in display order."
                                  vulpea-ui-collection--note-table))
                       tabulated-list-entries)))))
 
-(defun vulpea-ui-collection--link-string (note)
-  "Return an org link to NOTE."
+(defun vulpea-ui-collection--link-string (note &optional description)
+  "Return an org link to NOTE.
+DESCRIPTION defaults to the note's title."
   (if (fboundp 'vulpea-utils-link-make-string)
-      (vulpea-utils-link-make-string note)
+      (vulpea-utils-link-make-string note description)
     (format "[[id:%s][%s]]"
             (vulpea-note-id note)
-            (vulpea-note-title note))))
+            (or description (vulpea-note-title note)))))
 
 (defun vulpea-ui-collection--links-list (notes)
   "Return NOTES as an org list of links, one per line."
@@ -6145,15 +6146,47 @@ the link re-opens the live view."
 
 ;;;; Org dynamic block
 
-(defun vulpea-ui-collection--dblock-cell (note col ctx)
+(defun vulpea-ui-collection--dblock-cell (note col ctx &optional value)
   "Return NOTE's value for normalized column COL as an org table cell.
-CTX is the per-refresh data plist.  Titles become id links; pipes are
-escaped so a value cannot break the table."
-  (let ((value (if (eq (plist-get col :id) 'title)
-                   (vulpea-ui-collection--link-string note)
-                 (substring-no-properties
-                  (vulpea-ui-collection--column-raw-value note col ctx)))))
+CTX is the per-refresh data plist; VALUE, when given, is the cell's
+raw text, saving a second computation.  Titles become id links; a
+column with an explicit :width is cut to it (a title only in its
+description); pipes are escaped so a value cannot break the table."
+  (let* ((value (or value
+                    (substring-no-properties
+                     (vulpea-ui-collection--column-raw-value note col ctx))))
+         (value (if (plist-get col :explicit-width)
+                    (truncate-string-to-width
+                     value (plist-get col :width) nil nil t)
+                  value))
+         (value (if (eq (plist-get col :id) 'title)
+                    (vulpea-ui-collection--link-string note value)
+                  value)))
     (replace-regexp-in-string "|" "\\\\vert{}" value)))
+
+(defun vulpea-ui-collection--dblock-sort (entries columns sort)
+  "Sort dblock ENTRIES by SORT, the way the collection buffer does.
+ENTRIES are (NOTE [MARK CELL...]) lists of raw cells for COLUMNS.
+SORT is a view's :sort, (NAME . REVERSE), or a bare column NAME (a
+string, or a symbol when written unquoted in the block).  A NAME
+that is not among COLUMNS leaves ENTRIES as they are."
+  (let* ((sort (cond ((stringp sort) (list sort))
+                     ((and sort (symbolp sort)) (list (symbol-name sort)))
+                     (t sort)))
+         (format (vulpea-ui-collection--format columns))
+         (index (seq-position format (car sort)
+                              (lambda (col name) (equal (car col) name))))
+         (pred (and index (nth 2 (aref format index)))))
+    (if (not pred)
+        entries
+      (let ((pred (if (functionp pred)
+                      pred
+                    (lambda (a b)
+                      (string< (aref (cadr a) index)
+                               (aref (cadr b) index))))))
+        (sort entries (if (cdr sort)
+                          (lambda (a b) (funcall pred b a))
+                        pred))))))
 
 ;;;###autoload
 (defun org-dblock-write:vulpea-collection (params)
@@ -6164,7 +6197,15 @@ PARAMS supports:
   :query STRING  - a query in the syntax of
                    `vulpea-ui-collection--parse-query'
   :columns LIST  - column descriptors, defaulting to the view's or
-                   `vulpea-ui-collection-default-columns'
+                   `vulpea-ui-collection-default-columns' (adaptive
+                   columns are derived from the notes)
+  :sort SORT     - (COLUMN . REVERSE) or a bare COLUMN name,
+                   defaulting to the view's :sort (by title for a
+                   query or no view at all)
+
+Rows are sorted like the collection buffer sorts them, though never
+grouped, and a column with an explicit :width has longer cells cut
+to it.
 
 Example:
 
@@ -6176,23 +6217,44 @@ Example:
                      ((plist-get params :query)
                       (list :name (plist-get params :query)
                             :filter (vulpea-ui-collection--parse-query
-                                     (plist-get params :query))))
-                     (t (list :name "all"))))
+                                     (plist-get params :query))
+                            :sort '("Title")))
+                     (t (list :name "all" :sort '("Title")))))
+         (notes (vulpea-ui-collection--query (plist-get view :filter)))
          (columns (or (plist-get params :columns)
                       (plist-get view :columns)
-                      vulpea-ui-collection-default-columns))
+                      (if (eq vulpea-ui-collection-default-columns 'adaptive)
+                          (vulpea-ui-collection--adaptive-columns
+                           notes (plist-get view :filter))
+                        vulpea-ui-collection-default-columns)))
          (cols (mapcar #'vulpea-ui-collection--normalize-column columns))
          (ctx (vulpea-ui-collection--context columns))
-         (notes (vulpea-ui-collection--query (plist-get view :filter)))
+         (entries
+          (mapcar (lambda (note)
+                    (list note
+                          (apply #'vector ""
+                                 (mapcar (lambda (col)
+                                           (substring-no-properties
+                                            (vulpea-ui-collection--column-raw-value
+                                             note col ctx)))
+                                         cols))))
+                  notes))
+         (entries (vulpea-ui-collection--dblock-sort
+                   entries columns
+                   (or (plist-get params :sort) (plist-get view :sort))))
          (start (point)))
     (insert "| "
             (mapconcat (lambda (col) (plist-get col :name)) cols " | ")
             " |\n|-\n")
-    (dolist (note notes)
+    (dolist (entry entries)
       (insert "| "
-              (mapconcat (lambda (col)
-                           (vulpea-ui-collection--dblock-cell note col ctx))
-                         cols " | ")
+              (string-join
+               (seq-map-indexed
+                (lambda (col idx)
+                  (vulpea-ui-collection--dblock-cell
+                   (car entry) col ctx (aref (cadr entry) (1+ idx))))
+                cols)
+               " | ")
               " |\n"))
     (delete-char -1)
     (goto-char start)

@@ -6565,6 +6565,150 @@ Mirrors the sidebar split: data changes are announced on
         (should (string-match-p "\\[\\[id:n1\\]\\[One\\]\\]" content))
         (should (string-match-p "wine red" content))))))
 
+(defun vulpea-ui-test--dblock-rows (params notes)
+  "Render a vulpea-collection dblock with PARAMS over NOTES.
+Return the table's body rows as lists of trimmed cell strings."
+  (cl-letf (((symbol-function 'vulpea-ui-collection--query)
+             (lambda (_filter) notes)))
+    (with-temp-buffer
+      (org-mode)
+      (insert "#+BEGIN: vulpea-collection " params "\n#+END:\n")
+      (goto-char (point-min))
+      (org-dblock-update)
+      (let (rows)
+        (dolist (line (split-string (buffer-string) "\n"))
+          (when (string-match-p "^|[^-]" line)
+            (push (mapcar #'string-trim
+                          (split-string (string-trim line "|" "|") "|"))
+                  rows)))
+        ;; drop the header row
+        (cdr (nreverse rows))))))
+
+(ert-deftest vulpea-ui-collection-test-dblock-sorts-by-view ()
+  "The dynamic block follows the view's :sort, reversed by a t cdr."
+  (let ((notes (list (vulpea-ui-test--collection-note
+                      :id "b" :title "Beta" :meta '(("rank" "2")))
+                     (vulpea-ui-test--collection-note
+                      :id "a" :title "Alpha" :meta '(("rank" "3")))
+                     (vulpea-ui-test--collection-note
+                      :id "c" :title "Gamma" :meta '(("rank" "1"))))))
+    (let ((vulpea-ui-collection-views
+           '(("ranked" :columns ((meta "rank") title)
+              :sort ("rank")))))
+      (should (equal (mapcar #'car (vulpea-ui-test--dblock-rows
+                                    ":view \"ranked\"" notes))
+                     '("1" "2" "3"))))
+    (let ((vulpea-ui-collection-views
+           '(("ranked" :columns ((meta "rank") title)
+              :sort ("rank" . t)))))
+      (should (equal (mapcar #'car (vulpea-ui-test--dblock-rows
+                                    ":view \"ranked\"" notes))
+                     '("3" "2" "1"))))))
+
+(ert-deftest vulpea-ui-collection-test-dblock-sorts-like-buffer ()
+  "Counts sort as numbers and todo states in org order, as in the buffer."
+  (let ((vulpea-ui-collection-views
+         '(("links" :columns (links title) :sort ("Links")))))
+    (should (equal (mapcar #'car
+                           (vulpea-ui-test--dblock-rows
+                            ":view \"links\""
+                            (list (vulpea-ui-test--collection-note
+                                   :id "a" :links (make-list 10 '(:dest "x")))
+                                  (vulpea-ui-test--collection-note
+                                   :id "b" :links (make-list 9 '(:dest "x"))))))
+                   '("9" "10"))))
+  (let ((org-todo-keywords-1 '("TODO" "DONE"))
+        (vulpea-ui-collection-views
+         '(("tasks" :columns (todo title) :sort ("Todo")))))
+    (should (equal (mapcar #'car
+                           (vulpea-ui-test--dblock-rows
+                            ":view \"tasks\""
+                            (list (vulpea-ui-test--collection-note
+                                   :id "a" :todo "DONE")
+                                  (vulpea-ui-test--collection-note
+                                   :id "b" :todo "TODO"))))
+                   '("TODO" "DONE")))))
+
+(ert-deftest vulpea-ui-collection-test-dblock-sorts-titles-by-text ()
+  "Titles sort by their text, not by the id inside the link.
+Queries, and blocks without a view or query, sort by title like the
+collection buffer does."
+  (let ((notes (list (vulpea-ui-test--collection-note :id "1" :title "Zed")
+                     (vulpea-ui-test--collection-note :id "2" :title "Ann"))))
+    (should (equal (mapcar #'car (vulpea-ui-test--dblock-rows
+                                  ":query \"\" :columns (title)" notes))
+                   '("[[id:2][Ann]]" "[[id:1][Zed]]")))
+    (should (equal (mapcar #'car (vulpea-ui-test--dblock-rows
+                                  ":columns (title)" notes))
+                   '("[[id:2][Ann]]" "[[id:1][Zed]]")))))
+
+(ert-deftest vulpea-ui-collection-test-dblock-sort-param ()
+  "A :sort parameter overrides the view's; a bare name sorts ascending.
+A sort column missing from the table leaves database order."
+  (let ((notes (list (vulpea-ui-test--collection-note
+                      :id "b" :title "Beta" :tags '("y"))
+                     (vulpea-ui-test--collection-note
+                      :id "a" :title "Alpha" :tags '("z"))
+                     (vulpea-ui-test--collection-note
+                      :id "c" :title "Gamma" :tags '("x"))))
+        (vulpea-ui-collection-views
+         '(("v" :columns (title tags) :sort ("Title")))))
+    (should (equal (mapcar #'cadr (vulpea-ui-test--dblock-rows
+                                   ":view \"v\" :sort \"Tags\"" notes))
+                   '("x" "y" "z")))
+    (should (equal (mapcar #'cadr (vulpea-ui-test--dblock-rows
+                                   ":view \"v\" :sort (\"Title\" . t)" notes))
+                   '("x" "y" "z")))
+    ;; an unquoted name reads as a symbol
+    (should (equal (mapcar #'cadr (vulpea-ui-test--dblock-rows
+                                   ":view \"v\" :sort Tags" notes))
+                   '("x" "y" "z")))
+    ;; neither title nor tag order
+    (should (equal (mapcar #'cadr (vulpea-ui-test--dblock-rows
+                                   ":view \"v\" :sort \"Nope\"" notes))
+                   '("y" "z" "x")))))
+
+(ert-deftest vulpea-ui-collection-test-dblock-adaptive-columns ()
+  "Without :columns anywhere, adaptive defaults derive them from the notes."
+  (let ((vulpea-ui-collection-default-columns 'adaptive)
+        (vulpea-ui-collection-views '(("v" :filter (:tags-all ("wine"))))))
+    (cl-letf (((symbol-function 'vulpea-ui-collection--context)
+               (lambda (_columns) nil)))
+      (should (equal (vulpea-ui-test--dblock-rows
+                      ":view \"v\""
+                      (list (vulpea-ui-test--collection-note
+                             :id "n1" :title "One" :tags '("wine"))))
+                     '(("[[id:n1][One]]" "wine" "")))))))
+
+(ert-deftest vulpea-ui-collection-test-dblock-truncates-explicit-width ()
+  "Cells are cut to an explicit :width; default widths never cut."
+  (let* ((long (make-string 30 ?x))
+         (notes (list (vulpea-ui-test--collection-note
+                       :id "n1" :title long :tags (list long))))
+         (row (car (vulpea-ui-test--dblock-rows
+                    ":query \"\" :columns ((title :width 10) (tags :width 8) file)"
+                    notes))))
+    ;; the link keeps its target, only the description is cut
+    (should (string-match "\\`\\[\\[id:n1\\]\\[\\(.*\\)\\]\\]\\'" (nth 0 row)))
+    (should (= (string-width (match-string 1 (nth 0 row))) 10))
+    (should (string-suffix-p (truncate-string-ellipsis)
+                             (match-string 1 (nth 0 row))))
+    (should (= (string-width (nth 1 row)) 8))
+    (should (equal (nth 2 row) "n1.org")))
+  ;; pipes are escaped after the cut, so an escape is never split
+  (let ((truncate-string-ellipsis "~"))
+    (should (equal (car (vulpea-ui-test--dblock-rows
+                         ":query \"\" :columns ((tags :width 10))"
+                         (list (vulpea-ui-test--collection-note
+                                :tags '("aaaaaaa|bbbb")))))
+                   '("aaaaaaa\\vert{}b~"))))
+  (let* ((long (make-string 60 ?x))
+         (row (car (vulpea-ui-test--dblock-rows
+                    ":query \"\" :columns (tags)"
+                    (list (vulpea-ui-test--collection-note
+                           :tags (list long)))))))
+    (should (equal (car row) long))))
+
 (ert-deftest vulpea-ui-collection-test-dblock-escapes-pipes ()
   "Cell values containing | do not break the table."
   (should (equal (vulpea-ui-collection--dblock-cell
