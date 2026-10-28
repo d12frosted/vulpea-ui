@@ -76,11 +76,15 @@ All notable changes to this project will be documented in this file.
 
 ** Changed
 
+- The =vulpea-collection= dynamic block follows the view's order and column widths ([[https://github.com/d12frosted/vulpea-ui/issues/91][#91]]). Rows are sorted by the view's =:sort= with the same comparison the collection buffer uses (counts as numbers, todo states in org order, the rest as text, titles by their text and not the link), and queries sort by title like they do in the buffer. A =:sort= parameter on the block overrides the view's, as =("Context" . t)= or a bare column name; a sort column missing from the table leaves database order. Grouped views are sorted but not grouped, as before. A column with an explicit =:width= has longer cells cut to it with an ellipsis, a title only in its link description; columns without one keep their full text. Thanks =@alexjp= for the report.
+
 - Groups in the unlinked mentions widget are sorted by note title. They used to come in the order ripgrep reported the files, which differs from scan to scan, so the list reshuffled on every refresh.
 
 - Auto-refresh now reacts to database content changes instead of saves. The sidebar used to refresh on =after-save-hook=, which fires before =vulpea-db-update-file= runs, so the refresh read the pre-update note: the ignore-mentions button ([[https://github.com/d12frosted/vulpea-ui/pull/62][#62]]) saved and synced the note, yet the ignored group only disappeared after a second manual refresh. The sidebar and the collection view now subscribe to vulpea's =vulpea-db-updated-functions=, the single data-changed signal covering synchronous updates, background extraction results and removals; it runs after the write transaction commits, so the refresh always reads fresh content, and a deleted note drops out of backlinks and mentions without a manual =g=. Bulk syncs still coalesce into one refresh when the extraction worker drains; =vulpea-db-worker-done-functions= is only used for that lifecycle purpose now (flushing a deferred refresh) rather than driving refreshes itself. On a vulpea without the new hook, nothing changes: the save-triggered refresh and worker-done refreshes keep working as before.
 
 ** Fixed
+
+- The =vulpea-collection= dynamic block works without =:columns= under the default adaptive =vulpea-ui-collection-default-columns=. It passed the symbol =adaptive= on as a column list and failed, so =vulpea-ui-collection-insert-dblock= errored in the default setup; the columns are now derived from the block's notes the way the collection buffer derives them.
 
 - =vulpea-ui-outline-heading-face= styles outline headings. The outline widget used =shadow= directly, so customizing the face had no effect. Its default now inherits =shadow= (it used to inherit =org-level-1=), so headings look the same as before.
 
