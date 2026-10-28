@@ -1192,190 +1192,6 @@ in :matched - they must not render twice."
                    (list (list :note a :line 2 :context "y"))))))
 
 
-;;; Mention linking tests
-
-(defmacro vulpea-ui-test--with-org-text (text &rest body)
-  "Run BODY in a temporary `org-mode' buffer holding TEXT."
-  (declare (indent 1))
-  `(with-temp-buffer
-     (delay-mode-hooks (org-mode))
-     (insert ,text)
-     ,@body))
-
-(defun vulpea-ui-test--link-line (text line note &optional context)
-  "Link mentions of NOTE on LINE of an Org buffer holding TEXT.
-CONTEXT is passed on to `vulpea-ui--link-mention-line'.  Return the
-number of occurrences linked and the resulting text as (COUNT TEXT)."
-  (vulpea-ui-test--with-org-text text
-    (let ((count (vulpea-ui--link-mention-line
-                  (current-buffer) line note context)))
-      (list count (buffer-string)))))
-
-(ert-deftest vulpea-ui-test-note-link-terms ()
-  "Link terms are the title plus aliases, trimmed, longest first.
-Empty ones and those the scan finds too short are dropped."
-  (let ((vulpea-mentions-min-term-length 3)
-        (note (make-vulpea-note :id "n" :title "Emacs"
-                                :aliases '("el" "" " Emacs Lisp " "GNU"))))
-    (should (equal (vulpea-ui--note-link-terms note)
-                   '("Emacs Lisp" "Emacs" "GNU")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-single ()
-  "A bare occurrence becomes an id: link; returns 1."
-  (let ((note (make-vulpea-note :id "n1" :title "Note One")))
-    (should (equal (vulpea-ui-test--link-line "We had Note One today.\n" 1 note)
-                   '(1 "We had [[id:n1][Note One]] today.\n")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-skips-linked ()
-  "An occurrence already inside a link is left alone; returns 0."
-  (let ((note (make-vulpea-note :id "n1" :title "Note One")))
-    (should (equal (vulpea-ui-test--link-line
-                    "See [[id:n1][Note One]] here.\n" 1 note)
-                   '(0 "See [[id:n1][Note One]] here.\n")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-multiple ()
-  "Two bare occurrences on the line are both linked; returns 2."
-  (let ((note (make-vulpea-note :id "n1" :title "Cab")))
-    (should (equal (vulpea-ui-test--link-line "Cab and more Cab.\n" 1 note)
-                   '(2 "[[id:n1][Cab]] and more [[id:n1][Cab]].\n")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-mixed ()
-  "A bare occurrence is linked while an already-linked one is preserved."
-  (let ((note (make-vulpea-note :id "n1" :title "Cab")))
-    (should (equal (vulpea-ui-test--link-line
-                    "[[id:n1][Cab]] and bare Cab.\n" 1 note)
-                   '(1 "[[id:n1][Cab]] and bare [[id:n1][Cab]].\n")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-alias-and-case ()
-  "Matching is case-insensitive and works on aliases; casing is preserved."
-  (let ((note (make-vulpea-note :id "n1" :title "Cabernet"
-                                :aliases '("Cab Sauv"))))
-    (should (equal (vulpea-ui-test--link-line "love cab sauv tonight\n" 1 note)
-                   '(1 "love [[id:n1][cab sauv]] tonight\n")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-word-boundary ()
-  "A term does not match inside a larger word."
-  (let ((note (make-vulpea-note :id "n1" :title "NOR")))
-    (should (equal (vulpea-ui-test--link-line "Head NORTH now.\n" 1 note)
-                   '(0 "Head NORTH now.\n")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-stale ()
-  "When the term is gone (stale mention), nothing is linked; returns 0."
-  (let ((note (make-vulpea-note :id "n1" :title "Gone")))
-    (should (equal (vulpea-ui-test--link-line "nothing here\n" 1 note)
-                   '(0 "nothing here\n")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-longest-term-wins ()
-  "An alias that starts with the title is linked whole."
-  (let ((note (make-vulpea-note :id "n1" :title "Emacs"
-                                :aliases '("Emacs Lisp"))))
-    (should (equal (vulpea-ui-test--link-line
-                    "I love Emacs Lisp and Emacs.\n" 1 note)
-                   '(2 "I love [[id:n1][Emacs Lisp]] and [[id:n1][Emacs]].\n")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-skips-short-alias ()
-  "An alias too short for the scan is not linked on a line the title hit."
-  (let ((vulpea-mentions-min-term-length 3)
-        (note (make-vulpea-note :id "n1" :title "Information Technology"
-                                :aliases '("IT"))))
-    (should (equal (vulpea-ui-test--link-line
-                    "Information Technology: it is everywhere, IT too.\n"
-                    1 note)
-                   (list 1 (concat "[[id:n1][Information Technology]]:"
-                                   " it is everywhere, IT too.\n"))))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-brackets-in-title ()
-  "A title with square brackets is linked once.
-The inserted link holds the title again; it must not be taken for a new
-mention."
-  (let ((note (make-vulpea-note :id "n1" :title "Array [of] things")))
-    (should (equal (vulpea-ui-test--link-line
-                    "An Array [of] things is here.\n" 1 note)
-                   '(1 "An [[id:n1][Array [of] things]] is here.\n")))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-skips-other-links ()
-  "Text inside another link is left alone, whatever the link looks like."
-  (let ((note (make-vulpea-note :id "n1" :title "Emacs")))
-    ;; brackets in the description
-    (should (equal (vulpea-ui-test--link-line
-                    "[[id:o][notes [1] on Emacs]] and Emacs bare.\n" 1 note)
-                   (list 1 (concat "[[id:o][notes [1] on Emacs]]"
-                                   " and [[id:n1][Emacs]] bare.\n"))))
-    ;; a link wrapped across lines
-    (should (equal (vulpea-ui-test--link-line
-                    "See [[id:o][a long description that\nwraps Emacs text]] and Emacs bare.\n"
-                    2 note)
-                   (list 1 (concat "See [[id:o][a long description that\n"
-                                   "wraps Emacs text]] and [[id:n1][Emacs]]"
-                                   " bare.\n"))))
-    ;; a plain URL
-    (should (equal (vulpea-ui-test--link-line
-                    "See https://example.com/Emacs/page for Emacs.\n" 1 note)
-                   (list 1 (concat "See https://example.com/Emacs/page"
-                                   " for [[id:n1][Emacs]].\n"))))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-skips-org-syntax ()
-  "A title that only shows up as Org syntax is not linked.
-A link there would break the tag, the keyword, the timestamp or the code
-it lands in."
-  (let ((emacs (make-vulpea-note :id "n1" :title "Emacs"))
-        (done (make-vulpea-note :id "n1" :title "Done"))
-        (date (make-vulpea-note :id "n1" :title "2024-01-15")))
-    (pcase-dolist (`(,note ,line ,text)
-                   `((,emacs 1 "* Setup notes :emacs:work:\n")
-                     (,done 1 "* DONE Ship release\n")
-                     (,date 2 "* Task\nSCHEDULED: <2024-01-15 Mon>\n")
-                     (,date 1 "Met on <2024-01-15 Mon> again.\n")
-                     (,date 1 "Closed [2024-01-15 Mon 18:00] already.\n")
-                     (,emacs 2 "#+begin_src elisp\n(message \"Emacs\")\n#+end_src\n")
-                     (,emacs 2 "#+begin_example\nEmacs\n#+end_example\n")
-                     (,emacs 1 "# a comment about Emacs\n")
-                     (,emacs 1 "#+caption: Emacs logo\n| a |\n")
-                     (,emacs 1 "Use ~Emacs~ or =Emacs= here.\n")
-                     (,emacs 1 "A <<Emacs>> target and {{{Emacs}}} macro.\n")))
-      (should (equal (vulpea-ui-test--link-line text line note)
-                     (list 0 text))))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-links-prose ()
-  "A title in running text is linked wherever Org keeps prose."
-  (let ((note (make-vulpea-note :id "n1" :title "Emacs")))
-    (pcase-dolist (`(,line ,text ,expected)
-                   '((1 "* TODO [#A] Emacs setup :emacs:\n"
-                        "* TODO [#A] [[id:n1][Emacs]] setup :emacs:\n")
-                     (1 "| Emacs | editor |\n"
-                        "| [[id:n1][Emacs]] | editor |\n")
-                     (1 "- Emacs :: an editor\n"
-                        "- [[id:n1][Emacs]] :: an editor\n")
-                     (1 "- [ ] try Emacs\n"
-                        "- [ ] try [[id:n1][Emacs]]\n")
-                     (1 "Some *bold Emacs* text.\n"
-                        "Some *bold [[id:n1][Emacs]]* text.\n")
-                     (2 "#+begin_quote\nquoted Emacs\n#+end_quote\n"
-                        "#+begin_quote\nquoted [[id:n1][Emacs]]\n#+end_quote\n")))
-      (should (equal (vulpea-ui-test--link-line text line note)
-                     (list 1 expected))))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-missing-line ()
-  "A line number outside the buffer links nothing.
-This holds for a last line without a newline too, where moving past the
-end stops on that line."
-  (let ((note (make-vulpea-note :id "n1" :title "Emacs")))
-    (dolist (line '(0 -1 3 500))
-      (should (equal (vulpea-ui-test--link-line "one Emacs\ntwo Emacs" line note)
-                     '(0 "one Emacs\ntwo Emacs"))))))
-
-(ert-deftest vulpea-ui-test-link-mention-line-context ()
-  "With a context, the line is linked only if it still reads the same.
-Leading and trailing whitespace does not count, as the scan trims it."
-  (let ((note (make-vulpea-note :id "n1" :title "Emacs")))
-    (should (equal (vulpea-ui-test--link-line
-                    "  - try Emacs  \n" 1 note "- try Emacs")
-                   '(1 "  - try [[id:n1][Emacs]]  \n")))
-    (should (equal (vulpea-ui-test--link-line
-                    "another Emacs line\n" 1 note "- try Emacs")
-                   '(0 "another Emacs line\n")))))
-
-
 ;;; Mention link action tests
 
 (vui-defcomponent vulpea-ui-test--outgoing-mention-wrap (mention note path)
@@ -1420,6 +1236,26 @@ A refresh would re-scan and reset point to the top of the sidebar."
                     (should (string-match-p
                              (regexp-quote "[[id:tid][Target]]")
                              (buffer-string)))))
+              (kill-buffer note-buf))))
+      (delete-directory dir t))))
+
+(ert-deftest vulpea-ui-test-link-action-cjk ()
+  "A title inside text without spaces is linked (issue #88).
+The scan finds 金阁寺 inside 又名金阁寺, so the link button has to too."
+  (let* ((dir (make-temp-file "vui-cjk-" t))
+         (f (expand-file-name "note.org" dir))
+         (note (make-vulpea-note :id "tid" :title "金阁寺")))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert "又名金阁寺。\n"))
+          (let ((note-buf (find-file-noselect f)))
+            (unwind-protect
+                (progn
+                  (vulpea-ui--link-mention-action f 1 note)
+                  (should (equal (with-current-buffer note-buf
+                                   (buffer-string))
+                                 "又名[[id:tid][金阁寺]]。\n")))
+              (with-current-buffer note-buf (set-buffer-modified-p nil))
               (kill-buffer note-buf))))
       (delete-directory dir t))))
 
@@ -3030,6 +2866,18 @@ The buffer opened for the edit stays around, so the edit can be undone."
                      "Mention [[id:tid][Target]] here.\n"))
       (should (equal synced (list file)))
       (should (find-buffer-visiting file)))))
+
+(ert-deftest vulpea-ui-test-link-mentions-in-file-cjk ()
+  "A title inside text without spaces is linked, as the scan finds it."
+  (let ((note (make-vulpea-note :id "tid" :title "金阁寺")))
+    (vulpea-ui-test--with-mention-file "又名金阁寺。\n"
+      (should (equal (vulpea-ui--link-mentions-in-file
+                      file
+                      (list (vulpea-ui-test--mention 1 "又名金阁寺。"))
+                      note)
+                     '(1)))
+      (should (equal (vulpea-ui-test--file-string file)
+                     "又名[[id:tid][金阁寺]]。\n")))))
 
 (ert-deftest vulpea-ui-test-link-mentions-in-file-several-lines ()
   "Several lines are linked with a single save and sync."
