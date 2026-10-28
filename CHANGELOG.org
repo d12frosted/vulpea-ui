@@ -82,6 +82,8 @@ All notable changes to this project will be documented in this file.
 
 ** Fixed
 
+- Sorting a collection view by its Todo column works. The sort ranked states by =org-todo-keywords-1=, which only org buffers set, so in the collection buffer every state was unknown and rows stayed in database order. States now follow =org-todo-keywords=: todo-type keywords first, then done ones, each in the order they are defined, then rows without a state. Setting a todo state with =T= had the same problem and offered no keywords to complete; it completes over the same list now. Inside an org buffer, where the dynamic block runs, that buffer's own keywords are used, including a =#+TODO:= line.
+
 - =vulpea-ui-outline-heading-face= styles outline headings. The outline widget used =shadow= directly, so customizing the face had no effect. Its default now inherits =shadow= (it used to inherit =org-level-1=), so headings look the same as before.
 
 - Jumping from the outline (and tasks) widget to a heading outside the buffer's restriction widens to reach it instead of stopping at the edge, and a heading inside folded parents is revealed along with its outline path.

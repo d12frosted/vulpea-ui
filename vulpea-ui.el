@@ -4495,18 +4495,36 @@ CTX is the per-refresh data plist."
     (< (string-to-number (aref (cadr a) index))
        (string-to-number (aref (cadr b) index)))))
 
+(defun vulpea-ui-collection--todo-keywords ()
+  "Return the todo keywords, todo-type ones first, then done ones.
+Each group keeps the order of the keyword definitions.  Org keeps
+them in buffer-local variables that only an org buffer sets, so
+outside one they are computed from `org-todo-keywords' in a scratch
+org buffer.  Inside one, its own keywords are used, including any
+#+TODO line."
+  (if (derived-mode-p 'org-mode)
+      (append org-not-done-keywords org-done-keywords)
+    (with-temp-buffer
+      (delay-mode-hooks (org-mode))
+      (append org-not-done-keywords org-done-keywords))))
+
 (defun vulpea-ui-collection--todo-sorter (index)
   "Return a sort predicate comparing todo column INDEX in org order.
-States rank by their position in `org-todo-keywords-1'; unknown
-states come after the known ones, empty cells last."
-  (lambda (a b)
-    (cl-flet ((rank (entry)
-                (let ((state (aref (cadr entry) index)))
-                  (cond ((string-empty-p state) most-positive-fixnum)
-                        ((seq-position org-todo-keywords-1 state
-                                       #'string=))
-                        (t (1- most-positive-fixnum))))))
-      (< (rank a) (rank b)))))
+Todo-type states come first and done states after them, each in
+keyword order; unknown states come after the known ones, empty cells
+last.  The keywords are looked up on first use, in the buffer being
+sorted, see `vulpea-ui-collection--todo-keywords'."
+  (let (order loaded)
+    (lambda (a b)
+      (unless loaded
+        (setq order (vulpea-ui-collection--todo-keywords)
+              loaded t))
+      (cl-flet ((rank (entry)
+                  (let ((state (aref (cadr entry) index)))
+                    (cond ((string-empty-p state) most-positive-fixnum)
+                          ((seq-position order state #'string=))
+                          (t (1- most-positive-fixnum))))))
+        (< (rank a) (rank b))))))
 
 (defun vulpea-ui-collection--column-width (col index entries)
   "Return the width for normalized COL, the column at ENTRIES' INDEX.
@@ -5728,8 +5746,9 @@ carry one; returns non-nil when the note was updated."
 (defun vulpea-ui-collection-set-todo ()
   "Set a todo state on the selection's heading-level notes.
 File-level notes cannot carry a state and are skipped.  The state is
-read with completion over `org-todo-keywords-1'; empty input clears
-it.  Undoable with \\[vulpea-ui-collection-undo]."
+read with completion over the todo keywords, see
+`vulpea-ui-collection--todo-keywords'; empty input clears it.
+Undoable with \\[vulpea-ui-collection-undo]."
   (interactive)
   (let* ((notes (vulpea-ui-collection--notes-for-action))
          (headings (seq-filter (lambda (note)
@@ -5737,7 +5756,7 @@ it.  Undoable with \\[vulpea-ui-collection-undo]."
                                notes)))
     (unless headings (user-error "No heading-level notes selected"))
     (let ((state (completing-read "Todo state (empty to clear): "
-                                  org-todo-keywords-1)))
+                                  (vulpea-ui-collection--todo-keywords))))
       (when (vulpea-ui-collection--confirm
              (if (string-empty-p state)
                  "Clear the todo state of"
