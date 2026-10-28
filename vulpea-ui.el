@@ -2556,112 +2556,6 @@ note's file, where each context line lives and where clicking it jumps to."
 
 ;;; Linking unlinked mentions
 
-(defconst vulpea-ui--linkable-element-types
-  '(paragraph headline inlinetask item table-cell verse-block
-    bold italic underline strike-through)
-  "Org element and object types whose text may hold a mention to link.
-Everything else is Org syntax, where a link in place of the text would
-break what is there: timestamps, planning and clock lines, code and
-verbatim, blocks, comments, targets, macros, footnote references, and
-links themselves.")
-
-(defun vulpea-ui--linkable-p (pos)
-  "Return non-nil when the text at POS is prose that may become a link.
-The Org parser decides, so the buffer has to be in `org-mode'.  Text
-inside a link never counts, also when the link wraps across lines.  In a
-heading only the title counts, not the todo keyword, the priority or the
-tags.  Keyword and property lines never count, as in the scan."
-  (and (derived-mode-p 'org-mode)
-       (save-excursion
-         (goto-char pos)
-         (let* ((context (org-element-context))
-                (type (org-element-type context)))
-           (and (memq type vulpea-ui--linkable-element-types)
-                (not (org-element-lineage context '(link) t))
-                (progn
-                  (forward-line 0)
-                  (cond
-                   ((looking-at-p "[ \t]*\\(?:#\\+\\|:[A-Za-z0-9_@%-]+:\\)")
-                    nil)
-                   ((memq type '(headline inlinetask))
-                    (let ((case-fold-search nil))
-                      (and (looking-at org-complex-heading-regexp)
-                           (match-beginning 4)
-                           (<= (match-beginning 4) pos)
-                           (< pos (match-end 4)))))
-                   (t t))))))))
-
-(defun vulpea-ui--note-link-terms (note)
-  "Return the texts to look for when linking a mention of NOTE.
-These are its title and aliases, trimmed, without those narrower than
-`vulpea-mentions-min-term-length', which the scan does not look for
-either.  The longest come first, so that in a regexp alternation an
-alias like \"Emacs Lisp\" wins over the title \"Emacs\"."
-  (sort (seq-filter
-         (lambda (s)
-           (and (not (string-empty-p s))
-                (>= (string-width s) vulpea-mentions-min-term-length)))
-         (mapcar #'string-trim
-                 (seq-filter #'stringp
-                             (cons (vulpea-note-title note)
-                                   (vulpea-note-aliases note)))))
-        (lambda (a b) (> (length a) (length b)))))
-
-(defun vulpea-ui--goto-line (line)
-  "Move to the beginning of LINE and return non-nil if there is such a line."
-  (goto-char (point-min))
-  (and (> line 0)
-       (zerop (forward-line (1- line)))
-       ;; Running into the end of a last line that has no newline counts
-       ;; as a line moved, and leaves point at the end of that line.
-       (bolp)))
-
-(defun vulpea-ui--link-mention-line (buffer line note &optional context)
-  "Convert plain-text mentions of NOTE on LINE of BUFFER into id: links.
-
-Searches LINE for NOTE's title and aliases (word-bounded and
-case-insensitive), skips any occurrence that is not prose (see
-`vulpea-ui--linkable-p'), and replaces each remaining one with an =id:=
-link to NOTE, preserving the matched text as the link description.
-
-CONTEXT, when non-nil, is the trimmed text the scan saw on LINE.  Nothing
-is linked unless the line still reads the same, so a line number that no
-longer points at the mention cannot land the link somewhere else.
-
-Re-validates against the live buffer instead of trusting the cached
-position, so a stale or already-linked mention is simply a no-op.  Returns
-the number of occurrences linked."
-  (with-current-buffer buffer
-    (let ((terms (vulpea-ui--note-link-terms note)))
-      (save-excursion
-        (if (not (and terms
-                      (vulpea-ui--goto-line line)
-                      (or (null context)
-                          (string= context
-                                   (string-trim
-                                    (buffer-substring-no-properties
-                                     (point) (line-end-position)))))))
-            0
-          (let ((re (concat "\\b\\(?:"
-                            (mapconcat #'regexp-quote terms "\\|")
-                            "\\)\\b"))
-                (case-fold-search t)
-                (eol (line-end-position))
-                (hits nil))
-            (while (re-search-forward re eol t)
-              (let ((beg (match-beginning 0))
-                    (end (match-end 0)))
-                (when (vulpea-ui--linkable-p beg)
-                  (push (cons beg end) hits))))
-            ;; HITS runs from the end of the line to its start, so a
-            ;; replacement never moves the hits still to be replaced.
-            (pcase-dolist (`(,beg . ,end) hits)
-              (let ((text (buffer-substring-no-properties beg end)))
-                (goto-char beg)
-                (delete-region beg end)
-                (insert (vulpea-utils-link-make-string note text))))
-            (length hits)))))))
-
 (defun vulpea-ui--link-mention-action (path line note)
   "Link occurrences of NOTE on LINE of the file at PATH.
 Edits the note's buffer in place and reports the outcome.  Deliberately
@@ -2673,7 +2567,7 @@ Intended as a mention button action."
   (let ((buffer (and path (find-buffer-visiting path))))
     (if (not (buffer-live-p buffer))
         (message "vulpea-ui: note buffer is not open")
-      (let ((n (vulpea-ui--link-mention-line buffer line note)))
+      (let ((n (vulpea-mentions-link buffer line note)))
         (if (zerop n)
             (message "vulpea-ui: nothing to link here; press g to refresh")
           (message
@@ -2691,7 +2585,7 @@ all\" button action for an outgoing-mention group."
         (message "vulpea-ui: note buffer is not open")
       (let ((total 0))
         (dolist (m mentions)
-          (cl-incf total (vulpea-ui--link-mention-line
+          (cl-incf total (vulpea-mentions-link
                           buffer (plist-get m :line) note)))
         (if (zerop total)
             (message "vulpea-ui: nothing to link for %s; press g to refresh"
@@ -2715,7 +2609,7 @@ would also write changes that have nothing to do with the link.
 The lines are line numbers in the file, so they are resolved with the
 buffer widened, and a clean buffer that is behind the file is reverted
 first.  Each line is linked only if it still reads as its :context (see
-`vulpea-ui--link-mention-line'), and a file that is gone links nothing.
+`vulpea-mentions-link'), and a file that is gone links nothing.
 
 A buffer opened here stays open after an edit, which keeps the edit
 undoable, and is killed again when there was nothing to link.
@@ -2734,7 +2628,7 @@ UNSAVED when the buffer had unsaved changes and so was not saved."
         (save-restriction
           (widen)
           (dolist (mention mentions)
-            (cl-incf count (vulpea-ui--link-mention-line
+            (cl-incf count (vulpea-mentions-link
                             buffer (plist-get mention :line) note
                             (plist-get mention :context)))))
         (when (and (> count 0) (not unsaved))
