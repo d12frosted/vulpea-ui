@@ -474,6 +474,20 @@ a note as an org dynamic block:
 =C-c C-x x= (=org-dynamic-block-insert=) offers the block; titles
 render as =id:= links, and =:view "name"= reuses a saved view.
 
+Rows are sorted the way the collection buffer sorts them: by the
+view's =:sort=, or by title for a query (grouping is not applied).
+=:sort= on the block overrides it, either as =("Context" . t)=
+(reversed) or a bare column name. Without =:columns= the block derives
+its columns like the buffer does. A column
+with an explicit =:width= has longer cells cut to that width with an
+ellipsis (a title only in its link description, so the link keeps
+working); columns without one show their full text:
+
+#+begin_src org
+,#+BEGIN: vulpea-collection :view "diaries" :sort ("Context" . t) :columns ((context :width 36) title)
+,#+END:
+#+end_src
+
 To use a view from code, =vulpea-ui-collection-notes= returns its
 notes without opening anything. It takes the same input as the
 prompt - a saved view name or a query - or a filter plist:

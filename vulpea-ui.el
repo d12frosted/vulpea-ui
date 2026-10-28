@@ -2556,112 +2556,6 @@ note's file, where each context line lives and where clicking it jumps to."
 
 ;;; Linking unlinked mentions
 
-(defconst vulpea-ui--linkable-element-types
-  '(paragraph headline inlinetask item table-cell verse-block
-    bold italic underline strike-through)
-  "Org element and object types whose text may hold a mention to link.
-Everything else is Org syntax, where a link in place of the text would
-break what is there: timestamps, planning and clock lines, code and
-verbatim, blocks, comments, targets, macros, footnote references, and
-links themselves.")
-
-(defun vulpea-ui--linkable-p (pos)
-  "Return non-nil when the text at POS is prose that may become a link.
-The Org parser decides, so the buffer has to be in `org-mode'.  Text
-inside a link never counts, also when the link wraps across lines.  In a
-heading only the title counts, not the todo keyword, the priority or the
-tags.  Keyword and property lines never count, as in the scan."
-  (and (derived-mode-p 'org-mode)
-       (save-excursion
-         (goto-char pos)
-         (let* ((context (org-element-context))
-                (type (org-element-type context)))
-           (and (memq type vulpea-ui--linkable-element-types)
-                (not (org-element-lineage context '(link) t))
-                (progn
-                  (forward-line 0)
-                  (cond
-                   ((looking-at-p "[ \t]*\\(?:#\\+\\|:[A-Za-z0-9_@%-]+:\\)")
-                    nil)
-                   ((memq type '(headline inlinetask))
-                    (let ((case-fold-search nil))
-                      (and (looking-at org-complex-heading-regexp)
-                           (match-beginning 4)
-                           (<= (match-beginning 4) pos)
-                           (< pos (match-end 4)))))
-                   (t t))))))))
-
-(defun vulpea-ui--note-link-terms (note)
-  "Return the texts to look for when linking a mention of NOTE.
-These are its title and aliases, trimmed, without those narrower than
-`vulpea-mentions-min-term-length', which the scan does not look for
-either.  The longest come first, so that in a regexp alternation an
-alias like \"Emacs Lisp\" wins over the title \"Emacs\"."
-  (sort (seq-filter
-         (lambda (s)
-           (and (not (string-empty-p s))
-                (>= (string-width s) vulpea-mentions-min-term-length)))
-         (mapcar #'string-trim
-                 (seq-filter #'stringp
-                             (cons (vulpea-note-title note)
-                                   (vulpea-note-aliases note)))))
-        (lambda (a b) (> (length a) (length b)))))
-
-(defun vulpea-ui--goto-line (line)
-  "Move to the beginning of LINE and return non-nil if there is such a line."
-  (goto-char (point-min))
-  (and (> line 0)
-       (zerop (forward-line (1- line)))
-       ;; Running into the end of a last line that has no newline counts
-       ;; as a line moved, and leaves point at the end of that line.
-       (bolp)))
-
-(defun vulpea-ui--link-mention-line (buffer line note &optional context)
-  "Convert plain-text mentions of NOTE on LINE of BUFFER into id: links.
-
-Searches LINE for NOTE's title and aliases (word-bounded and
-case-insensitive), skips any occurrence that is not prose (see
-`vulpea-ui--linkable-p'), and replaces each remaining one with an =id:=
-link to NOTE, preserving the matched text as the link description.
-
-CONTEXT, when non-nil, is the trimmed text the scan saw on LINE.  Nothing
-is linked unless the line still reads the same, so a line number that no
-longer points at the mention cannot land the link somewhere else.
-
-Re-validates against the live buffer instead of trusting the cached
-position, so a stale or already-linked mention is simply a no-op.  Returns
-the number of occurrences linked."
-  (with-current-buffer buffer
-    (let ((terms (vulpea-ui--note-link-terms note)))
-      (save-excursion
-        (if (not (and terms
-                      (vulpea-ui--goto-line line)
-                      (or (null context)
-                          (string= context
-                                   (string-trim
-                                    (buffer-substring-no-properties
-                                     (point) (line-end-position)))))))
-            0
-          (let ((re (concat "\\b\\(?:"
-                            (mapconcat #'regexp-quote terms "\\|")
-                            "\\)\\b"))
-                (case-fold-search t)
-                (eol (line-end-position))
-                (hits nil))
-            (while (re-search-forward re eol t)
-              (let ((beg (match-beginning 0))
-                    (end (match-end 0)))
-                (when (vulpea-ui--linkable-p beg)
-                  (push (cons beg end) hits))))
-            ;; HITS runs from the end of the line to its start, so a
-            ;; replacement never moves the hits still to be replaced.
-            (pcase-dolist (`(,beg . ,end) hits)
-              (let ((text (buffer-substring-no-properties beg end)))
-                (goto-char beg)
-                (delete-region beg end)
-                (insert (vulpea-utils-link-make-string note text))))
-            (length hits)))))))
-
 (defun vulpea-ui--link-mention-action (path line note)
   "Link occurrences of NOTE on LINE of the file at PATH.
 Edits the note's buffer in place and reports the outcome.  Deliberately
@@ -2673,7 +2567,7 @@ Intended as a mention button action."
   (let ((buffer (and path (find-buffer-visiting path))))
     (if (not (buffer-live-p buffer))
         (message "vulpea-ui: note buffer is not open")
-      (let ((n (vulpea-ui--link-mention-line buffer line note)))
+      (let ((n (vulpea-mentions-link buffer line note)))
         (if (zerop n)
             (message "vulpea-ui: nothing to link here; press g to refresh")
           (message
@@ -2691,7 +2585,7 @@ all\" button action for an outgoing-mention group."
         (message "vulpea-ui: note buffer is not open")
       (let ((total 0))
         (dolist (m mentions)
-          (cl-incf total (vulpea-ui--link-mention-line
+          (cl-incf total (vulpea-mentions-link
                           buffer (plist-get m :line) note)))
         (if (zerop total)
             (message "vulpea-ui: nothing to link for %s; press g to refresh"
@@ -2715,7 +2609,7 @@ would also write changes that have nothing to do with the link.
 The lines are line numbers in the file, so they are resolved with the
 buffer widened, and a clean buffer that is behind the file is reverted
 first.  Each line is linked only if it still reads as its :context (see
-`vulpea-ui--link-mention-line'), and a file that is gone links nothing.
+`vulpea-mentions-link'), and a file that is gone links nothing.
 
 A buffer opened here stays open after an edit, which keeps the edit
 undoable, and is killed again when there was nothing to link.
@@ -2734,7 +2628,7 @@ UNSAVED when the buffer had unsaved changes and so was not saved."
         (save-restriction
           (widen)
           (dolist (mention mentions)
-            (cl-incf count (vulpea-ui--link-mention-line
+            (cl-incf count (vulpea-mentions-link
                             buffer (plist-get mention :line) note
                             (plist-get mention :context)))))
         (when (and (> count 0) (not unsaved))
@@ -5836,13 +5730,14 @@ view, in display order."
                                  vulpea-ui-collection--note-table))
                       tabulated-list-entries)))))
 
-(defun vulpea-ui-collection--link-string (note)
-  "Return an org link to NOTE."
+(defun vulpea-ui-collection--link-string (note &optional description)
+  "Return an org link to NOTE.
+DESCRIPTION defaults to the note's title."
   (if (fboundp 'vulpea-utils-link-make-string)
-      (vulpea-utils-link-make-string note)
+      (vulpea-utils-link-make-string note description)
     (format "[[id:%s][%s]]"
             (vulpea-note-id note)
-            (vulpea-note-title note))))
+            (or description (vulpea-note-title note)))))
 
 (defun vulpea-ui-collection--links-list (notes)
   "Return NOTES as an org list of links, one per line."
@@ -6270,15 +6165,47 @@ the link re-opens the live view."
 
 ;;;; Org dynamic block
 
-(defun vulpea-ui-collection--dblock-cell (note col ctx)
+(defun vulpea-ui-collection--dblock-cell (note col ctx &optional value)
   "Return NOTE's value for normalized column COL as an org table cell.
-CTX is the per-refresh data plist.  Titles become id links; pipes are
-escaped so a value cannot break the table."
-  (let ((value (if (eq (plist-get col :id) 'title)
-                   (vulpea-ui-collection--link-string note)
-                 (substring-no-properties
-                  (vulpea-ui-collection--column-raw-value note col ctx)))))
+CTX is the per-refresh data plist; VALUE, when given, is the cell's
+raw text, saving a second computation.  Titles become id links; a
+column with an explicit :width is cut to it (a title only in its
+description); pipes are escaped so a value cannot break the table."
+  (let* ((value (or value
+                    (substring-no-properties
+                     (vulpea-ui-collection--column-raw-value note col ctx))))
+         (value (if (plist-get col :explicit-width)
+                    (truncate-string-to-width
+                     value (plist-get col :width) nil nil t)
+                  value))
+         (value (if (eq (plist-get col :id) 'title)
+                    (vulpea-ui-collection--link-string note value)
+                  value)))
     (replace-regexp-in-string "|" "\\\\vert{}" value)))
+
+(defun vulpea-ui-collection--dblock-sort (entries columns sort)
+  "Sort dblock ENTRIES by SORT, the way the collection buffer does.
+ENTRIES are (NOTE [MARK CELL...]) lists of raw cells for COLUMNS.
+SORT is a view's :sort, (NAME . REVERSE), or a bare column NAME (a
+string, or a symbol when written unquoted in the block).  A NAME
+that is not among COLUMNS leaves ENTRIES as they are."
+  (let* ((sort (cond ((stringp sort) (list sort))
+                     ((and sort (symbolp sort)) (list (symbol-name sort)))
+                     (t sort)))
+         (format (vulpea-ui-collection--format columns))
+         (index (seq-position format (car sort)
+                              (lambda (col name) (equal (car col) name))))
+         (pred (and index (nth 2 (aref format index)))))
+    (if (not pred)
+        entries
+      (let ((pred (if (functionp pred)
+                      pred
+                    (lambda (a b)
+                      (string< (aref (cadr a) index)
+                               (aref (cadr b) index))))))
+        (sort entries (if (cdr sort)
+                          (lambda (a b) (funcall pred b a))
+                        pred))))))
 
 ;;;###autoload
 (defun org-dblock-write:vulpea-collection (params)
@@ -6289,7 +6216,15 @@ PARAMS supports:
   :query STRING  - a query in the syntax of
                    `vulpea-ui-collection--parse-query'
   :columns LIST  - column descriptors, defaulting to the view's or
-                   `vulpea-ui-collection-default-columns'
+                   `vulpea-ui-collection-default-columns' (adaptive
+                   columns are derived from the notes)
+  :sort SORT     - (COLUMN . REVERSE) or a bare COLUMN name,
+                   defaulting to the view's :sort (by title for a
+                   query or no view at all)
+
+Rows are sorted like the collection buffer sorts them, though never
+grouped, and a column with an explicit :width has longer cells cut
+to it.
 
 Example:
 
@@ -6301,23 +6236,44 @@ Example:
                      ((plist-get params :query)
                       (list :name (plist-get params :query)
                             :filter (vulpea-ui-collection--parse-query
-                                     (plist-get params :query))))
-                     (t (list :name "all"))))
+                                     (plist-get params :query))
+                            :sort '("Title")))
+                     (t (list :name "all" :sort '("Title")))))
+         (notes (vulpea-ui-collection--query (plist-get view :filter)))
          (columns (or (plist-get params :columns)
                       (plist-get view :columns)
-                      vulpea-ui-collection-default-columns))
+                      (if (eq vulpea-ui-collection-default-columns 'adaptive)
+                          (vulpea-ui-collection--adaptive-columns
+                           notes (plist-get view :filter))
+                        vulpea-ui-collection-default-columns)))
          (cols (mapcar #'vulpea-ui-collection--normalize-column columns))
          (ctx (vulpea-ui-collection--context columns))
-         (notes (vulpea-ui-collection--query (plist-get view :filter)))
+         (entries
+          (mapcar (lambda (note)
+                    (list note
+                          (apply #'vector ""
+                                 (mapcar (lambda (col)
+                                           (substring-no-properties
+                                            (vulpea-ui-collection--column-raw-value
+                                             note col ctx)))
+                                         cols))))
+                  notes))
+         (entries (vulpea-ui-collection--dblock-sort
+                   entries columns
+                   (or (plist-get params :sort) (plist-get view :sort))))
          (start (point)))
     (insert "| "
             (mapconcat (lambda (col) (plist-get col :name)) cols " | ")
             " |\n|-\n")
-    (dolist (note notes)
+    (dolist (entry entries)
       (insert "| "
-              (mapconcat (lambda (col)
-                           (vulpea-ui-collection--dblock-cell note col ctx))
-                         cols " | ")
+              (string-join
+               (seq-map-indexed
+                (lambda (col idx)
+                  (vulpea-ui-collection--dblock-cell
+                   (car entry) col ctx (aref (cadr entry) (1+ idx))))
+                cols)
+               " | ")
               " |\n"))
     (delete-char -1)
     (goto-char start)
