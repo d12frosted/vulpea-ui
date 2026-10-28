@@ -84,6 +84,8 @@ All notable changes to this project will be documented in this file.
 
 ** Fixed
 
+- Sorting a collection view by its Todo column works. The sort ranked states by =org-todo-keywords-1=, which only org buffers set, so in the collection buffer every state was unknown and rows stayed in database order. States now follow =org-todo-keywords=: todo-type keywords first, then done ones, each in the order they are defined, then rows without a state. Setting a todo state with =T= had the same problem and offered no keywords to complete; it completes over the same list now. Inside an org buffer, where the dynamic block runs, that buffer's own keywords are used, including a =#+TODO:= line.
+
 - The =vulpea-collection= dynamic block works without =:columns= under the default adaptive =vulpea-ui-collection-default-columns=. It passed the symbol =adaptive= on as a column list and failed, so =vulpea-ui-collection-insert-dblock= errored in the default setup; the columns are now derived from the block's notes the way the collection buffer derives them.
 
 - The =link= and =link all= buttons of the mention widgets work for titles in scripts that do not put spaces between words, like Chinese and Japanese ([[https://github.com/d12frosted/vulpea-ui/issues/88][#88]]). The scan finds =金阁寺= inside =又名金阁寺=, but the buttons demanded a word boundary on both sides of the title, so they reported "nothing to link here" for a mention the widget had just listed. Linking now goes through =vulpea-mentions-link=, which reads a line with the same rules as the scan, so the buttons link exactly what the widgets list. Thanks =@drcxd= for the report.

@@ -6065,13 +6065,77 @@ single-note edits apply without asking."
 
 (ert-deftest vulpea-ui-collection-test-todo-sorter ()
   "The todo column sorts in org keyword order, empty cells last."
-  (let ((org-todo-keywords-1 '("TODO" "WAIT" "DONE"))
+  (let ((org-todo-keywords '((sequence "TODO" "WAIT" "|" "DONE")))
         (sorter (vulpea-ui-collection--todo-sorter 1)))
     (cl-flet ((entry (state) (list "id" (vector " " state))))
       (should (funcall sorter (entry "TODO") (entry "DONE")))
       (should-not (funcall sorter (entry "DONE") (entry "TODO")))
       (should (funcall sorter (entry "WAIT") (entry "DONE")))
       (should (funcall sorter (entry "DONE") (entry ""))))))
+
+(ert-deftest vulpea-ui-collection-test-todo-sort-buffer ()
+  "The collection buffer sorts its todo column by `org-todo-keywords'.
+Todo-type states come first in keyword order, then done states, then
+empty cells, even though the buffer is not an org buffer."
+  (let ((org-todo-keywords '((sequence "TODO" "NEXT" "|" "DONE")
+                             (sequence "WAIT(w)" "|" "CANCELLED(c)")))
+        (notes (seq-map-indexed
+                (lambda (state idx)
+                  (vulpea-ui-test--collection-note
+                   :id state :title (format "Note %d" idx) :level 1
+                   :todo (unless (string-empty-p state) state)))
+                '("DONE" "" "CANCELLED" "WAIT" "NEXT" "TODO")))
+        (buf nil))
+    (cl-letf (((symbol-function 'vulpea-ui-collection--query)
+               (lambda (_filter) notes)))
+      (unwind-protect
+          (save-window-excursion
+            (setq buf (vulpea-ui-collection-open
+                       '(:name "todo-sort-test" :columns (title todo)
+                         :sort ("Todo" . nil))))
+            (with-current-buffer buf
+              (let (ids)
+                (goto-char (point-min))
+                (while (not (eobp))
+                  (when-let* ((id (tabulated-list-get-id)))
+                    (push id ids))
+                  (forward-line 1))
+                (should (equal (nreverse ids)
+                               '("TODO" "NEXT" "WAIT"
+                                 "DONE" "CANCELLED" ""))))))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
+
+(ert-deftest vulpea-ui-collection-test-todo-sorter-org-buffer ()
+  "In an org buffer the todo sorter uses that buffer's keywords.
+This is where the dynamic block runs, so a #+TODO line wins over
+`org-todo-keywords'."
+  (let ((org-todo-keywords '((sequence "TODO" "|" "DONE"))))
+    (with-temp-buffer
+      (insert "#+TODO: LATER SOON | GONE\n")
+      (org-mode)
+      (let ((sorter (vulpea-ui-collection--todo-sorter 1)))
+        (cl-flet ((entry (state) (list "id" (vector " " state))))
+          (should (funcall sorter (entry "SOON") (entry "GONE")))
+          (should (funcall sorter (entry "LATER") (entry "SOON")))
+          (should-not (funcall sorter (entry "SOON") (entry "LATER"))))))))
+
+(ert-deftest vulpea-ui-collection-test-set-todo-completion ()
+  "Setting a todo state completes over `org-todo-keywords'.
+The collection buffer is not an org buffer, so the candidates cannot
+come from its buffer-local keyword variables."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note
+             :id "h1" :title "Heading" :level 1 :todo "TODO"))
+    (let ((org-todo-keywords '((sequence "TODO(t)" "|" "DONE(d)")))
+          candidates)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt collection &rest _)
+                   (setq candidates collection)
+                   ""))
+                ((symbol-function 'vulpea-ui-collection--confirm)
+                 #'ignore))
+        (vulpea-ui-collection-set-todo)
+        (should (equal candidates '("TODO" "DONE")))))))
 
 (ert-deftest vulpea-ui-collection-test-dired ()
   "The dired hand-off lists the selection's files, deduplicated."
@@ -6565,15 +6629,19 @@ Mirrors the sidebar split: data changes are announced on
         (should (string-match-p "\\[\\[id:n1\\]\\[One\\]\\]" content))
         (should (string-match-p "wine red" content))))))
 
-(defun vulpea-ui-test--dblock-rows (params notes)
+(defun vulpea-ui-test--dblock-rows (params notes &optional preamble)
   "Render a vulpea-collection dblock with PARAMS over NOTES.
-Return the table's body rows as lists of trimmed cell strings."
+PREAMBLE, when given, is inserted above the block before `org-mode'
+starts, so in-buffer settings like #+TODO take effect.  Return the
+table's body rows as lists of trimmed cell strings."
   (cl-letf (((symbol-function 'vulpea-ui-collection--query)
              (lambda (_filter) notes)))
     (with-temp-buffer
+      (insert (or preamble ""))
       (org-mode)
-      (insert "#+BEGIN: vulpea-collection " params "\n#+END:\n")
-      (goto-char (point-min))
+      (let ((start (point)))
+        (insert "#+BEGIN: vulpea-collection " params "\n#+END:\n")
+        (goto-char start))
       (org-dblock-update)
       (let (rows)
         (dolist (line (split-string (buffer-string) "\n"))
@@ -6617,7 +6685,7 @@ Return the table's body rows as lists of trimmed cell strings."
                                   (vulpea-ui-test--collection-note
                                    :id "b" :links (make-list 9 '(:dest "x"))))))
                    '("9" "10"))))
-  (let ((org-todo-keywords-1 '("TODO" "DONE"))
+  (let ((org-todo-keywords '((sequence "TODO" "|" "DONE")))
         (vulpea-ui-collection-views
          '(("tasks" :columns (todo title) :sort ("Todo")))))
     (should (equal (mapcar #'car
@@ -6627,7 +6695,17 @@ Return the table's body rows as lists of trimmed cell strings."
                                    :id "a" :todo "DONE")
                                   (vulpea-ui-test--collection-note
                                    :id "b" :todo "TODO"))))
-                   '("TODO" "DONE")))))
+                   '("TODO" "DONE")))
+    ;; the block's own buffer decides the keywords, #+TODO included
+    (should (equal (mapcar #'car
+                           (vulpea-ui-test--dblock-rows
+                            ":view \"tasks\""
+                            (list (vulpea-ui-test--collection-note
+                                   :id "a" :todo "GONE")
+                                  (vulpea-ui-test--collection-note
+                                   :id "b" :todo "LATER"))
+                            "#+TODO: LATER | GONE\n"))
+                   '("LATER" "GONE")))))
 
 (ert-deftest vulpea-ui-collection-test-dblock-sorts-titles-by-text ()
   "Titles sort by their text, not by the id inside the link.
