@@ -76,6 +76,8 @@ All notable changes to this project will be documented in this file.
 
 ** Changed
 
+- The live title filter (=/ s=) waits for a pause in typing ([[https://github.com/d12frosted/vulpea-ui/issues/96][#96]]). It used to re-query and re-render the whole table on every keystroke, which made it unusable on large collections. Now the view updates once typing stops for =vulpea-ui-collection-live-filter-delay= seconds (0.3 by default), and RET on input the view already shows does not query again. Set it to nil to turn live filtering off, so the filter applies once, on RET. Thanks =@vonHabsi= for the report.
+
 - The =vulpea-collection= dynamic block follows the view's order and column widths ([[https://github.com/d12frosted/vulpea-ui/issues/91][#91]]). Rows are sorted by the view's =:sort= with the same comparison the collection buffer uses (counts as numbers, todo states in org order, the rest as text, titles by their text and not the link), and queries sort by title like they do in the buffer. A =:sort= parameter on the block overrides the view's, as =("Context" . t)= or a bare column name; a sort column missing from the table leaves database order. Grouped views are sorted but not grouped, as before. A column with an explicit =:width= has longer cells cut to it with an ellipsis, a title only in its link description; columns without one keep their full text. Thanks =@alexjp= for the report.
 
 - Groups in the unlinked mentions widget are sorted by note title. They used to come in the order ripgrep reported the files, which differs from scan to scan, so the list reshuffled on every refresh.

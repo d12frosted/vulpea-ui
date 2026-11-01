@@ -6405,6 +6405,123 @@ come from its buffer-local keyword variables."
         (should (equal (plist-get filter :title) "^A"))
         (should (equal (plist-get filter :tags-all) '("wine")))))))
 
+(defmacro vulpea-ui-test--typing-title (input &rest body)
+  "Mock `read-string' to type INPUT, run BODY, then return INPUT.
+The minibuffer setup hook runs in a scratch buffer standing in for the
+minibuffer, so change hooks see the typing as they would live.  BODY
+runs in the collection buffer, between the typing and RET."
+  (declare (indent 1))
+  `(let ((collection (current-buffer)))
+     (cl-letf (((symbol-function 'read-string)
+                (lambda (&rest _)
+                  (with-temp-buffer
+                    (run-hooks 'minibuffer-setup-hook)
+                    (dolist (char (string-to-list ,input))
+                      (insert char))
+                    (with-current-buffer collection ,@body))
+                  ,input)))
+       (vulpea-ui-collection-filter-by-title))))
+
+(ert-deftest vulpea-ui-collection-test-title-filter-on-ret-only ()
+  "With no live delay, the title filter applies once, on RET."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (let ((vulpea-ui-collection-live-filter-delay nil)
+          (refreshes 0))
+      (cl-letf (((symbol-function 'vulpea-ui-collection-refresh)
+                 (lambda () (cl-incf refreshes))))
+        (vulpea-ui-test--typing-title "^Ch"
+          (should (= refreshes 0))
+          (should-not vulpea-ui-collection--live-filter-timer))
+        (should (= refreshes 1))
+        (should (equal (plist-get
+                        (plist-get vulpea-ui-collection--view :filter)
+                        :title)
+                       "^Ch"))))))
+
+(ert-deftest vulpea-ui-collection-test-title-filter-debounced ()
+  "Live typing arms one timer; the view updates when it fires."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (let ((vulpea-ui-collection-live-filter-delay 0.3)
+          (refreshes 0))
+      (cl-letf (((symbol-function 'vulpea-ui-collection-refresh)
+                 (lambda () (cl-incf refreshes))))
+        (vulpea-ui-test--typing-title "^Ch"
+          ;; three keystrokes, no refresh yet, a single pending timer
+          (should (= refreshes 0))
+          (let ((timer vulpea-ui-collection--live-filter-timer))
+            (should (memq timer timer-idle-list))
+            (timer-event-handler timer))
+          (should (= refreshes 1))
+          (should (equal (plist-get
+                          (plist-get vulpea-ui-collection--view :filter)
+                          :title)
+                         "^Ch")))
+        ;; RET on input the view already shows does not query again
+        (should (= refreshes 1))
+        (should-not vulpea-ui-collection--live-filter-timer)))))
+
+(ert-deftest vulpea-ui-collection-test-title-filter-quit-cancels-timer ()
+  "Quitting drops a pending update and restores the previous filter."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title) :filter (:title "^A")))
+    (let ((vulpea-ui-collection-live-filter-delay 0.3)
+          (refreshes 0)
+          timer)
+      (cl-letf (((symbol-function 'vulpea-ui-collection-refresh)
+                 (lambda () (cl-incf refreshes)))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _)
+                   (with-temp-buffer
+                     (run-hooks 'minibuffer-setup-hook)
+                     (insert "^B"))
+                   (setq timer vulpea-ui-collection--live-filter-timer)
+                   (signal 'quit nil))))
+        (vulpea-ui-collection-filter-by-title)
+        (should timer)
+        (should-not (memq timer timer-idle-list))
+        (should-not vulpea-ui-collection--live-filter-timer)
+        ;; nothing was applied, so nothing to restore
+        (should (= refreshes 0))
+        (should (equal (plist-get
+                        (plist-get vulpea-ui-collection--view :filter)
+                        :title)
+                       "^A"))))))
+
+(ert-deftest vulpea-ui-collection-test-title-filter-quit-after-update ()
+  "Quitting after a live update re-applies the previous filter."
+  (vulpea-ui-test--with-collection-buffer
+      (list (vulpea-ui-test--collection-note :id "n1" :title "One"))
+    (setq vulpea-ui-collection--view
+          '(:name "test" :columns (title) :filter (:title "^A")))
+    (let ((vulpea-ui-collection-live-filter-delay 0.3)
+          (collection (current-buffer))
+          (titles nil))
+      (cl-letf (((symbol-function 'vulpea-ui-collection-refresh)
+                 (lambda ()
+                   (push (plist-get
+                          (plist-get vulpea-ui-collection--view :filter)
+                          :title)
+                         titles)))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _)
+                   (with-temp-buffer
+                     (run-hooks 'minibuffer-setup-hook)
+                     (insert "^B")
+                     (timer-event-handler
+                      (buffer-local-value
+                       'vulpea-ui-collection--live-filter-timer collection)))
+                   (signal 'quit nil))))
+        (vulpea-ui-collection-filter-by-title)
+        (should (equal (reverse titles) '("^B" "^A")))
+        (should (equal (plist-get
+                        (plist-get vulpea-ui-collection--view :filter)
+                        :title)
+                       "^A"))))))
+
 (ert-deftest vulpea-ui-collection-test-mode-line-total ()
   "The mode line shows the total only when the filter bites."
   (vulpea-ui-test--with-collection-buffer
