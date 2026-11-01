@@ -393,7 +393,7 @@ Keybindings:
 | =d=   | Open the selection's files in dired, pre-marked   |
 | =/ t= | Require a tag                                     |
 | =/ T= | Exclude a tag                                     |
-| =/ s= | Narrow titles live (updates as you type)          |
+| =/ s= | Narrow titles live (updates when typing pauses)   |
 | =/ g= | Narrow by file content (ripgrep when available)   |
 | =/ d= | Scope to a directory                              |
 | =/ m= | Condition on a metadata field                     |
@@ -407,6 +407,12 @@ Keybindings:
 | =g=   | Re-query and refresh                              |
 | =S=   | Sort by column at point (=tabulated-list-mode=)   |
 | =?=   | Menu with all of the above                        |
+
+=/ s= updates the table once typing pauses for
+=vulpea-ui-collection-live-filter-delay= seconds (0.3 by default).
+Every update re-queries and re-renders the view, so raise it if a
+large collection still feels slow, or set it to nil to apply the
+title filter only on RET.
 
 =e= is context-aware: on the tags column it rewrites the tags of the
 note at point (completion, prefilled); on a meta column it reads a

@@ -4023,6 +4023,16 @@ column descriptors to always use those instead."
                  (repeat sexp))
   :group 'vulpea-ui)
 
+(defcustom vulpea-ui-collection-live-filter-delay 0.3
+  "Seconds of idle typing before the live title filter updates the view.
+Each update of `vulpea-ui-collection-filter-by-title' re-queries and
+re-renders the whole table, so waiting for a pause in typing keeps
+large collections responsive.  When nil, the title filter is not live:
+it applies once, on RET."
+  :type '(choice (const :tag "Apply on RET only" nil)
+                 (number :tag "Idle seconds"))
+  :group 'vulpea-ui)
+
 (defface vulpea-ui-collection-tags-face
   '((t :inherit shadow))
   "Face for the tags column in collection views."
@@ -5049,34 +5059,73 @@ The marked notes when any are marked, otherwise the note at point."
     (vulpea-ui-collection--current-filter)
     :tags-none (vulpea-ui-collection--read-tag "Exclude tag: "))))
 
+(defvar-local vulpea-ui-collection--live-filter-timer nil
+  "Pending live title filter update.
+See `vulpea-ui-collection-live-filter-delay'.")
+
+(defun vulpea-ui-collection--cancel-live-filter ()
+  "Cancel the pending live title filter update, if any."
+  (when vulpea-ui-collection--live-filter-timer
+    (cancel-timer vulpea-ui-collection--live-filter-timer)
+    (setq vulpea-ui-collection--live-filter-timer nil)))
+
 (defun vulpea-ui-collection-filter-by-title ()
-  "Narrow the view to notes whose title matches a regexp, live.
-The table updates as you type; quitting the minibuffer restores the
-previous filter.  Empty input drops the title condition."
+  "Narrow the view to notes whose title matches a regexp.
+The table updates as you type, once typing pauses for
+`vulpea-ui-collection-live-filter-delay' seconds, or only on RET when
+that is nil.  Quitting the minibuffer restores the previous filter.
+Empty input drops the title condition."
   (interactive)
   (let* ((buffer (current-buffer))
          (original (vulpea-ui-collection--current-filter))
+         (applied (or (plist-get original :title) ""))
          (apply-input
           (lambda (input)
-            (with-current-buffer buffer
-              (vulpea-ui-collection--set-filter
-               (vulpea-ui-collection--filter-put
-                original :title (unless (string-empty-p input) input))))))
+            (unless (equal input applied)
+              (with-current-buffer buffer
+                (vulpea-ui-collection--set-filter
+                 (vulpea-ui-collection--filter-put
+                  original :title (unless (string-empty-p input) input))))
+              (setq applied input))))
          (update
-          (lambda (&rest _)
-            (when (minibufferp)
+          (lambda (minibuffer)
+            (with-current-buffer buffer
+              (setq vulpea-ui-collection--live-filter-timer nil))
+            (when (buffer-live-p minibuffer)
               ;; a half-typed regexp like "[" must not kill the session
               (condition-case nil
-                  (funcall apply-input (minibuffer-contents-no-properties))
-                (error nil))))))
-    (condition-case nil
-        (funcall apply-input
-                 (minibuffer-with-setup-hook
-                     (lambda ()
-                       (add-hook 'after-change-functions update nil t))
-                   (read-string "Narrow titles (live): "
-                                (plist-get original :title))))
-      (quit (funcall apply-input (or (plist-get original :title) ""))))))
+                  (funcall apply-input
+                           (with-current-buffer minibuffer
+                             (minibuffer-contents-no-properties)))
+                (error nil)))))
+         (schedule
+          (lambda (minibuffer)
+            (with-current-buffer buffer
+              (vulpea-ui-collection--cancel-live-filter)
+              (setq vulpea-ui-collection--live-filter-timer
+                    (run-with-idle-timer
+                     vulpea-ui-collection-live-filter-delay nil
+                     update minibuffer)))))
+         (setup
+          (lambda ()
+            (let ((minibuffer (current-buffer)))
+              (add-hook 'after-change-functions
+                        (lambda (&rest _) (funcall schedule minibuffer))
+                        nil t)))))
+    (unwind-protect
+        (condition-case nil
+            (funcall apply-input
+                     (minibuffer-with-setup-hook
+                         (if vulpea-ui-collection-live-filter-delay
+                             setup
+                           #'ignore)
+                       (read-string (if vulpea-ui-collection-live-filter-delay
+                                        "Narrow titles (live): "
+                                      "Narrow titles: ")
+                                    (plist-get original :title))))
+          (quit (funcall apply-input (or (plist-get original :title) ""))))
+      (with-current-buffer buffer
+        (vulpea-ui-collection--cancel-live-filter)))))
 
 (defun vulpea-ui-collection-filter-by-directory ()
   "Narrow the view to notes under a directory.
