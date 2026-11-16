@@ -2806,7 +2806,7 @@ returns."
                     (vui--collect-widgets))))
               (should (= (length ignore-buttons) 2))
               (should (vui-activate
-                       (car (vui--widget-bounds (car ignore-buttons)))))))
+                       (car (vui-element-bounds (car ignore-buttons)))))))
           ;; The viewed note comes first, the mentioning note second.
           (should (equal calls '(("tgt" "id-a"))))
           (should (equal last-message
@@ -2817,7 +2817,7 @@ returns."
                   (equal (vui-element-get w :vui-key)
                          vulpea-ui--unlinked-mentions-title))
                 (vui--collect-widgets))))
-          (should (= (point) (car (vui--widget-bounds unlinked-mentions)))))))))
+          (should (= (point) (car (vui-element-bounds unlinked-mentions)))))))))
 
 ;;; Incoming mention link tests
 
@@ -3138,7 +3138,7 @@ button so that it stays nearby once the refresh drops the line."
               (list :note b :path "/b.org" :line 5 :context "a Target reference"))
       (with-current-buffer buf-name
         (let* ((buttons (vulpea-ui-test--buttons-tagged "link"))
-               (second (car (vui--widget-bounds (nth 1 buttons)))))
+               (second (car (vui-element-bounds (nth 1 buttons)))))
           (should (= (length buttons) 3))
           (goto-char (point-min))
           (vulpea-ui-test--with-link-stub '(1)
@@ -3161,7 +3161,7 @@ button so that it stays nearby once the refresh drops the line."
               (list :note a :path "/a.org" :line 9 :context "Target again"))
       (with-current-buffer buf-name
         (let* ((buttons (vulpea-ui-test--buttons-tagged "link all"))
-               (first (car (vui--widget-bounds (car buttons)))))
+               (first (car (vui-element-bounds (car buttons)))))
           (should (= (length buttons) 2))
           (goto-char (point-max))
           (vulpea-ui-test--with-link-stub '(2)
@@ -3218,7 +3218,7 @@ note now links to the target, so its whole group is gone."
                              '(1))))
                   (goto-char (point-min))
                   (should (vui-activate
-                           (car (vui--widget-bounds
+                           (car (vui-element-bounds
                                  (nth 1 (vulpea-ui-test--buttons-tagged
                                          "link")))))))
                 (should-not (string-match-p "Note B" (buffer-string)))
@@ -3240,7 +3240,7 @@ note now links to the target, so its whole group is gone."
       (with-current-buffer buf-name
         (vulpea-ui-test--with-link-stub '(1 . t)
           (should (vui-activate
-                   (car (vui--widget-bounds
+                   (car (vui-element-bounds
                          (car (vulpea-ui-test--buttons-tagged "link"))))))
           (should (equal last-message
                          (concat "vulpea-ui: linked 1 mention of Target in"
@@ -3255,7 +3255,7 @@ note now links to the target, so its whole group is gone."
       (with-current-buffer buf-name
         (vulpea-ui-test--with-link-stub '(0)
           (should (vui-activate
-                   (car (vui--widget-bounds
+                   (car (vui-element-bounds
                          (car (vulpea-ui-test--buttons-tagged "link"))))))
           (should (equal last-message
                          (concat "vulpea-ui: nothing to link in Note A:"
@@ -3271,7 +3271,7 @@ The file is what the list shows, so only saving brings the two in line."
       (with-current-buffer buf-name
         (vulpea-ui-test--with-link-stub '(0 . t)
           (should (vui-activate
-                   (car (vui--widget-bounds
+                   (car (vui-element-bounds
                          (car (vulpea-ui-test--buttons-tagged "link"))))))
           (should (equal last-message
                          (concat "vulpea-ui: nothing to link in Note A,"
@@ -3363,7 +3363,7 @@ returns."
                     (vui--collect-widgets))))
               (should (= (length unignore-buttons) 2))
               (should (vui-activate
-                       (car (vui--widget-bounds (car unignore-buttons)))))))
+                       (car (vui-element-bounds (car unignore-buttons)))))))
           ;; The viewed note comes first, the ignored note second.
           (should (equal calls '(("tgt" "id-a"))))
           (should (equal last-message
@@ -3374,7 +3374,7 @@ returns."
                   (equal (vui-element-get w :vui-key)
                          vulpea-ui--ignored-notes-title))
                 (vui--collect-widgets))))
-          (should (= (point) (car (vui--widget-bounds ignored-notes)))))))))
+          (should (= (point) (car (vui-element-bounds ignored-notes)))))))))
 
 (ert-deftest vulpea-ui-test-ignored-notes-unignore-last-anchors-on-mentions ()
   "Unignoring the last ignored note moves point to the unlinked mentions head.
@@ -3392,7 +3392,7 @@ mentions head can, and it is where the note shows up again."
                                  (equal (vui-element-get w :vui-key)
                                         vulpea-ui--unlinked-mentions-title))
                                (vui--collect-widgets))))
-              (car (vui--widget-bounds head))))))
+              (car (vui-element-bounds head))))))
     (vulpea-ui-test--with-clean-registry
       (vulpea-ui-register-widget 'unlinked-mentions
                                  :component 'vulpea-ui-widget-unlinked-mentions
@@ -3419,7 +3419,7 @@ mentions head can, and it is where the note shows up again."
                                  (equal (vui-element-get w :vui-tag)
                                         "unignore"))
                                (vui--collect-widgets))))
-                  (should (vui-activate (car (vui--widget-bounds button)))))
+                  (should (vui-activate (car (vui-element-bounds button)))))
                 (should (= (point) (funcall head-pos)))
                 ;; The refresh that follows the edit drops the widget,
                 ;; and point stays on the head it was moved to.
@@ -3910,7 +3910,7 @@ Bounded so a stuck render never spins forever."
               (let ((tag (vui-element-get w :vui-tag)))
                 (when (and tag (string-prefix-p "▶ " tag)
                            (member (substring tag 2) titles))
-                  (vui-activate (car (vui--widget-bounds w)))
+                  (vui-activate (car (vui-element-bounds w)))
                   (setq pressed t)
                   (throw 'again nil)))))
           (unless pressed (throw 'done nil)))))))
@@ -3991,7 +3991,7 @@ still-collapsed `▶ Chateau'."
               ;; Two collapsed Chateau toggles, one per section.
               (should (= (length toggles) 2))
               ;; Park point on wine's Chateau toggle and expand it.
-              (goto-char (car (vui--widget-bounds wine-chateau)))
+              (goto-char (car (vui-element-bounds wine-chateau)))
               (vui-activate)
               ;; Point rides the toggle we pressed: it is now expanded
               ;; (▼ Chateau), not producer's still-collapsed ▶ Chateau.
@@ -4027,7 +4027,7 @@ label `fix', so only its key keeps point from sliding onto a sibling."
               (should (equal (vui-element-get target :vui-key) target-key))
               ;; Park point on it, then refresh with producer gone so the rows
               ;; above it disappear.
-              (goto-char (car (vui--widget-bounds target)))
+              (goto-char (car (vui-element-bounds target)))
               (vui-update instance
                           (list :health
                                 (seq-filter
@@ -4074,7 +4074,7 @@ point lands.  This mirrors `vulpea-ui-schema-dashboard--fix-violation',
 which anchors point on the fixed note's toggle before refreshing and
 leaves the landing to vui's cursor restoration."
   (ignore before)
-  (goto-char (car (vui--widget-bounds
+  (goto-char (car (vui-element-bounds
                    (seq-find (lambda (w) (equal (vui-element-get w :vui-key)
                                                 (list 'wine "target")))
                              (vui--collect-widgets)))))
@@ -4153,7 +4153,7 @@ the fix button from the keyboard."
             (vulpea-ui-schema-dashboard)
             (with-current-buffer bufname
               ;; Stand on wine's last note, then fix its only issue away.
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (seq-find (lambda (w) (equal (vui-element-get w :vui-key)
                                                             (list 'wine "target")))
                                          (vui--collect-widgets)))))
@@ -4612,7 +4612,7 @@ Only the note-id in the key keeps point from sliding to a same-labelled
               (with-current-buffer bufname
                 (let ((target (list 'fix "h2" "name" 'missing-required 0)))
                   ;; park point on h2's fix button
-                  (goto-char (car (vui--widget-bounds
+                  (goto-char (car (vui-element-bounds
                                    (seq-find (lambda (w)
                                                (equal (vui-element-get w :vui-key)
                                                       target))
