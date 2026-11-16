@@ -352,7 +352,7 @@ Example:
 
 (defun vulpea-ui-widget-set (name prop value)
   "Set property PROP to VALUE for widget NAME."
-  (when-let ((widget (gethash name vulpea-ui--widget-registry)))
+  (when-let* ((widget (gethash name vulpea-ui--widget-registry)))
     (puthash name (plist-put widget prop value) vulpea-ui--widget-registry)))
 
 (defun vulpea-ui--get-widgets-for-note (note)
