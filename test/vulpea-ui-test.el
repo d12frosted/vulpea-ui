@@ -5442,6 +5442,29 @@ The notes are bound to `wine' and `beer'."
       (should (equal (value heading 'deadline) "2026-08-01"))
       (should (equal (value heading 'aliases) "bg tasks")))))
 
+(ert-deftest vulpea-ui-collection-test-numeric-priority-column ()
+  "A numeric priority shows as its number, not as a control character.
+Org 9.8 parses a cookie like [#1] to the integer 1."
+  (skip-unless (fboundp 'org-priority-to-string))
+  (cl-flet ((value (priority)
+              (vulpea-ui-collection--column-value
+               (vulpea-ui-test--collection-note
+                :id "h1" :level 1 :todo "TODO" :priority priority)
+               (vulpea-ui-collection--normalize-column 'priority) nil)))
+    (should (equal (value 0) "0"))
+    (should (equal (value 1) "1"))
+    (should (equal (value 10) "10"))
+    (should (equal (value ?A) "A"))))
+
+(ert-deftest vulpea-ui-collection-test-invalid-priority-column ()
+  "A priority Org does not consider valid still renders as a character."
+  (should (equal (vulpea-ui--priority-string ?a) "a"))
+  (should (equal (vulpea-ui-collection--column-value
+                  (vulpea-ui-test--collection-note
+                   :id "h1" :level 1 :todo "TODO" :priority ?a)
+                  (vulpea-ui-collection--normalize-column 'priority) nil)
+                 "a")))
+
 (ert-deftest vulpea-ui-collection-test-column-faces ()
   "Secondary columns carry muted faces; the title stays plain."
   (cl-flet ((value (note col)

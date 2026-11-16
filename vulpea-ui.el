@@ -1416,8 +1416,11 @@ tasks have the same title, so title and index tell tasks apart)."
   "Return PRIORITY, as parsed by org-element, as written in its cookie.
 Org 9.8 parses a numeric priority to the number and provides
 `org-priority-to-string' to turn it back; older Org parses every
-cookie to its character."
-  (if (fboundp 'org-priority-to-string)
+cookie to its character.  A value Org does not consider valid shows
+as its character instead of signaling an error."
+  (if (and (fboundp 'org-priority-valid-value-p)
+           (fboundp 'org-priority-to-string)
+           (org-priority-valid-value-p priority t))
       (org-priority-to-string priority)
     (char-to-string priority)))
 
@@ -4374,7 +4377,8 @@ CTX is the per-refresh data plist."
     ('todo (or (vulpea-note-todo note) ""))
     ('priority (let ((priority (vulpea-note-priority note)))
                  (cond ((null priority) "")
-                       ((characterp priority) (char-to-string priority))
+                       ((characterp priority)
+                        (vulpea-ui--priority-string priority))
                        (t (format "%s" priority)))))
     ('scheduled (vulpea-ui-collection--format-time
                  (vulpea-note-scheduled note)))
