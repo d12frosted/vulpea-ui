@@ -302,6 +302,19 @@ it can do; the mode line shows how many notes matched out of the
 whole collection, how many are marked, the active filter, and
 averages for numeric meta columns (=:142/4231 {rating avg 8.4}=).
 
+A collection buffer is called =*vulpea-collection: NAME*= and its mode
+line starts with =vulpea-collection=, which is a lot of text on a
+narrow window. Both can be shortened:
+
+#+begin_src emacs-lisp
+  ;; buffer name: %s is the view name, put the label on either side
+  (setq vulpea-ui-collection-buffer-name-format "VC: %s")
+
+  ;; mode name; the counts and the filter summary stay
+  (add-hook 'vulpea-ui-collection-mode-hook
+            (lambda () (setq mode-name "VC")))
+#+end_src
+
 Filters are refined without leaving the buffer (=/= prefix) and
 columns are added and removed on the fly (=c= prefix), so a typical
 session is: open everything, narrow by a tag or two, add the meta
