@@ -7643,5 +7643,50 @@ goes stale; the writer must find the entry by its ID."
         (kill-buffer buf))
       (delete-file file))))
 
+(defmacro vulpea-ui-test--with-opened-view (var view &rest body)
+  "Open VIEW over no notes, bind its buffer to VAR and run BODY.
+The buffer is killed afterwards."
+  (declare (indent 2))
+  `(let ((,var nil))
+     (cl-letf (((symbol-function 'vulpea-ui-collection--query)
+                (lambda (_filter) nil)))
+       (unwind-protect
+           (save-window-excursion
+             (setq ,var (vulpea-ui-collection-open ,view))
+             ,@body)
+         (when (buffer-live-p ,var) (kill-buffer ,var))))))
+
+(ert-deftest vulpea-ui-collection-test-buffer-name-default ()
+  "A collection buffer is named after the view by default."
+  (vulpea-ui-test--with-opened-view buf '(:name "name-test")
+    (should (equal (buffer-name buf) "*vulpea-collection: name-test*"))))
+
+(ert-deftest vulpea-ui-collection-test-buffer-name-format ()
+  "`vulpea-ui-collection-buffer-name-format' shapes the buffer name."
+  (let ((vulpea-ui-collection-buffer-name-format "VC: %s"))
+    (vulpea-ui-test--with-opened-view buf '(:name "name-test")
+      (should (equal (buffer-name buf) "VC: name-test"))))
+  (let ((vulpea-ui-collection-buffer-name-format "%s - VC"))
+    (vulpea-ui-test--with-opened-view buf '(:name "name-test")
+      (should (equal (buffer-name buf) "name-test - VC")))))
+
+(ert-deftest vulpea-ui-collection-test-buffer-name-format-reuses-buffer ()
+  "Opening the same view twice lands in the same buffer."
+  (let ((vulpea-ui-collection-buffer-name-format "%s - VC"))
+    (vulpea-ui-test--with-opened-view buf '(:name "name-test")
+      (should (eq buf (vulpea-ui-collection-open '(:name "name-test")))))))
+
+(ert-deftest vulpea-ui-collection-test-mode-name-from-hook ()
+  "The mode name can be shortened from the mode hook.
+The counts live in `mode-line-process', so they are kept."
+  (let ((vulpea-ui-collection-mode-hook
+         (list (lambda () (setq mode-name "VC")))))
+    (vulpea-ui-test--with-opened-view buf '(:name "name-test")
+      (with-current-buffer buf
+        (should (equal mode-name "VC"))
+        (should (equal mode-line-process
+                       '((:eval (vulpea-ui-collection--mode-line-info)))))
+        (should (equal (vulpea-ui-collection--mode-line-info) ":0"))))))
+
 (provide 'vulpea-ui-test)
 ;;; vulpea-ui-test.el ends here

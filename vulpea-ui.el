@@ -4036,6 +4036,16 @@ it applies once, on RET."
                  (number :tag "Idle seconds"))
   :group 'vulpea-ui)
 
+(defcustom vulpea-ui-collection-buffer-name-format "*vulpea-collection: %s*"
+  "Format of collection buffer names.
+A `format' string where %s stands for the name of the view, so the
+label can be shortened or moved after the name: \"VC: %s\" or
+\"%s - VC\".  Every view gets a buffer of its own because its name is
+part of the buffer name; a format without %s makes all views share
+one buffer."
+  :type 'string
+  :group 'vulpea-ui)
+
 (defface vulpea-ui-collection-tags-face
   '((t :inherit shadow))
   "Face for the tags column in collection views."
@@ -6173,7 +6183,8 @@ bookmark file; the current sort order and columns are captured."
 VIEW is a plist with :name, :filter, :columns and :sort, see
 `vulpea-ui-collection-views' for the format."
   (let* ((name (or (plist-get view :name) "collection"))
-         (buf (get-buffer-create (format "*vulpea-collection: %s*" name))))
+         (buf (get-buffer-create
+               (format vulpea-ui-collection-buffer-name-format name))))
     (with-current-buffer buf
       (unless (derived-mode-p 'vulpea-ui-collection-mode)
         (vulpea-ui-collection-mode))
